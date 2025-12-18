@@ -1,0 +1,23 @@
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock
+belaf
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+data/
+# macOS
+.DS_Store
+
+# Temp
+.temp/
+sources-original
+CLAUDE.local.md
+.serena
+
+# Claude Code
+.claude/

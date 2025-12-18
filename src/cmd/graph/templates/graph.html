@@ -1,0 +1,479 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clikd Dependency Graph</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/dagre/0.8.5/dagre.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/cytoscape-dagre@2.5.0/cytoscape-dagre.min.js"></script>
+    <style>
+        :root {
+            --bg-primary: #0a0a0f;
+            --bg-secondary: #12121a;
+            --bg-tertiary: #1a1a24;
+            --bg-hover: #252532;
+            --text-primary: #f0f0f5;
+            --text-secondary: #9090a0;
+            --text-muted: #606070;
+            --accent-primary: #7c3aed;
+            --accent-secondary: #06b6d4;
+            --accent-success: #10b981;
+            --accent-warning: #f59e0b;
+            --border-color: #2a2a3a;
+            --shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+            --color-rust: #f74c00;
+            --color-package: #10b981;
+            --color-app: #7c3aed;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+        }
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 56px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            z-index: 100;
+        }
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 700;
+            font-size: 18px;
+        }
+        .logo-icon {
+            width: 28px;
+            height: 28px;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .search-container { position: relative; width: 280px; }
+        .search-input {
+            width: 100%;
+            padding: 8px 14px 8px 38px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-primary);
+            font-size: 13px;
+            outline: none;
+        }
+        .search-input:focus { border-color: var(--accent-primary); }
+        .search-input::placeholder { color: var(--text-muted); }
+        .search-icon {
+            position: absolute;
+            left: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            color: var(--text-muted);
+        }
+        .controls { display: flex; gap: 6px; }
+        .btn {
+            padding: 8px 14px;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .btn:hover { background: var(--bg-hover); border-color: var(--accent-primary); }
+        .btn-primary { background: var(--accent-primary); border-color: var(--accent-primary); }
+        .main { position: fixed; top: 56px; left: 0; right: 0; bottom: 0; display: flex; }
+        .sidebar {
+            width: 260px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            padding: 16px;
+            overflow-y: auto;
+        }
+        .sidebar-section { margin-bottom: 20px; }
+        .sidebar-title {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 10px;
+        }
+        .stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .stat-card {
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            padding: 10px;
+            text-align: center;
+        }
+        .stat-value { font-size: 22px; font-weight: 700; }
+        .stat-label { font-size: 10px; color: var(--text-muted); text-transform: uppercase; margin-top: 2px; }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 10px;
+            border-radius: 5px;
+            cursor: pointer;
+            margin-bottom: 3px;
+        }
+        .legend-item:hover { background: var(--bg-hover); }
+        .legend-item.active { background: var(--bg-tertiary); }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+        .legend-label { font-size: 12px; color: var(--text-secondary); }
+        .legend-count {
+            margin-left: auto;
+            font-size: 11px;
+            color: var(--text-muted);
+            background: var(--bg-primary);
+            padding: 1px 6px;
+            border-radius: 8px;
+        }
+        #cy {
+            flex: 1;
+            background: var(--bg-primary);
+            background-image: radial-gradient(circle at 1px 1px, var(--border-color) 1px, transparent 0);
+            background-size: 32px 32px;
+        }
+        .tooltip {
+            position: absolute;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 14px;
+            box-shadow: var(--shadow);
+            z-index: 1000;
+            min-width: 220px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.15s;
+        }
+        .tooltip.visible { opacity: 1; }
+        .tooltip-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 10px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .tooltip-icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+        .tooltip-name { font-weight: 600; font-size: 13px; }
+        .tooltip-type { font-size: 10px; color: var(--text-muted); text-transform: uppercase; }
+        .tooltip-row { display: flex; justify-content: space-between; padding: 4px 0; font-size: 12px; }
+        .tooltip-row-label { color: var(--text-muted); }
+        .tooltip-row-value { color: var(--text-primary); font-weight: 500; }
+        .tooltip-deps { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border-color); }
+        .tooltip-deps-title { font-size: 10px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; }
+        .tooltip-dep-tag {
+            display: inline-block;
+            background: var(--bg-tertiary);
+            padding: 3px 6px;
+            border-radius: 3px;
+            font-size: 10px;
+            margin: 1px;
+            color: var(--text-secondary);
+        }
+        .zoom-controls {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .zoom-btn {
+            width: 36px;
+            height: 36px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .zoom-btn:hover { background: var(--bg-hover); border-color: var(--accent-primary); }
+        .layout-selector { display: flex; background: var(--bg-tertiary); border-radius: 6px; padding: 3px; }
+        .layout-option {
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 11px;
+            font-weight: 500;
+            cursor: pointer;
+            color: var(--text-muted);
+        }
+        .layout-option.active { background: var(--accent-primary); color: white; }
+        .layout-option:hover:not(.active) { color: var(--text-primary); }
+        .selection-panel {
+            position: fixed;
+            bottom: 20px;
+            left: 280px;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 10px;
+            padding: 14px 18px;
+            box-shadow: var(--shadow);
+            display: none;
+        }
+        .selection-panel.visible { display: block; }
+        .selection-title { font-weight: 600; margin-bottom: 8px; font-size: 13px; }
+        .selection-actions { display: flex; gap: 6px; }
+        .kbd {
+            display: inline-block;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            padding: 1px 5px;
+            font-size: 10px;
+            font-family: monospace;
+            color: var(--text-muted);
+        }
+        .loading {
+            position: fixed;
+            inset: 0;
+            background: var(--bg-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+        }
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent-primary);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: var(--bg-primary); }
+        ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <div class="loading" id="loading"><div class="loading-spinner"></div></div>
+    <header class="header">
+        <div class="logo">
+            <div class="logo-icon">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">
+                    <circle cx="12" cy="12" r="3"/><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/>
+                </svg>
+            </div>
+            <span>Clikd Dependencies</span>
+        </div>
+        <div class="search-container">
+            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+            </svg>
+            <input type="text" class="search-input" id="searchInput" placeholder="Search packages... (Cmd+K)">
+        </div>
+        <div class="controls">
+            <div class="layout-selector">
+                <div class="layout-option active" data-layout="dagre">Hierarchy</div>
+                <div class="layout-option" data-layout="cose">Force</div>
+                <div class="layout-option" data-layout="circle">Circle</div>
+            </div>
+            <button class="btn" id="fitBtn">Fit</button>
+            <button class="btn btn-primary" id="exportBtn">Export PNG</button>
+        </div>
+    </header>
+    <main class="main">
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-title">Overview</div>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-value" id="nodeCount">0</div>
+                        <div class="stat-label">Packages</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-value" id="edgeCount">0</div>
+                        <div class="stat-label">Dependencies</div>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="sidebar-title">Package Types</div>
+                <div id="legendContainer"></div>
+            </div>
+            <div class="sidebar-section">
+                <div class="sidebar-title">Shortcuts</div>
+                <div style="font-size: 11px; color: var(--text-muted);">
+                    <div style="margin-bottom: 6px;"><span class="kbd">Cmd+K</span> Search</div>
+                    <div style="margin-bottom: 6px;"><span class="kbd">F</span> Fit view</div>
+                    <div style="margin-bottom: 6px;"><span class="kbd">+/-</span> Zoom</div>
+                    <div><span class="kbd">Esc</span> Clear</div>
+                </div>
+            </div>
+        </aside>
+        <div id="cy"></div>
+    </main>
+    <div class="zoom-controls">
+        <button class="zoom-btn" id="zoomIn">+</button>
+        <button class="zoom-btn" id="zoomOut">-</button>
+    </div>
+    <div class="tooltip" id="tooltip"></div>
+    <div class="selection-panel" id="selectionPanel">
+        <div class="selection-title" id="selectionTitle">Selected</div>
+        <div class="selection-actions">
+            <button class="btn" id="showDepsBtn">Dependencies</button>
+            <button class="btn" id="showDependentsBtn">Dependents</button>
+        </div>
+    </div>
+    <script>
+    const GRAPH_DATA = /*GRAPH_DATA_PLACEHOLDER*/;
+    const CONFIG = {
+        colors: { package: '#10b981', app: '#7c3aed' },
+        typeLabels: { package: 'Libraries', app: 'Applications' },
+        typeIcons: { package: '📦', app: '🚀' }
+    };
+    document.addEventListener('DOMContentLoaded', () => {
+        cytoscape.use(cytoscapeDagre);
+        const elements = [
+            ...GRAPH_DATA.nodes.map(n => ({ data: { id: n.id, label: n.label, type: n.type, version: n.version, deps_count: n.deps_count } })),
+            ...GRAPH_DATA.edges.map((e, i) => ({ data: { id: `e${i}`, source: e.source, target: e.target } }))
+        ];
+        const cy = cytoscape({
+            container: document.getElementById('cy'),
+            elements,
+            style: [
+                { selector: 'node', style: {
+                    'label': 'data(label)', 'text-valign': 'center', 'text-halign': 'center',
+                    'font-size': '11px', 'font-weight': '600', 'color': '#f0f0f5',
+                    'text-outline-color': '#0a0a0f', 'text-outline-width': '2px',
+                    'background-color': e => CONFIG.colors[e.data('type')] || '#64748b',
+                    'width': '64px', 'height': '64px', 'border-width': '3px',
+                    'border-color': e => CONFIG.colors[e.data('type')] || '#64748b',
+                    'border-opacity': 0.5, 'background-opacity': 0.9,
+                    'transition-property': 'opacity', 'transition-duration': '0.2s'
+                }},
+                { selector: 'node.highlighted', style: { 'border-width': '4px', 'border-color': '#7c3aed', 'border-opacity': 1 }},
+                { selector: 'node:selected', style: { 'border-width': '4px', 'border-color': '#fff', 'border-opacity': 1 }},
+                { selector: 'node.faded', style: { 'opacity': 0.15 }},
+                { selector: 'edge', style: {
+                    'width': 2, 'line-color': '#3a3a4a', 'target-arrow-color': '#3a3a4a',
+                    'target-arrow-shape': 'triangle', 'curve-style': 'bezier', 'opacity': 0.5
+                }},
+                { selector: 'edge.highlighted', style: { 'line-color': '#7c3aed', 'target-arrow-color': '#7c3aed', 'width': 3, 'opacity': 1 }},
+                { selector: 'edge.faded', style: { 'opacity': 0.08 }}
+            ],
+            layout: { name: 'dagre', rankDir: 'LR', nodeSep: 60, rankSep: 120, padding: 40, animate: true, animationDuration: 400 },
+            minZoom: 0.2, maxZoom: 3, wheelSensitivity: 0.3
+        });
+        const tooltip = document.getElementById('tooltip');
+        cy.on('mouseover', 'node', e => {
+            const n = e.target, d = n.data();
+            const out = n.outgoers('node').map(x => x.data('label'));
+            const inc = n.incomers('node').map(x => x.data('label'));
+            tooltip.innerHTML = `
+                <div class="tooltip-header">
+                    <div class="tooltip-icon" style="background:${CONFIG.colors[d.type]}20;color:${CONFIG.colors[d.type]}">${CONFIG.typeIcons[d.type]}</div>
+                    <div><div class="tooltip-name">${d.label}</div><div class="tooltip-type">${d.version}</div></div>
+                </div>
+                <div class="tooltip-row"><span class="tooltip-row-label">Dependencies</span><span class="tooltip-row-value">${out.length}</span></div>
+                <div class="tooltip-row"><span class="tooltip-row-label">Dependents</span><span class="tooltip-row-value">${inc.length}</span></div>
+                ${out.length ? `<div class="tooltip-deps"><div class="tooltip-deps-title">Depends on</div>${out.map(x=>`<span class="tooltip-dep-tag">${x}</span>`).join('')}</div>` : ''}
+            `;
+            tooltip.style.left = `${e.renderedPosition.x + 20}px`;
+            tooltip.style.top = `${e.renderedPosition.y - 20}px`;
+            tooltip.classList.add('visible');
+            cy.elements().addClass('faded');
+            n.closedNeighborhood().removeClass('faded');
+            n.closedNeighborhood().edges().addClass('highlighted');
+            n.addClass('highlighted');
+        });
+        cy.on('mouseout', 'node', () => { tooltip.classList.remove('visible'); cy.elements().removeClass('faded highlighted'); });
+        const selPanel = document.getElementById('selectionPanel'), selTitle = document.getElementById('selectionTitle');
+        cy.on('tap', 'node', e => { selTitle.textContent = e.target.data('label'); selPanel.classList.add('visible'); });
+        cy.on('tap', e => { if (e.target === cy) selPanel.classList.remove('visible'); });
+        document.getElementById('showDepsBtn').onclick = () => {
+            const s = cy.$(':selected'); if (!s.length) return;
+            cy.elements().addClass('faded'); s.removeClass('faded').addClass('highlighted');
+            s.outgoers().removeClass('faded').edges().addClass('highlighted');
+        };
+        document.getElementById('showDependentsBtn').onclick = () => {
+            const s = cy.$(':selected'); if (!s.length) return;
+            cy.elements().addClass('faded'); s.removeClass('faded').addClass('highlighted');
+            s.incomers().removeClass('faded').edges().addClass('highlighted');
+        };
+        const search = document.getElementById('searchInput');
+        search.oninput = e => {
+            const q = e.target.value.toLowerCase().trim();
+            if (!q) { cy.elements().removeClass('faded highlighted'); return; }
+            const m = cy.nodes().filter(n => n.data('label').toLowerCase().includes(q));
+            if (m.length) { cy.elements().addClass('faded'); m.removeClass('faded').addClass('highlighted'); m.neighborhood().removeClass('faded'); }
+            else cy.elements().removeClass('faded highlighted');
+        };
+        document.querySelectorAll('.layout-option').forEach(o => o.onclick = () => {
+            document.querySelectorAll('.layout-option').forEach(x => x.classList.remove('active'));
+            o.classList.add('active');
+            const cfg = { dagre: { name: 'dagre', rankDir: 'LR', nodeSep: 60, rankSep: 120, padding: 40, animate: true },
+                cose: { name: 'cose', animate: true, nodeRepulsion: 8000, idealEdgeLength: 100, padding: 40 },
+                circle: { name: 'circle', animate: true, padding: 40 } }[o.dataset.layout];
+            cy.layout(cfg).run();
+        });
+        document.getElementById('zoomIn').onclick = () => { cy.zoom(cy.zoom() * 1.2); cy.center(); };
+        document.getElementById('zoomOut').onclick = () => { cy.zoom(cy.zoom() / 1.2); cy.center(); };
+        document.getElementById('fitBtn').onclick = () => cy.fit(40);
+        document.getElementById('exportBtn').onclick = () => {
+            const png = cy.png({ output: 'blob', bg: '#0a0a0f', scale: 2, full: true });
+            const a = document.createElement('a'); a.href = URL.createObjectURL(png); a.download = 'belaf-deps.png'; a.click();
+        };
+        document.onkeydown = e => {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); search.focus(); }
+            if (e.key === 'f' && document.activeElement !== search) cy.fit(40);
+            if (e.key === 'Escape') { search.value = ''; cy.elements().removeClass('faded highlighted'); selPanel.classList.remove('visible'); cy.$(':selected').unselect(); }
+            if (e.key === '=' || e.key === '+') cy.zoom(cy.zoom() * 1.1);
+            if (e.key === '-') cy.zoom(cy.zoom() / 1.1);
+        };
+        const legend = document.getElementById('legendContainer'), counts = {};
+        GRAPH_DATA.nodes.forEach(n => counts[n.type] = (counts[n.type] || 0) + 1);
+        Object.entries(CONFIG.typeLabels).forEach(([t, l]) => {
+            if (!counts[t]) return;
+            const d = document.createElement('div'); d.className = 'legend-item';
+            d.innerHTML = `<div class="legend-dot" style="background:${CONFIG.colors[t]}"></div><span class="legend-label">${l}</span><span class="legend-count">${counts[t]}</span>`;
+            d.onclick = () => {
+                const active = d.classList.toggle('active');
+                const nodes = cy.nodes().filter(n => n.data('type') === t);
+                if (active) { cy.elements().addClass('faded'); nodes.removeClass('faded').addClass('highlighted'); nodes.neighborhood().removeClass('faded'); }
+                else cy.elements().removeClass('faded highlighted');
+            };
+            legend.appendChild(d);
+        });
+        document.getElementById('nodeCount').textContent = GRAPH_DATA.nodes.length;
+        document.getElementById('edgeCount').textContent = GRAPH_DATA.edges.length;
+        setTimeout(() => document.getElementById('loading').style.display = 'none', 300);
+    });
+    </script>
+</body>
+</html>

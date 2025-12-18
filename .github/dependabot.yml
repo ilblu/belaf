@@ -1,0 +1,40 @@
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      action-minor:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "daily"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      cargo-minor:
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: "docker"
+    directory: "config"
+    schedule:
+      interval: "daily"
+    commit-message:
+      prefix: "chore(deps)"
+      include: "scope"
+    groups:
+      docker-minor:
+        update-types:
+          - minor
+          - patch
