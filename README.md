@@ -1,222 +1,229 @@
-# belaf
+<p align="center">
+  <img src="https://raw.githubusercontent.com/ilblu/belaf/main/.github/assets/logo.svg" alt="belaf" width="400">
+</p>
 
-Release management CLI for monorepos and multi-language projects.
+<p align="center">
+  <strong>Semantic release management for monorepos.</strong>
+</p>
+
+<p align="center">
+  <a href="https://github.com/ilblu/belaf/actions/workflows/ci.yml"><img src="https://github.com/ilblu/belaf/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/ilblu/belaf/releases"><img src="https://img.shields.io/github/v/release/ilblu/belaf?color=blue" alt="Release"></a>
+  <a href="https://github.com/ilblu/belaf/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License"></a>
+  <a href="https://crates.io/crates/belaf"><img src="https://img.shields.io/crates/d/belaf?color=orange" alt="Downloads"></a>
+</p>
+
+<p align="center">
+  <a href="#installation">Installation</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#features">Features</a> •
+  <a href="#supported-languages">Languages</a> •
+  <a href="#documentation">Docs</a>
+</p>
+
+---
+
+## The Problem
+
+Managing releases in a monorepo is painful:
+
+- **Version chaos** — Which packages changed? What versions should they be?
+- **Dependency hell** — Package A depends on B, which depends on C. Release order matters.
+- **Changelog fatigue** — Writing changelogs manually is tedious and error-prone.
+- **Multi-language mess** — Your repo has Rust, TypeScript, and Python. Good luck.
+
+## The Solution
+
+**belaf** analyzes your monorepo, detects changes, resolves dependencies, and prepares releases with a single command. It understands conventional commits, generates changelogs, and handles the entire release workflow through an intuitive TUI.
+
+```bash
+belaf prepare
+```
+
+That's it. belaf figures out the rest.
+
+---
+
+## Features
+
+- **Smart Detection** — Automatically discovers projects across 6 languages
+- **Dependency Resolution** — Determines correct release order based on inter-project dependencies
+- **Conventional Commits** — Analyzes commit history to suggest semantic version bumps
+- **AI Changelogs** — Generate human-readable changelogs with Claude AI (optional)
+- **Interactive TUI** — Beautiful terminal interface with keyboard navigation
+- **CI/CD Ready** — Full automation support with `--no-tui` mode and JSON output
+- **PR Workflow** — Creates pull requests with release manifests for team review
+
+---
+
+## Quick Start
+
+```bash
+# Install
+brew install ilblu/tap/belaf
+
+# Initialize in your monorepo
+cd your-monorepo
+belaf init
+
+# See what changed
+belaf status
+
+# Prepare releases
+belaf prepare
+```
+
+---
 
 ## Installation
 
-### macOS (Homebrew)
+### macOS
 
 ```bash
 brew install ilblu/tap/belaf
 ```
 
-### Linux / macOS (Shell script)
+### Linux / macOS (Shell)
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/ilblu/belaf/releases/latest/download/belaf-installer.sh | sh
 ```
 
-### Windows (PowerShell)
+### Windows
 
 ```powershell
+# PowerShell
 irm https://github.com/ilblu/belaf/releases/latest/download/belaf-installer.ps1 | iex
-```
 
-### Windows (Scoop)
-
-```powershell
+# Scoop
 scoop bucket add belaf https://github.com/ilblu/scoop-bucket
 scoop install belaf
 ```
 
-### Windows (MSI Installer)
-
-Download the latest `.msi` installer from the [releases page](https://github.com/ilblu/belaf/releases).
-
-### From Source
+### Cargo
 
 ```bash
-cargo install --git https://github.com/ilblu/belaf
+cargo install belaf
 ```
 
-## Usage
+---
 
-### Authentication
+## Supported Languages
 
-```bash
-# Login (interactive service selection)
-belaf auth login
+| Language | Manifest | Version Source |
+|----------|----------|----------------|
+| **Rust** | `Cargo.toml` | `version` field |
+| **Node.js** | `package.json` | `version` field |
+| **Python** | `pyproject.toml`, `setup.py` | PEP 440 version |
+| **Go** | `go.mod` | Git tags |
+| **Elixir** | `mix.exs` | `version` in project |
+| **Swift** | `Package.swift` | Git tags |
 
-# Login to specific services
-belaf auth login --github
-belaf auth login --anthropic
-belaf auth login --all
+---
 
-# Logout
-belaf auth logout
-
-# Check authentication status
-belaf auth status
-```
-
-### Release Management
-
-The CLI includes powerful release management for monorepos and multi-language projects with interactive TUI wizards.
-
-```bash
-# Initialize release management (interactive TUI wizard)
-belaf init
-
-# Check which projects have changes (interactive TUI)
-belaf status
-
-# Prepare a new release (interactive 4-step wizard)
-belaf prepare
-
-# View dependency graph
-belaf graph
-```
-
-#### Commands
+## Commands
 
 | Command | Description |
 |---------|-------------|
-| `belaf init` | Initialize release management with interactive TUI wizard |
-| `belaf status` | Show release status with interactive project/commit browser |
-| `belaf prepare` | Prepare releases using 4-step TUI wizard with auto-suggestions |
-| `belaf graph` | Display project dependency graph |
+| `belaf init` | Initialize release management in your repo |
+| `belaf status` | Show which projects have unreleased changes |
+| `belaf prepare` | Prepare releases with version bumps and changelogs |
+| `belaf graph` | Visualize project dependency graph |
 
-#### Features
+### CI/CD Mode
 
-- **Interactive TUI Wizards**: All commands feature rich terminal UIs with keyboard navigation
-- **AI-Powered Changelogs**: Generate changelogs with Claude AI (requires Anthropic authentication)
-- **Multi-Language Support**: Automatically detects and manages versions for:
-  - Rust (Cargo.toml)
-  - Node.js (package.json)
-  - Python (setup.py, pyproject.toml)
-  - Go (go.mod)
-  - Elixir (mix.exs)
-  - Swift (Package.swift)
-- **Dependency Resolution**: Analyzes project dependencies and determines correct release order
-- **Automatic Changelog Generation**: Creates and updates CHANGELOG.md files based on Git commits
-- **Monorepo-Aware**: Handles complex dependency graphs in monorepos with multiple interconnected projects
-- **Git-Tag Based Versioning**: Version information stored in Git tags (`project-v1.2.3`)
-
-#### Example Workflow
+All commands support `--no-tui` for automation:
 
 ```bash
-# 1. Initialize release management (interactive wizard)
-cd /path/to/your/repo
-belaf init
-
-# 2. Make your changes and commit them
-git add .
-git commit -m "feat: add new feature"
-
-# 3. Check what will be released (interactive browser)
-belaf status
-
-# 4. Prepare the release (4-step TUI wizard)
-belaf prepare
-
-# 5. Review and push the changes
-git push origin main --tags
-```
-
-#### CI/CD Mode (--no-tui)
-
-For automated pipelines, use `--no-tui` to skip interactive wizards:
-
-```bash
-# Initialize without TUI
-belaf init --no-tui
-
-# Status in text/JSON format
-belaf status --no-tui
+# JSON output for scripts
 belaf status --format json
 
-# Auto-bump based on conventional commits
+# Auto-bump based on commits
 belaf prepare --no-tui
 
-# Per-project version bumps (CI mode)
-belaf prepare -p gate:major,rig:minor,utils:patch
+# Explicit version control
+belaf prepare -p api:major,sdk:minor,utils:patch
 ```
 
-#### Dependency Graph
+---
 
-Visualize your project dependencies:
+## How It Works
 
-```bash
-# Interactive web view (default)
-belaf graph
+1. **Discover** — belaf scans your repo for supported manifest files
+2. **Analyze** — Parses dependencies between projects
+3. **Detect** — Identifies changes since last release using git history
+4. **Suggest** — Recommends version bumps based on conventional commits
+5. **Generate** — Creates changelogs from commit messages
+6. **Release** — Updates versions, creates tags, opens PR
 
-# ASCII art graph
-belaf graph --format ascii
+---
 
-# DOT format for Graphviz
-belaf graph --format dot
+## Configuration
 
-# JSON format
-belaf graph --format json
-```
-
-#### Configuration
-
-Release management is configured via `belaf/config.toml` in your repository:
+belaf stores configuration in `belaf/config.toml`:
 
 ```toml
 [release.repo]
 upstream_urls = ["https://github.com/your-org/your-repo.git"]
 
 [release.commit_attribution]
-strategy = "scope_first"
-scope_matching = "smart"
+strategy = "scope_first"    # How to attribute commits to projects
+scope_matching = "smart"    # Fuzzy matching for commit scopes
 
-[release.projects.my-crate]
-ignore = false
+[release.projects.my-package]
+ignore = false              # Set true to exclude from releases
 ```
 
-Configuration is automatically created when you run `belaf init`.
+---
 
-#### TUI Keyboard Shortcuts
+## AI-Powered Changelogs
 
-**Status TUI:**
-- `Tab` - Switch between Projects and Commits panels
-- `↑/↓` or `j/k` - Navigate
-- `PgUp/PgDn` - Fast scroll
-- `g/G` - Go to top/bottom
-- `q` - Quit
-
-**Prepare TUI (4-step wizard):**
-- Step 1: Project overview with auto-suggestions
-- Step 2: Select bump type per project
-- Step 3: Preview changes
-- Step 4: Confirm and apply
-
-**Init TUI:**
-- `Space` - Toggle project selection
-- `a` - Select all projects
-- `n` - Deselect all projects
-- `Enter` - Proceed to next step
-- `Esc` - Go back
-
-## Development
+belaf integrates with Claude AI to generate human-readable changelogs:
 
 ```bash
-# Clone the repository
+# Authenticate with Anthropic
+belaf auth login --anthropic
+
+# Changelogs are now AI-enhanced
+belaf prepare
+```
+
+---
+
+## Why belaf?
+
+| Feature | belaf | semantic-release | changesets | release-please |
+|---------|-------|------------------|------------|----------------|
+| Multi-language | ✅ 6 languages | ❌ Node.js only | ❌ Node.js only | ⚠️ Limited |
+| Interactive TUI | ✅ | ❌ | ❌ | ❌ |
+| Dependency resolution | ✅ | ❌ | ⚠️ Basic | ❌ |
+| AI changelogs | ✅ | ❌ | ❌ | ❌ |
+| Single binary | ✅ | ❌ | ❌ | ❌ |
+| No runtime deps | ✅ | ❌ Node.js | ❌ Node.js | ❌ Node.js |
+
+---
+
+## Contributing
+
+Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) before submitting a PR.
+
+```bash
+# Clone
 git clone https://github.com/ilblu/belaf.git
 cd belaf
 
 # Build
-cargo build --release
-
-# Run
-cargo run -- --help
+cargo build
 
 # Test
 cargo test
+
+# Run
+cargo run -- --help
 ```
+
+---
 
 ## License
 
-MIT
+MIT © [ilblu](https://github.com/ilblu)
