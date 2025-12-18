@@ -6,8 +6,8 @@ authors = ["Dennis Ollhoff <contact@nyxb.email>"]
 edition = "2021"
 rust-version = "1.91"
 license = "MIT"
-homepage = "https://github.com/nyxb/belaf"
-repository = "https://github.com/nyxb/belaf"
+homepage = "https://github.com/ilblu/belaf"
+repository = "https://github.com/ilblu/belaf"
 
 [features]
 default = []
