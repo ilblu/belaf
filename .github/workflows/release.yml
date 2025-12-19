@@ -315,34 +315,7 @@ jobs:
 
             export PATH="/home/linuxbrew/.linuxbrew/bin:$PATH"
             brew update
-            # We avoid reformatting user-provided data such as the app description and homepage.
             brew style --except-cops FormulaAudit/Homepage,FormulaAudit/Desc,FormulaAuditStrict --fix "Formula/${filename}" || true
-
-            # Add caveats to the formula
-            if ! grep -q "def caveats" "Formula/${filename}"; then
-              sed -i '/^end$/i\
-\
-  def caveats\
-    <<~EOS\
-\
-      ╔══════════════════════════════════════════════════════════════╗\
-      ║                                                              ║\
-      ║   🚀 belaf has been installed successfully!                  ║\
-      ║                                                              ║\
-      ║   Get started:                                               ║\
-      ║     belaf init        Initialize your repository             ║\
-      ║     belaf status      View release status                    ║\
-      ║     belaf prepare     Prepare a new release                  ║\
-      ║                                                              ║\
-      ║   Need help?                                                 ║\
-      ║     belaf --help      Show all commands                      ║\
-      ║     https://github.com/ilblu/belaf                           ║\
-      ║                                                              ║\
-      ╚══════════════════════════════════════════════════════════════╝\
-\
-    EOS\
-  end' "Formula/${filename}"
-            fi
 
             git add "Formula/${filename}"
             git commit -m "${name} ${version}"

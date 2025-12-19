@@ -351,7 +351,7 @@ fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
     repo.create_baseline_tag()?;
 
     Ok(format!(
-        "Successfully initialized {} project(s)!\n\nNext steps:\n1. Review the changes\n2. Add belaf/ to your repository\n3. Commit the changes\n4. Try `belaf release status`",
+        "Successfully initialized {} project(s)!\n\nNext steps:\n1. Review the changes\n2. Add belaf/ to your repository\n3. Commit the changes\n4. Try `belaf status`",
         selected_names.len()
     ))
 }
