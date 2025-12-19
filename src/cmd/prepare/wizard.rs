@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -23,12 +23,14 @@ use crate::{
     core::{
         ecosystem::types::EcosystemType,
         release::{
+            changelog_generator::parse_existing_changelog,
             commit_analyzer::{self, BumpRecommendation},
             graph::GraphQueryBuilder,
             project::ProjectId,
             session::AppSession,
+            repository::RepoPathBuf,
             workflow::{
-                cleanup_release_branch, create_release_branch, generate_changelog_body,
+                cleanup_release_branch, create_release_branch, generate_changelog_entry,
                 polish_changelog_with_ai, ReleasePipeline, SelectedProject,
             },
         },
@@ -77,6 +79,7 @@ struct ProjectItem {
     commit_messages: Vec<String>,
     project_type: EcosystemType,
     cached_changelog: Option<String>,
+    existing_changelog: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,6 +161,8 @@ struct WizardState {
     loading_changelog: bool,
     loading_frame: usize,
     loading_receiver: Option<Receiver<String>>,
+    show_raw_markdown: bool,
+    toggle_button_area: Option<Rect>,
 }
 
 impl WizardState {
@@ -181,7 +186,23 @@ impl WizardState {
             loading_changelog: false,
             loading_frame: 0,
             loading_receiver: None,
+            show_raw_markdown: false,
+            toggle_button_area: None,
         }
+    }
+
+    fn toggle_markdown_view(&mut self) {
+        self.show_raw_markdown = !self.show_raw_markdown;
+    }
+
+    fn handle_mouse_click(&mut self, x: u16, y: u16) -> bool {
+        if let Some(area) = self.toggle_button_area {
+            if x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height {
+                self.toggle_markdown_view();
+                return true;
+            }
+        }
+        false
     }
 
     fn is_loading(&self) -> bool {
@@ -211,12 +232,22 @@ impl WizardState {
 
         let commit_messages = project.commit_messages.clone();
         let ai_enabled = self.ai_enabled;
+        let current_version = project.current_version.clone();
+        let chosen_bump = project.chosen_bump.unwrap_or(BumpStrategy::Auto);
+        let suggested_bump = project.suggested_bump;
+
+        let new_version = match chosen_bump {
+            BumpStrategy::Auto => calculate_next_version(&current_version, suggested_bump),
+            BumpStrategy::Major => calculate_major_version(&current_version),
+            BumpStrategy::Minor => calculate_minor_version(&current_version),
+            BumpStrategy::Patch => calculate_patch_version(&current_version),
+        };
 
         let (tx, rx) = mpsc::channel();
         self.loading_receiver = Some(rx);
 
         thread::spawn(move || {
-            let draft = generate_changelog_body(&commit_messages);
+            let draft = generate_changelog_entry(&new_version, &commit_messages);
             let result = if ai_enabled {
                 match polish_changelog_with_ai(&draft, &commit_messages) {
                     Ok(polished) => polished,
@@ -516,10 +547,20 @@ pub fn run() -> Result<i32> {
             .map(|v| v.to_string())
             .unwrap_or_else(|| proj.version.to_string());
 
+        let prefix_str = proj.prefix().escaped();
+        let changelog_rel_path = if prefix_str.is_empty() {
+            "CHANGELOG.md".to_string()
+        } else {
+            format!("{}/CHANGELOG.md", prefix_str)
+        };
+        let changelog_repo_path = RepoPathBuf::new(changelog_rel_path.as_bytes());
+        let changelog_path = sess.repo.resolve_workdir(changelog_repo_path.as_ref());
+        let existing_changelog = parse_existing_changelog(&changelog_path).unwrap_or_default();
+
         projects.push(ProjectItem {
             ident: *ident,
             name: proj.user_facing_name.clone(),
-            prefix: proj.prefix().escaped(),
+            prefix: prefix_str,
             current_version,
             selected: true,
             commit_count: n_commits,
@@ -528,6 +569,7 @@ pub fn run() -> Result<i32> {
             commit_messages,
             project_type,
             cached_changelog: None,
+            existing_changelog,
         });
     }
 
@@ -637,7 +679,7 @@ pub fn run() -> Result<i32> {
 fn run_wizard_ui(projects: Vec<ProjectItem>, ai_enabled: bool) -> Result<Option<Vec<ProjectItem>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
@@ -645,7 +687,7 @@ fn run_wizard_ui(projects: Vec<ProjectItem>, ai_enabled: bool) -> Result<Option<
     let result = run_app(&mut terminal, &mut state);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
     terminal.show_cursor()?;
 
     if result? {
@@ -683,41 +725,58 @@ fn run_app(
             continue;
         }
 
-        if let Event::Key(KeyEvent {
-            code,
-            kind: KeyEventKind::Press,
-            ..
-        }) = event::read()?
-        {
-            if code == KeyCode::Char('q') || code == KeyCode::Char('c') {
-                return Ok(false);
-            }
-
-            if code == KeyCode::Char('?') || code == KeyCode::Char('h') {
-                state.toggle_help();
-                continue;
-            }
-
-            if state.show_help {
-                state.toggle_help();
-                continue;
-            }
-
-            let result = match &state.step {
-                WizardStep::ProjectSelection => state.handle_key_project_selection(code),
-                WizardStep::ProjectConfig { .. } => state.handle_key_project_config(code),
-                WizardStep::Confirmation => {
-                    let (step_changed, confirmed) = state.handle_key_confirmation(code);
-                    if confirmed {
-                        return Ok(true);
-                    }
-                    step_changed
+        match event::read()? {
+            Event::Key(KeyEvent {
+                code,
+                kind: KeyEventKind::Press,
+                ..
+            }) => {
+                if code == KeyCode::Char('q') || code == KeyCode::Char('c') {
+                    return Ok(false);
                 }
-            };
 
-            if result {
-                continue;
+                if code == KeyCode::Char('?') || code == KeyCode::Char('h') {
+                    state.toggle_help();
+                    continue;
+                }
+
+                if state.show_help {
+                    state.toggle_help();
+                    continue;
+                }
+
+                if code == KeyCode::Char('m') && state.show_changelog {
+                    state.toggle_markdown_view();
+                    continue;
+                }
+
+                let result = match &state.step {
+                    WizardStep::ProjectSelection => state.handle_key_project_selection(code),
+                    WizardStep::ProjectConfig { .. } => state.handle_key_project_config(code),
+                    WizardStep::Confirmation => {
+                        let (step_changed, confirmed) = state.handle_key_confirmation(code);
+                        if confirmed {
+                            return Ok(true);
+                        }
+                        step_changed
+                    }
+                };
+
+                if result {
+                    continue;
+                }
             }
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                ..
+            }) => {
+                if state.show_changelog && state.handle_mouse_click(column, row) {
+                    continue;
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -769,7 +828,7 @@ fn render_footer(f: &mut Frame, area: Rect, state: &WizardState) {
             }
             WizardStep::ProjectConfig { .. } => {
                 if state.show_changelog {
-                    "Tab: Back to Bump | Enter: Next Project | Esc: Back | Q: Quit | ?: Help"
+                    "M: Toggle View | Tab: Back to Bump | Enter: Next | Esc: Back | Q: Quit"
                 } else {
                     "↑/↓: Navigate | Tab: Preview Changelog | Enter: Next | Esc: Back | Q: Quit | ?: Help"
                 }
@@ -785,10 +844,12 @@ fn render_footer(f: &mut Frame, area: Rect, state: &WizardState) {
 }
 
 fn render_step(f: &mut Frame, area: Rect, state: &mut WizardState) {
-    match &state.step {
+    let step = state.step.clone();
+    let show_changelog = state.show_changelog;
+    match step {
         WizardStep::ProjectSelection => render_project_selection(f, area, state),
         WizardStep::ProjectConfig { .. } => {
-            if state.show_changelog {
+            if show_changelog {
                 render_project_changelog(f, area, state);
             } else {
                 render_project_bump_strategy(f, area, state);
@@ -1138,53 +1199,112 @@ fn count_commit_types(messages: &[String]) -> (usize, usize, usize, usize) {
     (feat, fix, breaking, other)
 }
 
-fn render_project_changelog(f: &mut Frame, area: Rect, state: &WizardState) {
+fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) {
     let current_project = match state.get_current_project() {
         Some(p) => p,
         None => return,
     };
 
     let chosen_bump = current_project.chosen_bump.unwrap_or(BumpStrategy::Auto);
-    let bump_text = match chosen_bump {
-        BumpStrategy::Auto => current_project.suggested_bump.as_str(),
-        BumpStrategy::Major => "MAJOR",
-        BumpStrategy::Minor => "MINOR",
-        BumpStrategy::Patch => "PATCH",
+    let new_version = match chosen_bump {
+        BumpStrategy::Auto => calculate_next_version(&current_project.current_version, current_project.suggested_bump),
+        BumpStrategy::Major => calculate_major_version(&current_project.current_version),
+        BumpStrategy::Minor => calculate_minor_version(&current_project.current_version),
+        BumpStrategy::Patch => calculate_patch_version(&current_project.current_version),
     };
 
-    let mut changelog_content = format!(
-        "# Changelog Preview for {}\n\n\
-        **Selected bump:** `{}`\n\
-        **Commits analyzed:** {}\n\n",
-        current_project.name, bump_text, current_project.commit_count
-    );
-
-    let cached_body = current_project
+    let new_entry = current_project
         .cached_changelog
         .as_deref()
         .unwrap_or("Loading changelog...");
 
-    changelog_content.push_str(cached_body);
-
-    changelog_content.push_str(
-        "\n\n---\n\n\
-        Press Tab to go back to bump selection.\n\
-        Press Enter to continue to the next project.",
+    let mut changelog_content = format!(
+        "# Changelog\n\n\
+        All notable changes to {} will be documented in this file.\n\n\
+        The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\n\
+        and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n",
+        current_project.name
     );
 
-    let markdown_text = markdown::render_markdown(&changelog_content);
+    changelog_content.push_str(new_entry);
 
-    let paragraph = Paragraph::new(markdown_text)
+    if !current_project.existing_changelog.is_empty() {
+        changelog_content.push('\n');
+        changelog_content.push_str(&current_project.existing_changelog);
+    }
+
+    let show_raw = state.show_raw_markdown;
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(area);
+
+    let toggle_area = chunks[0];
+    let content_area = chunks[1];
+
+    let rendered_style = if !show_raw {
+        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+
+    let source_style = if show_raw {
+        Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::Gray)
+    };
+
+    let toggle_line = Line::from(vec![
+        Span::raw("  "),
+        Span::styled(" ◉ Preview ", rendered_style),
+        Span::raw("  "),
+        Span::styled(" ◉ Source ", source_style),
+        Span::raw("  "),
+        Span::styled("(m)", Style::default().fg(Color::DarkGray)),
+    ]);
+
+    let title = format!(
+        "{} ({} → {})",
+        current_project.name, current_project.current_version, new_version
+    );
+
+    let toggle_widget = Paragraph::new(toggle_line)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("Changelog Preview: {}", current_project.name))
-                .padding(Padding::horizontal(2)),
+                .title(title),
         )
-        .wrap(Wrap { trim: false })
-        .scroll((0, 0));
+        .alignment(ratatui::layout::Alignment::Center);
 
-    f.render_widget(paragraph, area);
+    f.render_widget(toggle_widget, toggle_area);
+
+    state.toggle_button_area = Some(toggle_area);
+
+    if show_raw {
+        let raw_text = Text::from(changelog_content.clone());
+        let paragraph = Paragraph::new(raw_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Markdown Source")
+                    .padding(Padding::horizontal(1)),
+            )
+            .wrap(Wrap { trim: false })
+            .style(Style::default().fg(Color::Rgb(180, 180, 180)));
+        f.render_widget(paragraph, content_area);
+    } else {
+        let markdown_text = markdown::render_markdown(&changelog_content);
+        let paragraph = Paragraph::new(markdown_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Rendered Preview")
+                    .padding(Padding::horizontal(1)),
+            )
+            .wrap(Wrap { trim: false });
+        f.render_widget(paragraph, content_area);
+    }
 }
 
 fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {

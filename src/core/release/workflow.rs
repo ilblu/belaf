@@ -487,6 +487,49 @@ pub fn polish_changelog_with_ai(draft: &str, commits: &[String]) -> Result<Strin
     }
 }
 
+pub fn generate_changelog_entry(version: &str, commit_messages: &[String]) -> String {
+    let categorized = commit_analyzer::categorize_commits(commit_messages);
+
+    let now = time::OffsetDateTime::now_utc();
+    let date = format!(
+        "{:04}-{:02}-{:02}",
+        now.year(),
+        now.month() as u8,
+        now.day()
+    );
+
+    if categorized.is_empty() {
+        return format!(
+            "## [{}] - {}\n\n\
+            No user-facing changes in this release.\n\
+            (Internal: docs, chore, ci, test, style)\n",
+            version, date
+        );
+    }
+
+    use std::collections::BTreeMap;
+    let mut by_category: BTreeMap<
+        commit_analyzer::ChangelogCategory,
+        Vec<&commit_analyzer::CategorizedCommit>,
+    > = BTreeMap::new();
+
+    for commit in &categorized {
+        by_category.entry(commit.category).or_default().push(commit);
+    }
+
+    let mut content = format!("## [{}] - {}\n\n", version, date);
+    for (category, commits) in by_category {
+        content.push_str(&format!("### {}\n\n", category.as_str()));
+        for commit in commits {
+            content.push_str(&commit.format_for_changelog());
+            content.push('\n');
+        }
+        content.push('\n');
+    }
+
+    content
+}
+
 pub fn generate_changelog_body(commit_messages: &[String]) -> String {
     let categorized = commit_analyzer::categorize_commits(commit_messages);
 
@@ -509,7 +552,7 @@ pub fn generate_changelog_body(commit_messages: &[String]) -> String {
 
     let mut content = String::new();
     for (category, commits) in by_category {
-        content.push_str(&format!("## {}\n\n", category.as_str()));
+        content.push_str(&format!("### {}\n\n", category.as_str()));
         for commit in commits {
             content.push_str(&commit.format_for_changelog());
             content.push('\n');

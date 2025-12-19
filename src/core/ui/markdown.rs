@@ -87,9 +87,6 @@ impl MarkdownRenderer {
             Tag::List(start_number) => {
                 self.list_level += 1;
                 self.list_item_number.push(start_number);
-                if self.list_level == 1 && !self.lines.is_empty() {
-                    self.lines.push(Line::default());
-                }
             }
             Tag::Item => {
                 self.flush_line();
@@ -153,9 +150,6 @@ impl MarkdownRenderer {
             TagEnd::List(_) => {
                 self.list_level = self.list_level.saturating_sub(1);
                 self.list_item_number.pop();
-                if self.list_level == 0 {
-                    self.lines.push(Line::default());
-                }
             }
             TagEnd::CodeBlock => {
                 self.in_code_block = false;

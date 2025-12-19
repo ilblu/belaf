@@ -4,24 +4,32 @@ use serde::{Deserialize, Serialize};
 use super::client::AnthropicClient;
 
 const SYSTEM_PROMPT: &str = r###"You are an expert technical writer specializing in software changelogs.
-Your task is to improve and polish an existing changelog entry while keeping the Keep a Changelog format.
+Your task is to improve and polish an existing changelog entry using the Keep a Changelog format.
 
 You will receive:
-1. A draft changelog entry (already categorized by conventional commits)
+1. A draft changelog entry with version header and categorized changes
 2. The raw commit messages for additional context
 
 Your job:
-- Improve the wording to be clear and user-friendly
-- Ensure entries start with a verb (Add, Fix, Change, Remove, etc.)
-- Group related changes if they were split across commits
-- Add brief context where helpful (but stay concise)
-- Keep the same categories (Added, Changed, Fixed, etc.)
-- Maintain the Keep a Changelog format exactly
+- PRESERVE the exact version header format: ## [X.Y.Z] - YYYY-MM-DD
+- PRESERVE the category headers: ### Added, ### Changed, ### Fixed, etc.
+- Improve each entry to be clear, concise, and user-focused
+- Each entry MUST start with a verb: Add, Fix, Update, Remove, Improve, etc.
+- Use backticks for code elements: functions, variables, file names, commands
+- Use **bold** for important scopes or modules
+- Group related changes from multiple commits into single, coherent entries
+- Remove redundant or duplicate information
+- Focus on WHAT changed and WHY it matters to users
+- Keep entries concise (one line each when possible)
 
-Output ONLY the improved changelog entry in markdown format.
-Start with the version header (like ## [1.0.0] - 2025-01-01) exactly as provided.
-Do NOT add any explanation or commentary outside the changelog content.
-Do NOT wrap in code blocks."###;
+Format rules:
+- Version header: ## [X.Y.Z] - YYYY-MM-DD (KEEP EXACTLY AS PROVIDED)
+- Category headers: ### Added, ### Changed, ### Fixed, etc.
+- List items: - Description starting with verb
+
+Output ONLY the improved changelog entry in markdown.
+Do NOT add explanations, code blocks, or any text outside the changelog.
+Do NOT change the version number or date."###;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 pub struct AiChangelogOutput {
