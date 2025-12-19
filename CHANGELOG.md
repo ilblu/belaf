@@ -1,3 +1,10 @@
+## [1.1.1](https://github.com/ilblu/belaf/compare/v1.1.0...v1.1.1) (2025-12-19)
+
+
+### Bug Fixes
+
+* **auth:** update GitHub OAuth client ID to belaf app ([ae78426](https://github.com/ilblu/belaf/commit/ae7842633defcc2de0b1bc30eb593775d637bc6c))
+
 # [1.1.0](https://github.com/ilblu/belaf/compare/v1.0.0...v1.1.0) (2025-12-19)
 
 
