@@ -1,3 +1,10 @@
+## [1.1.2](https://github.com/ilblu/belaf/compare/v1.1.1...v1.1.2) (2025-12-19)
+
+
+### Bug Fixes
+
+* correct command references and fix release workflow ([bd8f046](https://github.com/ilblu/belaf/commit/bd8f0465dd769786ba76e2e4862a0c5b868983ca))
+
 ## [1.1.1](https://github.com/ilblu/belaf/compare/v1.1.0...v1.1.1) (2025-12-19)
 
 
