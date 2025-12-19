@@ -129,7 +129,7 @@ fn select_service_for_logout() -> Result<Service> {
 }
 
 async fn login_github(no_browser: bool) -> Result<()> {
-    let client_id = "Ov23liNPpcjTMYaP841Y";
+    let client_id = "Iv23lirU6aG0QxDBvFz2";
     let device_codes = github::request_device_code(client_id).await?;
 
     println!("{}", header("GitHub Authentication"));
