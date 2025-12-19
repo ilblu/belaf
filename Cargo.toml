@@ -19,6 +19,25 @@ path-guid = "228E8725-1150-4D3E-9CCF-308757610651"
 license = false
 eula = false
 
+[package.metadata.dist]
+install-success-msg = """
+
+  ╔══════════════════════════════════════════════════════════════╗
+  ║                                                              ║
+  ║   🚀 belaf has been installed successfully!                  ║
+  ║                                                              ║
+  ║   Get started:                                               ║
+  ║     belaf init        Initialize your repository             ║
+  ║     belaf status      View release status                    ║
+  ║     belaf prepare     Prepare a new release                  ║
+  ║                                                              ║
+  ║   Need help?                                                 ║
+  ║     belaf --help      Show all commands                      ║
+  ║     https://github.com/ilblu/belaf                           ║
+  ║                                                              ║
+  ╚══════════════════════════════════════════════════════════════╝
+"""
+
 [[bin]]
 name = "belaf"
 path = "src/main.rs"

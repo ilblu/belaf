@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
     }
 
     if cli.version {
-        println!("belaf {}", env!("CARGO_PKG_VERSION"));
+        print_version_info();
         belaf::utils::version_check::check_for_updates(env!("CARGO_PKG_VERSION"), true);
         return Ok(());
     }
@@ -66,4 +66,23 @@ fn init_logging(verbosity: u8) {
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::new(level))
         .init();
+}
+
+fn print_version_info() {
+    let version = env!("CARGO_PKG_VERSION");
+    let description = env!("CARGO_PKG_DESCRIPTION");
+    let repository = env!("CARGO_PKG_REPOSITORY");
+    let target = env!("TARGET");
+    let rustc_version = env!("RUSTC_VERSION");
+
+    println!(
+        "{} {}",
+        "belaf".cyan().bold(),
+        version.green().bold()
+    );
+    println!("{}", description.dimmed());
+    println!();
+    println!("{:<12} {}", "Repository:".dimmed(), repository);
+    println!("{:<12} {}", "Target:".dimmed(), target);
+    println!("{:<12} {}", "Rustc:".dimmed(), rustc_version);
 }
