@@ -1,3 +1,10 @@
+# 1.0.0 (2025-12-19)
+
+
+### Features
+
+* initial release of belaf ([a2dc442](https://github.com/ilblu/belaf/commit/a2dc4427d41d5dc64fb28d4bbf0f822c41e2420f))
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
