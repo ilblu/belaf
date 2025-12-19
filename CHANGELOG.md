@@ -1,3 +1,10 @@
+# [1.1.0](https://github.com/ilblu/belaf/compare/v1.0.0...v1.1.0) (2025-12-19)
+
+
+### Features
+
+* **cli:** improve version output and add install success message ([8612d08](https://github.com/ilblu/belaf/commit/8612d08aec774c2f6ecd72a0827efbd8f45e6b74))
+
 # 1.0.0 (2025-12-19)
 
 
