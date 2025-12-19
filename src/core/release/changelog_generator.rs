@@ -102,6 +102,7 @@ pub fn generate_changelog(
     output.push_str(&new_entry.to_markdown());
 
     if !existing_content.is_empty() {
+        output.push('\n');
         if !existing_content.starts_with("##") {
             output.push_str("## Older Versions\n\n");
         }

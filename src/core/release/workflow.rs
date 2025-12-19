@@ -248,7 +248,7 @@ impl<'a> ReleasePipeline<'a> {
                 } else {
                     entry.to_markdown()
                 };
-                format!("{}{}\n{}", header, ai_entry, existing_content)
+                format!("{}{}\n\n{}", header, ai_entry, existing_content)
             } else {
                 full_changelog
             };
