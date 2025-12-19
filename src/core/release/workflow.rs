@@ -432,6 +432,18 @@ pub fn create_release_branch(sess: &mut AppSession) -> Result<(String, String)> 
     Ok((base_branch, release_branch))
 }
 
+pub fn cleanup_release_branch(sess: &mut AppSession, base_branch: &str, release_branch: &str) {
+    if let Err(e) = sess.repo.checkout_branch(base_branch) {
+        tracing::warn!("failed to checkout base branch '{}': {}", base_branch, e);
+    }
+
+    if let Err(e) = sess.repo.delete_branch(release_branch) {
+        tracing::warn!("failed to delete release branch '{}': {}", release_branch, e);
+    }
+
+    info!("cleaned up release branch, returned to '{}'", base_branch);
+}
+
 fn format_commit_message(projects: &[SelectedProject]) -> String {
     if projects.len() == 1 {
         let p = &projects[0];

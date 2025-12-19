@@ -13,6 +13,9 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
+use std::time::Duration;
 use tracing::info;
 
 use crate::{
@@ -25,8 +28,8 @@ use crate::{
             project::ProjectId,
             session::AppSession,
             workflow::{
-                create_release_branch, generate_changelog_body, polish_changelog_with_ai,
-                ReleasePipeline, SelectedProject,
+                cleanup_release_branch, create_release_branch, generate_changelog_body,
+                polish_changelog_with_ai, ReleasePipeline, SelectedProject,
             },
         },
         ui::markdown,
@@ -66,6 +69,7 @@ struct ProjectItem {
     ident: ProjectId,
     name: String,
     prefix: String,
+    current_version: String,
     selected: bool,
     commit_count: usize,
     suggested_bump: BumpRecommendation,
@@ -93,17 +97,53 @@ impl BumpStrategy {
         }
     }
 
-    fn description(&self) -> &'static str {
-        match self {
-            Self::Auto => "Use conventional commits to determine bump type automatically",
-            Self::Major => "Breaking changes (1.0.0 → 2.0.0)",
-            Self::Minor => "New features (1.0.0 → 1.1.0)",
-            Self::Patch => "Bug fixes (1.0.0 → 1.0.1)",
-        }
-    }
-
     fn all() -> Vec<Self> {
         vec![Self::Auto, Self::Major, Self::Minor, Self::Patch]
+    }
+}
+
+fn calculate_next_version(current: &str, recommendation: BumpRecommendation) -> String {
+    match recommendation {
+        BumpRecommendation::Major => calculate_major_version(current),
+        BumpRecommendation::Minor => calculate_minor_version(current),
+        BumpRecommendation::Patch => calculate_patch_version(current),
+        BumpRecommendation::None => current.to_string(),
+    }
+}
+
+fn calculate_major_version(current: &str) -> String {
+    if let Ok(mut v) = semver::Version::parse(current) {
+        v.major += 1;
+        v.minor = 0;
+        v.patch = 0;
+        v.pre = semver::Prerelease::EMPTY;
+        v.build = semver::BuildMetadata::EMPTY;
+        v.to_string()
+    } else {
+        format!("{}+1.0.0", current)
+    }
+}
+
+fn calculate_minor_version(current: &str) -> String {
+    if let Ok(mut v) = semver::Version::parse(current) {
+        v.minor += 1;
+        v.patch = 0;
+        v.pre = semver::Prerelease::EMPTY;
+        v.build = semver::BuildMetadata::EMPTY;
+        v.to_string()
+    } else {
+        format!("{}+0.1.0", current)
+    }
+}
+
+fn calculate_patch_version(current: &str) -> String {
+    if let Ok(mut v) = semver::Version::parse(current) {
+        v.patch += 1;
+        v.pre = semver::Prerelease::EMPTY;
+        v.build = semver::BuildMetadata::EMPTY;
+        v.to_string()
+    } else {
+        format!("{}+0.0.1", current)
     }
 }
 
@@ -115,6 +155,9 @@ struct WizardState {
     show_changelog: bool,
     show_help: bool,
     ai_enabled: bool,
+    loading_changelog: bool,
+    loading_frame: usize,
+    loading_receiver: Option<Receiver<String>>,
 }
 
 impl WizardState {
@@ -135,7 +178,88 @@ impl WizardState {
             show_changelog: false,
             show_help: false,
             ai_enabled,
+            loading_changelog: false,
+            loading_frame: 0,
+            loading_receiver: None,
         }
+    }
+
+    fn is_loading(&self) -> bool {
+        self.loading_changelog
+    }
+
+    fn tick_loading(&mut self) {
+        self.loading_frame = (self.loading_frame + 1) % 8;
+    }
+
+    fn loading_spinner(&self) -> &'static str {
+        const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+        FRAMES[self.loading_frame]
+    }
+
+    fn start_background_changelog_generation(&mut self) {
+        let project = match self.get_current_project() {
+            Some(p) => p,
+            None => return,
+        };
+
+        if project.cached_changelog.is_some() {
+            self.loading_changelog = false;
+            self.show_changelog = true;
+            return;
+        }
+
+        let commit_messages = project.commit_messages.clone();
+        let ai_enabled = self.ai_enabled;
+
+        let (tx, rx) = mpsc::channel();
+        self.loading_receiver = Some(rx);
+
+        thread::spawn(move || {
+            let draft = generate_changelog_body(&commit_messages);
+            let result = if ai_enabled {
+                match polish_changelog_with_ai(&draft, &commit_messages) {
+                    Ok(polished) => polished,
+                    Err(e) => {
+                        tracing::warn!("AI changelog polishing failed, using draft: {:#}", e);
+                        draft
+                    }
+                }
+            } else {
+                draft
+            };
+            let _ = tx.send(result);
+        });
+    }
+
+    fn check_loading_complete(&mut self) -> bool {
+        if let Some(ref receiver) = self.loading_receiver {
+            match receiver.try_recv() {
+                Ok(changelog) => {
+                    if let Some(project) = self.get_current_project_mut() {
+                        project.cached_changelog = Some(changelog);
+                    }
+                    self.loading_changelog = false;
+                    self.loading_receiver = None;
+                    self.show_changelog = true;
+                    true
+                }
+                Err(TryRecvError::Empty) => false,
+                Err(TryRecvError::Disconnected) => {
+                    self.loading_changelog = false;
+                    self.loading_receiver = None;
+                    self.show_changelog = true;
+                    true
+                }
+            }
+        } else {
+            false
+        }
+    }
+
+    fn cancel_loading(&mut self) {
+        self.loading_changelog = false;
+        self.loading_receiver = None;
     }
 
     fn get_current_project(&self) -> Option<&ProjectItem> {
@@ -168,40 +292,11 @@ impl WizardState {
         self.show_help = !self.show_help;
     }
 
-    fn ensure_current_changelog_cached(&mut self) {
-        let ai_enabled = self.ai_enabled;
-        let changelog_data = {
-            let project = match self.get_current_project() {
-                Some(p) => p,
-                None => return,
-            };
-
-            if project.cached_changelog.is_some() {
-                return;
-            }
-
-            let commit_messages = project.commit_messages.clone();
-            let draft = generate_changelog_body(&commit_messages);
-
-            if ai_enabled {
-                match polish_changelog_with_ai(&draft, &commit_messages) {
-                    Ok(polished) => polished,
-                    Err(e) => {
-                        tracing::warn!("AI changelog polishing failed, using draft: {:#}", e);
-                        draft
-                    }
-                }
-            } else {
-                draft
-            }
-        };
-
-        if let Some(project) = self.get_current_project_mut() {
-            project.cached_changelog = Some(changelog_data);
-        }
-    }
-
     fn next_step(&mut self) -> bool {
+        if self.loading_changelog {
+            return false;
+        }
+
         match &self.step {
             WizardStep::ProjectSelection => {
                 if self.selected_count() == 0 {
@@ -219,8 +314,8 @@ impl WizardState {
                             project.chosen_bump = Some(BumpStrategy::all()[selected]);
                         }
                     }
-                    self.show_changelog = true;
-                    self.ensure_current_changelog_cached();
+                    self.loading_changelog = true;
+                    self.start_background_changelog_generation();
                     true
                 } else {
                     if *project_index + 1 < self.selected_count() {
@@ -383,6 +478,7 @@ pub fn run() -> Result<i32> {
 
     if idents.is_empty() {
         info!("no projects found in repository");
+        cleanup_release_branch(&mut sess, &base_branch, &release_branch);
         return Ok(0);
     }
 
@@ -415,10 +511,16 @@ pub fn run() -> Result<i32> {
             .and_then(|s| EcosystemType::from_qname(s))
             .unwrap_or(EcosystemType::Cargo);
 
+        let current_version = history
+            .release_version()
+            .map(|v| v.to_string())
+            .unwrap_or_else(|| proj.version.to_string());
+
         projects.push(ProjectItem {
             ident: *ident,
             name: proj.user_facing_name.clone(),
             prefix: proj.prefix().escaped(),
+            current_version,
             selected: true,
             commit_count: n_commits,
             suggested_bump: analysis.recommendation,
@@ -431,6 +533,7 @@ pub fn run() -> Result<i32> {
 
     if projects.is_empty() {
         info!("no projects with changes found");
+        cleanup_release_branch(&mut sess, &base_branch, &release_branch);
         return Ok(0);
     }
 
@@ -441,6 +544,7 @@ pub fn run() -> Result<i32> {
         Some(projects) => projects,
         None => {
             info!("release preparation cancelled by user");
+            cleanup_release_branch(&mut sess, &base_branch, &release_branch);
             return Ok(1);
         }
     };
@@ -559,6 +663,26 @@ fn run_app(
     loop {
         terminal.draw(|f| ui(f, state))?;
 
+        if state.is_loading() {
+            state.check_loading_complete();
+
+            if event::poll(Duration::from_millis(100))? {
+                if let Event::Key(KeyEvent {
+                    code,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) = event::read()?
+                {
+                    if code == KeyCode::Esc {
+                        state.cancel_loading();
+                    }
+                }
+            }
+
+            state.tick_loading();
+            continue;
+        }
+
         if let Event::Key(KeyEvent {
             code,
             kind: KeyEventKind::Press,
@@ -636,18 +760,22 @@ fn render_header(f: &mut Frame, area: Rect, state: &WizardState) {
 }
 
 fn render_footer(f: &mut Frame, area: Rect, state: &WizardState) {
-    let help_text = match &state.step {
-        WizardStep::ProjectSelection => {
-            "↑/↓: Navigate | Space: Toggle | A: Toggle All | Enter: Next | Q: Quit | ?: Help"
-        }
-        WizardStep::ProjectConfig { .. } => {
-            if state.show_changelog {
-                "Tab: Back to Bump | Enter: Next Project | Esc: Back | Q: Quit | ?: Help"
-            } else {
-                "↑/↓: Navigate | Tab: Preview Changelog | Enter: Next | Esc: Back | Q: Quit | ?: Help"
+    let help_text = if state.is_loading() {
+        "⏳ Generating changelog with AI... | Esc: Cancel"
+    } else {
+        match &state.step {
+            WizardStep::ProjectSelection => {
+                "↑/↓: Navigate | Space: Toggle | A: Toggle All | Enter: Next | Q: Quit | ?: Help"
             }
+            WizardStep::ProjectConfig { .. } => {
+                if state.show_changelog {
+                    "Tab: Back to Bump | Enter: Next Project | Esc: Back | Q: Quit | ?: Help"
+                } else {
+                    "↑/↓: Navigate | Tab: Preview Changelog | Enter: Next | Esc: Back | Q: Quit | ?: Help"
+                }
+            }
+            WizardStep::Confirmation => "Enter: Confirm | Esc: Back | Q: Quit | ?: Help",
         }
-        WizardStep::Confirmation => "Enter: Confirm | Esc: Back | Q: Quit | ?: Help",
     };
 
     let footer = Paragraph::new(help_text)
@@ -715,61 +843,299 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
 fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardState) {
     let strategies = BumpStrategy::all();
 
-    let (project_name, suggested_bump, commit_count) = match state.get_current_project() {
-        Some(p) => (p.name.clone(), p.suggested_bump, p.commit_count),
+    let project = match state.get_current_project() {
+        Some(p) => p,
         None => return,
     };
 
+    let project_name = project.name.clone();
+    let current_version = project.current_version.clone();
+    let suggested_bump = project.suggested_bump;
+    let commit_messages = project.commit_messages.clone();
+
+    let selected_index = state.bump_list_state.selected().unwrap_or(0);
+    let selected_strategy = strategies.get(selected_index).copied().unwrap_or(BumpStrategy::Auto);
+
     let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(area);
 
     let items: Vec<ListItem> = strategies
         .iter()
         .map(|strategy| {
-            let content = format!("{} - {}", strategy.as_str(), strategy.description());
+            let next_ver = match strategy {
+                BumpStrategy::Auto => calculate_next_version(&current_version, suggested_bump),
+                BumpStrategy::Major => calculate_major_version(&current_version),
+                BumpStrategy::Minor => calculate_minor_version(&current_version),
+                BumpStrategy::Patch => calculate_patch_version(&current_version),
+            };
+            let content = format!("  {}  →  {}", strategy.as_str(), next_ver);
             ListItem::new(content)
         })
         .collect();
+
+    let left_title = if state.is_loading() {
+        format!("{} ({}) [Processing...]", project_name, current_version)
+    } else {
+        format!("{} ({})", project_name, current_version)
+    };
 
     let list = List::new(items)
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("Choose version bump for {}", project_name)),
+                .title(left_title),
         )
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(if state.is_loading() { Color::DarkGray } else { Color::DarkGray })
                 .add_modifier(Modifier::BOLD),
         )
-        .highlight_symbol("► ");
+        .highlight_symbol(if state.is_loading() { "⏳" } else { "► " });
 
     f.render_stateful_widget(list, chunks[0], &mut state.bump_list_state);
 
-    let suggestion_text = match suggested_bump {
-        BumpRecommendation::Major => "MAJOR (breaking changes)",
-        BumpRecommendation::Minor => "MINOR (new features)",
-        BumpRecommendation::Patch => "PATCH (bug fixes)",
-        BumpRecommendation::None => "NO BUMP (no changes)",
+    if state.is_loading() {
+        let loading_content = build_loading_panel(state, &commit_messages);
+        let loading_panel = Paragraph::new(loading_content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("🤖 Generating Changelog..."),
+            )
+            .wrap(Wrap { trim: true });
+        f.render_widget(loading_panel, chunks[1]);
+    } else {
+        let detail_content = build_detail_panel(
+            &selected_strategy,
+            &current_version,
+            suggested_bump,
+            &commit_messages,
+        );
+
+        let detail_panel = Paragraph::new(detail_content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!("Details: {}", selected_strategy.as_str())),
+            )
+            .wrap(Wrap { trim: true });
+
+        f.render_widget(detail_panel, chunks[1]);
+    }
+}
+
+fn build_loading_panel(state: &WizardState, commit_messages: &[String]) -> Text<'static> {
+    let spinner = state.loading_spinner();
+    let commit_count = commit_messages.len();
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{} ", spinner),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Analyzing commits with Claude AI",
+            Style::default().fg(Color::Cyan),
+        ),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!("   Processing {} commit{}...", commit_count, if commit_count == 1 { "" } else { "s" }),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "   This may take a few seconds.",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "─".repeat(40),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "   Press Esc to cancel",
+        Style::default().fg(Color::Yellow),
+    )));
+
+    Text::from(lines)
+}
+
+fn build_detail_panel(
+    strategy: &BumpStrategy,
+    current_version: &str,
+    suggested_bump: BumpRecommendation,
+    commit_messages: &[String],
+) -> Text<'static> {
+    let mut lines: Vec<Line> = Vec::new();
+
+    let next_version = match strategy {
+        BumpStrategy::Auto => calculate_next_version(current_version, suggested_bump),
+        BumpStrategy::Major => calculate_major_version(current_version),
+        BumpStrategy::Minor => calculate_minor_version(current_version),
+        BumpStrategy::Patch => calculate_patch_version(current_version),
     };
 
-    let suggestions = Paragraph::new(format!(
-        "Suggested bump based on conventional commits:\n\n  {}\n\nProject has {} commit{}.\n\nPress Tab to preview the changelog.",
-        suggestion_text,
-        commit_count,
-        if commit_count == 1 { "" } else { "s" }
-    ))
-    .style(Style::default().fg(Color::Yellow))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Analysis"),
-    )
-    .wrap(Wrap { trim: true });
+    lines.push(Line::from(vec![
+        Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(current_version.to_string(), Style::default().fg(Color::Yellow)),
+        Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+        Span::styled(next_version, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+    ]));
+    lines.push(Line::from(""));
 
-    f.render_widget(suggestions, chunks[1]);
+    match strategy {
+        BumpStrategy::Auto => {
+            let bump_name = match suggested_bump {
+                BumpRecommendation::Major => "MAJOR (breaking changes)",
+                BumpRecommendation::Minor => "MINOR (new features)",
+                BumpRecommendation::Patch => "PATCH (bug fixes)",
+                BumpRecommendation::None => "NO CHANGES",
+            };
+            lines.push(Line::from(vec![
+                Span::styled("Detected: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(bump_name.to_string(), Style::default().fg(Color::Cyan)),
+            ]));
+        }
+        BumpStrategy::Major => {
+            lines.push(Line::from(Span::styled(
+                "⚠ Breaking Change Release",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  Consider updating migration guides",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        BumpStrategy::Minor => {
+            lines.push(Line::from(Span::styled(
+                "✓ Feature Release",
+                Style::default().fg(Color::Green),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  Backwards compatible additions",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+        BumpStrategy::Patch => {
+            lines.push(Line::from(Span::styled(
+                "✓ Patch Release",
+                Style::default().fg(Color::Blue),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  Bug fixes only",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+
+    let (feat_count, fix_count, breaking_count, other_count) = count_commit_types(commit_messages);
+
+    lines.push(Line::from(Span::styled(
+        "Commit Analysis:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+
+    if breaking_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  breaking:  ", Style::default().fg(Color::Red)),
+            Span::styled(format!("{}", breaking_count), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+        ]));
+    }
+    if feat_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  feat:      ", Style::default().fg(Color::Green)),
+            Span::styled(format!("{}", feat_count), Style::default().fg(Color::Green)),
+        ]));
+    }
+    if fix_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  fix:       ", Style::default().fg(Color::Yellow)),
+            Span::styled(format!("{}", fix_count), Style::default().fg(Color::Yellow)),
+        ]));
+    }
+    if other_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  other:     ", Style::default().fg(Color::DarkGray)),
+            Span::styled(format!("{}", other_count), Style::default().fg(Color::DarkGray)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Commits:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+
+    for (i, msg) in commit_messages.iter().take(8).enumerate() {
+        let truncated = if msg.len() > 50 {
+            format!("{}...", &msg[..47])
+        } else {
+            msg.clone()
+        };
+
+        let color = if msg.starts_with("feat") {
+            Color::Green
+        } else if msg.starts_with("fix") {
+            Color::Yellow
+        } else if msg.contains("BREAKING") || msg.contains("!:") {
+            Color::Red
+        } else {
+            Color::DarkGray
+        };
+
+        lines.push(Line::from(Span::styled(
+            format!("  {} {}", if i < 9 { "•" } else { " " }, truncated),
+            Style::default().fg(color),
+        )));
+    }
+
+    if commit_messages.len() > 8 {
+        lines.push(Line::from(Span::styled(
+            format!("  ... and {} more", commit_messages.len() - 8),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Press Tab to preview full changelog",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    Text::from(lines)
+}
+
+fn count_commit_types(messages: &[String]) -> (usize, usize, usize, usize) {
+    let mut feat = 0;
+    let mut fix = 0;
+    let mut breaking = 0;
+    let mut other = 0;
+
+    for msg in messages {
+        let lower = msg.to_lowercase();
+        if msg.contains("BREAKING") || msg.contains("!:") {
+            breaking += 1;
+        } else if lower.starts_with("feat") {
+            feat += 1;
+        } else if lower.starts_with("fix") {
+            fix += 1;
+        } else {
+            other += 1;
+        }
+    }
+
+    (feat, fix, breaking, other)
 }
 
 fn render_project_changelog(f: &mut Frame, area: Rect, state: &WizardState) {

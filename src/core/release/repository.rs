@@ -968,6 +968,20 @@ impl Repository {
         Ok(())
     }
 
+    pub fn delete_branch(&self, name: &str) -> Result<()> {
+        let mut branch = self
+            .repo
+            .find_branch(name, git2::BranchType::Local)
+            .with_context(|| format!("branch '{}' not found", name))?;
+
+        branch
+            .delete()
+            .with_context(|| format!("failed to delete branch '{}'", name))?;
+
+        info!("deleted branch {}", name);
+        Ok(())
+    }
+
     pub fn push_branch(&self, branch_name: &str) -> Result<()> {
         let mut remote = self.repo.find_remote(&self.upstream_name)?;
         let refspec = format!("refs/heads/{}:refs/heads/{}", branch_name, branch_name);
