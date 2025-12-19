@@ -63,6 +63,9 @@ impl MarkdownRenderer {
         match tag {
             Tag::Heading { level, .. } => {
                 self.flush_line();
+                if !self.lines.is_empty() {
+                    self.lines.push(Line::default());
+                }
                 let style = match level {
                     HeadingLevel::H1 => Style::default()
                         .fg(Color::Cyan)
@@ -80,11 +83,16 @@ impl MarkdownRenderer {
                 self.style_stack.push(style);
             }
             Tag::Paragraph => {
-                if !self.lines.is_empty() && !self.current_line.is_empty() {
-                    self.flush_line();
+                self.flush_line();
+                if !self.lines.is_empty() {
+                    self.lines.push(Line::default());
                 }
             }
             Tag::List(start_number) => {
+                self.flush_line();
+                if !self.lines.is_empty() && self.list_level == 0 {
+                    self.lines.push(Line::default());
+                }
                 self.list_level += 1;
                 self.list_item_number.push(start_number);
             }
@@ -142,7 +150,6 @@ impl MarkdownRenderer {
             TagEnd::Heading(_) => {
                 self.style_stack.pop();
                 self.flush_line();
-                self.lines.push(Line::default());
             }
             TagEnd::Paragraph => {
                 self.flush_line();

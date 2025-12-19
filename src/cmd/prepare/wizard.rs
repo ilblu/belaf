@@ -1229,7 +1229,7 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
     changelog_content.push_str(new_entry);
 
     if !current_project.existing_changelog.is_empty() {
-        changelog_content.push('\n');
+        changelog_content.push_str("\n\n");
         changelog_content.push_str(&current_project.existing_changelog);
     }
 
