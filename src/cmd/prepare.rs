@@ -6,6 +6,7 @@ use crate::{
     atry,
     core::{
         bump,
+        changelog::Commit,
         ecosystem::types::EcosystemType,
         graph::GraphQueryBuilder,
         session::AppSession,
@@ -114,19 +115,23 @@ fn discover_and_prepare_projects(sess: &mut AppSession) -> Result<Vec<SelectedPr
             continue;
         }
 
-        let commit_messages: Vec<String> = history
+        let commits: Vec<Commit<'static>> = history
             .commits()
             .into_iter()
             .filter_map(|cid| {
                 sess.repo
                     .get_commit_summary(*cid)
                     .ok()
-                    .map(|msg| format!("{} {}", cid, msg))
+                    .map(|msg| Commit {
+                        id: cid.to_string(),
+                        message: msg,
+                        ..Default::default()
+                    })
             })
             .collect();
 
         let analysis = atry!(
-            bump::analyze_commit_messages(&commit_messages);
+            bump::analyze_commits(&commits);
             ["failed to analyze commit messages for {}", proj.user_facing_name]
         );
 
@@ -181,7 +186,7 @@ fn discover_and_prepare_projects(sess: &mut AppSession) -> Result<Vec<SelectedPr
             old_version,
             new_version,
             bump_type: bump_scheme_text.to_string(),
-            commit_messages,
+            commits,
             ecosystem,
             cached_changelog: None,
         });

@@ -181,7 +181,7 @@ mod tests {
             old_version: old.to_string(),
             new_version: new.to_string(),
             bump_type: bump.to_string(),
-            commit_messages: vec![],
+            commits: vec![],
             ecosystem: EcosystemType::Cargo,
             cached_changelog: None,
         }

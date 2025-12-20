@@ -28,7 +28,7 @@ use crate::{
     atry,
     core::{
         bump::{self, BumpConfig, BumpRecommendation},
-        changelog::{ChangelogConfig, GitConfig},
+        changelog::{ChangelogConfig, Commit, GitConfig},
         config::syntax::{BumpConfiguration, ChangelogConfiguration},
         ecosystem::types::EcosystemType,
         git::repository::RepoPathBuf,
@@ -81,7 +81,7 @@ struct ProjectItem {
     commit_count: usize,
     suggested_bump: BumpRecommendation,
     chosen_bump: Option<BumpStrategy>,
-    commit_messages: Vec<String>,
+    commits: Vec<Commit<'static>>,
     project_type: EcosystemType,
     cached_changelog: Option<String>,
     existing_changelog: String,
@@ -241,7 +241,7 @@ impl WizardState {
             return;
         }
 
-        let commit_messages = project.commit_messages.clone();
+        let commits = project.commits.clone();
         let current_version = project.current_version.clone();
         let chosen_bump = project.chosen_bump.unwrap_or(BumpStrategy::Auto);
         let suggested_bump = project.suggested_bump;
@@ -263,7 +263,7 @@ impl WizardState {
         thread::spawn(move || {
             let changelog = generate_changelog_entry(
                 &new_version,
-                &commit_messages,
+                &commits,
                 &git_config,
                 &changelog_config,
                 &bump_config,
@@ -538,18 +538,22 @@ pub fn run_with_overrides(project_overrides: Option<Vec<String>>) -> Result<i32>
             continue;
         }
 
-        let commit_messages: Vec<String> = history
+        let commits: Vec<Commit<'static>> = history
             .commits()
             .into_iter()
             .filter_map(|cid| {
                 sess.repo
                     .get_commit_summary(*cid)
                     .ok()
-                    .map(|msg| format!("{} {}", cid, msg))
+                    .map(|msg| Commit {
+                        id: cid.to_string(),
+                        message: msg,
+                        ..Default::default()
+                    })
             })
             .collect();
 
-        let analysis = bump::analyze_commit_messages(&commit_messages)
+        let analysis = bump::analyze_commits(&commits)
             .context("failed to analyze commit messages")?;
 
         let qnames = proj.qualified_names();
@@ -582,7 +586,7 @@ pub fn run_with_overrides(project_overrides: Option<Vec<String>>) -> Result<i32>
             commit_count: n_commits,
             suggested_bump: analysis.recommendation,
             chosen_bump: None,
-            commit_messages,
+            commits,
             project_type,
             cached_changelog: None,
             existing_changelog,
@@ -696,7 +700,7 @@ pub fn run_with_overrides(project_overrides: Option<Vec<String>>) -> Result<i32>
             old_version,
             new_version,
             bump_type: bump_scheme_text.to_string(),
-            commit_messages: project_item.commit_messages.clone(),
+            commits: project_item.commits.clone(),
             ecosystem: project_item.project_type,
             cached_changelog: project_item.cached_changelog.clone(),
         });
@@ -980,7 +984,7 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
     let project_name = project.name.clone();
     let current_version = project.current_version.clone();
     let suggested_bump = project.suggested_bump;
-    let commit_messages = project.commit_messages.clone();
+    let commits = project.commits.clone();
 
     let selected_index = state.bump_list_state.selected().unwrap_or(0);
     let selected_strategy = strategies
@@ -1025,7 +1029,7 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
     f.render_stateful_widget(list, chunks[0], &mut state.bump_list_state);
 
     if state.is_loading() {
-        let loading_content = build_loading_panel(state, &commit_messages);
+        let loading_content = build_loading_panel(state, &commits);
         let loading_panel = Paragraph::new(loading_content)
             .block(
                 Block::default()
@@ -1039,7 +1043,7 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
             &selected_strategy,
             &current_version,
             suggested_bump,
-            &commit_messages,
+            &commits,
         );
 
         let detail_panel = Paragraph::new(detail_content)
@@ -1054,9 +1058,9 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
     }
 }
 
-fn build_loading_panel(state: &WizardState, commit_messages: &[String]) -> Text<'static> {
+fn build_loading_panel(state: &WizardState, commits: &[Commit<'static>]) -> Text<'static> {
     let spinner = state.loading_spinner();
-    let commit_count = commit_messages.len();
+    let commit_count = commits.len();
 
     let mut lines: Vec<Line> = Vec::new();
 
@@ -1107,7 +1111,7 @@ fn build_detail_panel(
     strategy: &BumpStrategy,
     current_version: &str,
     suggested_bump: BumpRecommendation,
-    commit_messages: &[String],
+    commits: &[Commit<'static>],
 ) -> Text<'static> {
     let mut lines: Vec<Line> = Vec::new();
 
@@ -1181,7 +1185,7 @@ fn build_detail_panel(
 
     lines.push(Line::from(""));
 
-    let (feat_count, fix_count, breaking_count, other_count) = count_commit_types(commit_messages);
+    let (feat_count, fix_count, breaking_count, other_count) = count_commit_types(commits);
 
     lines.push(Line::from(Span::styled(
         "Commit Analysis:",
@@ -1225,7 +1229,8 @@ fn build_detail_panel(
         Style::default().add_modifier(Modifier::BOLD),
     )));
 
-    for (i, msg) in commit_messages.iter().take(8).enumerate() {
+    for (i, commit) in commits.iter().take(8).enumerate() {
+        let msg = &commit.message;
         let truncated = if msg.len() > 50 {
             format!("{}...", &msg[..47])
         } else {
@@ -1248,9 +1253,9 @@ fn build_detail_panel(
         )));
     }
 
-    if commit_messages.len() > 8 {
+    if commits.len() > 8 {
         lines.push(Line::from(Span::styled(
-            format!("  ... and {} more", commit_messages.len() - 8),
+            format!("  ... and {} more", commits.len() - 8),
             Style::default().fg(Color::DarkGray),
         )));
     }
@@ -1264,13 +1269,14 @@ fn build_detail_panel(
     Text::from(lines)
 }
 
-fn count_commit_types(messages: &[String]) -> (usize, usize, usize, usize) {
+fn count_commit_types(commits: &[Commit<'static>]) -> (usize, usize, usize, usize) {
     let mut feat = 0;
     let mut fix = 0;
     let mut breaking = 0;
     let mut other = 0;
 
-    for msg in messages {
+    for commit in commits {
+        let msg = &commit.message;
         let lower = msg.to_lowercase();
         if msg.contains("BREAKING") || msg.contains("!:") {
             breaking += 1;

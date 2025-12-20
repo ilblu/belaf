@@ -33,7 +33,7 @@ pub struct SelectedProject {
     pub old_version: String,
     pub new_version: String,
     pub bump_type: String,
-    pub commit_messages: Vec<String>,
+    pub commits: Vec<Commit<'static>>,
     pub ecosystem: EcosystemType,
     pub cached_changelog: Option<String>,
 }
@@ -145,16 +145,10 @@ impl<'a> ReleasePipeline<'a> {
             let existing_content =
                 std::fs::read_to_string(&changelog_full_path).unwrap_or_default();
 
-            let commits: Vec<Commit> = project
-                .commit_messages
-                .iter()
-                .map(|msg| Commit::from(msg.clone()))
-                .collect();
-
             let now = time::OffsetDateTime::now_utc();
             let release = Release {
                 version: Some(project.new_version.clone()),
-                commits,
+                commits: project.commits.clone(),
                 timestamp: Some(now.unix_timestamp()),
                 ..Default::default()
             };
@@ -206,20 +200,14 @@ impl<'a> ReleasePipeline<'a> {
         changelog_config: &ChangelogConfig,
         bump_config: &BumpConfig,
     ) -> Result<String> {
-        let commits: Vec<Commit> = project
-            .commit_messages
-            .iter()
-            .map(|msg| Commit::from(msg.clone()))
-            .collect();
-
-        if commits.is_empty() {
+        if project.commits.is_empty() {
             return Ok(String::new());
         }
 
         let now = time::OffsetDateTime::now_utc();
         let release = Release {
             version: Some(project.new_version.clone()),
-            commits,
+            commits: project.commits.clone(),
             timestamp: Some(now.unix_timestamp()),
             ..Default::default()
         };
@@ -438,16 +426,11 @@ fn format_commit_message(projects: &[SelectedProject]) -> String {
 
 pub fn generate_changelog_entry(
     version: &str,
-    commit_messages: &[String],
+    commits: &[Commit<'static>],
     git_config: &GitConfig,
     changelog_config: &ChangelogConfig,
     bump_config: &BumpConfig,
 ) -> Result<String> {
-    let commits: Vec<Commit> = commit_messages
-        .iter()
-        .map(|msg| Commit::from(msg.clone()))
-        .collect();
-
     if commits.is_empty() {
         let now = time::OffsetDateTime::now_utc();
         return Ok(format!(
@@ -462,7 +445,7 @@ pub fn generate_changelog_entry(
     let now = time::OffsetDateTime::now_utc();
     let release = Release {
         version: Some(version.to_string()),
-        commits,
+        commits: commits.to_vec(),
         timestamp: Some(now.unix_timestamp()),
         ..Default::default()
     };

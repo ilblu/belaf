@@ -1,7 +1,9 @@
 use anyhow::Result;
-use git_conventional::{Commit, Type};
+use git_conventional::Type;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+use crate::core::changelog::Commit;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BumpConfig {
@@ -172,23 +174,23 @@ impl CommitAnalysis {
     }
 }
 
-pub fn analyze_commit_messages(messages: &[String]) -> Result<CommitAnalysis> {
+pub fn analyze_commits(commits: &[Commit<'static>]) -> Result<CommitAnalysis> {
     let mut analysis = CommitAnalysis {
         recommendation: BumpRecommendation::None,
-        total_commits: messages.len(),
+        total_commits: commits.len(),
         ..Default::default()
     };
 
-    for message in messages {
-        let commit_result = Commit::parse(message);
+    for commit in commits {
+        let commit_result = git_conventional::Commit::parse(&commit.message);
 
         let recommendation = match commit_result {
-            Ok(commit) => {
-                if commit.breaking() {
+            Ok(conv) => {
+                if conv.breaking() {
                     analysis.breaking_count += 1;
                     BumpRecommendation::Major
                 } else {
-                    let commit_type = commit.type_();
+                    let commit_type = conv.type_();
                     if commit_type == Type::FEAT {
                         analysis.feat_count += 1;
                         BumpRecommendation::Minor
@@ -213,13 +215,24 @@ pub fn analyze_commit_messages(messages: &[String]) -> Result<CommitAnalysis> {
     Ok(analysis)
 }
 
+pub fn analyze_commit_messages(messages: &[String]) -> Result<CommitAnalysis> {
+    let commits: Vec<Commit<'static>> = messages
+        .iter()
+        .map(|msg| Commit {
+            message: msg.clone(),
+            ..Default::default()
+        })
+        .collect();
+    analyze_commits(&commits)
+}
+
 pub fn recommend_bump_for_commits(commit_summaries: &[String]) -> Result<BumpRecommendation> {
     let analysis = analyze_commit_messages(commit_summaries)?;
     Ok(analysis.recommendation)
 }
 
 pub fn extract_scope(message: &str) -> Option<String> {
-    Commit::parse(message)
+    git_conventional::Commit::parse(message)
         .ok()
         .and_then(|c| c.scope().map(|s| s.to_string()))
 }
