@@ -135,7 +135,8 @@ impl<'a> ReleasePipeline<'a> {
             let changelog_rel_path = if project.prefix.is_empty() {
                 "CHANGELOG.md".to_string()
             } else {
-                format!("{}/CHANGELOG.md", project.prefix)
+                let prefix = project.prefix.trim_end_matches('/');
+                format!("{}/CHANGELOG.md", prefix)
             };
 
             let changelog_repo_path = RepoPathBuf::new(changelog_rel_path.as_bytes());

@@ -117,7 +117,12 @@ fn discover_and_prepare_projects(sess: &mut AppSession) -> Result<Vec<SelectedPr
         let commit_messages: Vec<String> = history
             .commits()
             .into_iter()
-            .filter_map(|cid| sess.repo.get_commit_summary(*cid).ok())
+            .filter_map(|cid| {
+                sess.repo
+                    .get_commit_summary(*cid)
+                    .ok()
+                    .map(|msg| format!("{} {}", cid, msg))
+            })
             .collect();
 
         let analysis = atry!(

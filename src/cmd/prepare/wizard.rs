@@ -541,7 +541,12 @@ pub fn run_with_overrides(project_overrides: Option<Vec<String>>) -> Result<i32>
         let commit_messages: Vec<String> = history
             .commits()
             .into_iter()
-            .filter_map(|cid| sess.repo.get_commit_summary(*cid).ok())
+            .filter_map(|cid| {
+                sess.repo
+                    .get_commit_summary(*cid)
+                    .ok()
+                    .map(|msg| format!("{} {}", cid, msg))
+            })
             .collect();
 
         let analysis = bump::analyze_commit_messages(&commit_messages)
@@ -1416,9 +1421,9 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
         let chosen_bump = project.chosen_bump.unwrap_or(BumpStrategy::Auto);
         let bump_text = match chosen_bump {
             BumpStrategy::Auto => project.suggested_bump.as_str(),
-            BumpStrategy::Major => "MAJOR",
-            BumpStrategy::Minor => "MINOR",
-            BumpStrategy::Patch => "PATCH",
+            BumpStrategy::Major => "major",
+            BumpStrategy::Minor => "minor",
+            BumpStrategy::Patch => "patch",
         };
 
         confirmation_lines.push(Line::from(vec![
