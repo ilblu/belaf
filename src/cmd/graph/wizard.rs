@@ -16,7 +16,7 @@ use std::io::stdout;
 
 use crate::{
     atry,
-    core::release::{graph::GraphQueryBuilder, session::AppSession},
+    core::{graph::GraphQueryBuilder, session::AppSession},
 };
 
 use super::browser;

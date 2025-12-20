@@ -17,11 +17,11 @@ use std::{
 use toml_edit::{DocumentMut, Item, Table};
 use tracing::info;
 
-use crate::core::release::{
+use crate::core::{
     config::syntax::ProjectConfiguration,
     errors::Result,
+    git::repository::{ChangeList, RepoPath, RepoPathBuf},
     project::{DepRequirement, DependencyTarget, ProjectId},
-    repository::{ChangeList, RepoPath, RepoPathBuf},
     rewriters::Rewriter,
     session::{AppBuilder, AppSession},
     version::Version,

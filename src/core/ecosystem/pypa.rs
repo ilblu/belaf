@@ -15,15 +15,15 @@ use std::{
 };
 use tracing::warn;
 
-use crate::core::release::version::pep440::Pep440Version;
+use crate::core::version::pep440::Pep440Version;
 use crate::utils::file_io::check_file_size;
 use crate::{
     a_ok_or, atry,
-    core::release::{
+    core::{
         config::syntax::ProjectConfiguration,
         errors::{Error, Result},
+        git::repository::{ChangeList, RepoPath, RepoPathBuf},
         project::{DepRequirement, DependencyTarget, ProjectId},
-        repository::{ChangeList, RepoPath, RepoPathBuf},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
         version::Version,
@@ -428,7 +428,7 @@ fn scan_rewritten_file(
 }
 
 pub(crate) mod simple_py_parse {
-    use crate::{a_ok_or, core::release::errors::Result};
+    use crate::{a_ok_or, core::errors::Result};
     use anyhow::{anyhow, bail};
 
     pub fn has_commented_marker(line: &str, marker: &str) -> bool {
@@ -826,7 +826,7 @@ impl InstallTokenCommand {
 #[cfg(test)]
 mod tests {
     use super::{PypaLoader, PypaProjectData, RepoPathBuf};
-    use crate::core::release::version::pep440::Pep440Version;
+    use crate::core::version::pep440::Pep440Version;
     use std::collections::HashSet;
     use toml::Value;
 

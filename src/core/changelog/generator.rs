@@ -8,11 +8,11 @@ use serde::Serialize;
 use super::commit::Commit;
 use super::config::{ChangelogConfig, GitConfig};
 use super::error::{Error, Result};
-use crate::core::release::bump::BumpConfig;
 use super::github::GitHubClient;
 use super::release::{Release, Releases};
 use super::remote::RemoteMetadata;
 use super::template::Template;
+use crate::core::bump::BumpConfig;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RemoteConfig {
@@ -275,7 +275,11 @@ impl<'a> Changelog<'a> {
             self.github_token.clone(),
         )?;
 
-        log::info!("Retrieving data from GitHub ({}/{})...", remote.owner, remote.repo);
+        log::info!(
+            "Retrieving data from GitHub ({}/{})...",
+            remote.owner,
+            remote.repo
+        );
 
         let (commits, pull_requests) = tokio::try_join!(
             github_client.get_commits(ref_name),
@@ -296,10 +300,8 @@ impl<'a> Changelog<'a> {
         }
 
         if let Some(remote) = &self.remote {
-            self.additional_context.insert(
-                "remote".to_string(),
-                serde_json::to_value(remote)?,
-            );
+            self.additional_context
+                .insert("remote".to_string(), serde_json::to_value(remote)?);
         }
 
         let (github_commits, github_pull_requests) = self.get_github_metadata(ref_name).await?;

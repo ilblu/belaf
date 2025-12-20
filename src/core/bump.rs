@@ -36,7 +36,6 @@ pub enum BumpRecommendation {
     None,
 }
 
-
 impl BumpRecommendation {
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -183,7 +182,6 @@ pub fn recommend_bump_for_commits(commit_summaries: &[String]) -> Result<BumpRec
     let analysis = analyze_commit_messages(commit_summaries)?;
     Ok(analysis.recommendation)
 }
-
 
 pub fn extract_scope(message: &str) -> Option<String> {
     Commit::parse(message)

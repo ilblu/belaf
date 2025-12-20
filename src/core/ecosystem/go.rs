@@ -8,11 +8,11 @@ use std::{
 use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
-    core::release::{
+    core::{
         config::syntax::ProjectConfiguration,
         errors::Result,
+        git::repository::{ChangeList, RepoPath, RepoPathBuf},
         project::ProjectId,
-        repository::{ChangeList, RepoPath, RepoPathBuf},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
         version::Version,

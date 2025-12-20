@@ -11,9 +11,9 @@
 
 use anyhow::{anyhow, bail};
 
-use crate::core::release::{
+use crate::core::{
     errors::Result,
-    repository::{CommitId, PathMatcher, RepoPath, RepoPathBuf},
+    git::repository::{CommitId, PathMatcher, RepoPath, RepoPathBuf},
     rewriters::Rewriter,
     version::Version,
 };

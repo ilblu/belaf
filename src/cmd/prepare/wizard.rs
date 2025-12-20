@@ -1,10 +1,13 @@
 use anyhow::{Context, Result};
-use owo_colors::OwoColorize;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use owo_colors::OwoColorize;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -24,19 +27,17 @@ use std::path::Path;
 use crate::{
     atry,
     core::{
+        bump::{self, BumpRecommendation},
         ecosystem::types::EcosystemType,
-        release::{
-            bump::{self, BumpRecommendation},
-            graph::GraphQueryBuilder,
-            project::ProjectId,
-            session::AppSession,
-            repository::RepoPathBuf,
-            workflow::{
-                cleanup_release_branch, create_release_branch, generate_changelog_entry,
-                ReleasePipeline, SelectedProject,
-            },
-        },
+        git::repository::RepoPathBuf,
+        graph::GraphQueryBuilder,
+        project::ProjectId,
+        session::AppSession,
         ui::markdown,
+        workflow::{
+            cleanup_release_branch, create_release_branch, generate_changelog_entry,
+            ReleasePipeline, SelectedProject,
+        },
     },
 };
 
@@ -245,7 +246,7 @@ impl WizardState {
         let (tx, rx) = mpsc::channel();
         self.loading_receiver = Some(rx);
 
-        let embedded_config = match crate::core::release::embed::EmbeddedConfig::parse() {
+        let embedded_config = match crate::core::embed::EmbeddedConfig::parse() {
             Ok(cfg) => cfg,
             Err(_) => {
                 self.loading_changelog = false;
@@ -253,9 +254,11 @@ impl WizardState {
             }
         };
 
-        let git_config = crate::core::changelog::GitConfig::from_user_config(&embedded_config.changelog);
-        let changelog_config = crate::core::changelog::ChangelogConfig::from_user_config(&embedded_config.changelog);
-        let bump_config = crate::core::release::bump::BumpConfig::from_user_config(&embedded_config.bump);
+        let git_config =
+            crate::core::changelog::GitConfig::from_user_config(&embedded_config.changelog);
+        let changelog_config =
+            crate::core::changelog::ChangelogConfig::from_user_config(&embedded_config.changelog);
+        let bump_config = crate::core::bump::BumpConfig::from_user_config(&embedded_config.bump);
 
         thread::spawn(move || {
             let changelog = generate_changelog_entry(
@@ -688,10 +691,7 @@ pub fn run() -> Result<i32> {
 
     if prepared.is_empty() {
         println!();
-        println!(
-            "{} No projects needed version bumps.",
-            "ℹ".cyan().bold()
-        );
+        println!("{} No projects needed version bumps.", "ℹ".cyan().bold());
         println!();
         println!(
             "  {} All selected projects had 'no bump' recommendations.",
@@ -705,10 +705,7 @@ pub fn run() -> Result<i32> {
     let pr_url = pipeline.execute(prepared.clone())?;
 
     println!();
-    println!(
-        "{} Release preparation complete!",
-        "✓".green().bold()
-    );
+    println!("{} Release preparation complete!", "✓".green().bold());
     println!();
     for project in &prepared {
         println!(
@@ -737,7 +734,11 @@ fn run_wizard_ui(projects: Vec<ProjectItem>) -> Result<Option<Vec<ProjectItem>>>
     let result = run_app(&mut terminal, &mut state);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     if result? {
@@ -965,7 +966,10 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
     let commit_messages = project.commit_messages.clone();
 
     let selected_index = state.bump_list_state.selected().unwrap_or(0);
-    let selected_strategy = strategies.get(selected_index).copied().unwrap_or(BumpStrategy::Auto);
+    let selected_strategy = strategies
+        .get(selected_index)
+        .copied()
+        .unwrap_or(BumpStrategy::Auto);
 
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -993,11 +997,7 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
     };
 
     let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(left_title),
-        )
+        .block(Block::default().borders(Borders::ALL).title(left_title))
         .highlight_style(
             Style::default()
                 .bg(Color::DarkGray)
@@ -1047,7 +1047,9 @@ fn build_loading_panel(state: &WizardState, commit_messages: &[String]) -> Text<
     lines.push(Line::from(vec![
         Span::styled(
             format!("{} ", spinner),
-            Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             "Analyzing commits with Claude AI",
@@ -1056,7 +1058,11 @@ fn build_loading_panel(state: &WizardState, commit_messages: &[String]) -> Text<
     ]));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
-        format!("   Processing {} commit{}...", commit_count, if commit_count == 1 { "" } else { "s" }),
+        format!(
+            "   Processing {} commit{}...",
+            commit_count,
+            if commit_count == 1 { "" } else { "s" }
+        ),
         Style::default().fg(Color::DarkGray),
     )));
     lines.push(Line::from(""));
@@ -1097,9 +1103,17 @@ fn build_detail_panel(
 
     lines.push(Line::from(vec![
         Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
-        Span::styled(current_version.to_string(), Style::default().fg(Color::Yellow)),
+        Span::styled(
+            current_version.to_string(),
+            Style::default().fg(Color::Yellow),
+        ),
         Span::styled(" → ", Style::default().fg(Color::DarkGray)),
-        Span::styled(next_version, Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            next_version,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
     ]));
     lines.push(Line::from(""));
 
@@ -1160,7 +1174,10 @@ fn build_detail_panel(
     if breaking_count > 0 {
         lines.push(Line::from(vec![
             Span::styled("  breaking:  ", Style::default().fg(Color::Red)),
-            Span::styled(format!("{}", breaking_count), Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("{}", breaking_count),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
         ]));
     }
     if feat_count > 0 {
@@ -1178,7 +1195,10 @@ fn build_detail_panel(
     if other_count > 0 {
         lines.push(Line::from(vec![
             Span::styled("  other:     ", Style::default().fg(Color::DarkGray)),
-            Span::styled(format!("{}", other_count), Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}", other_count),
+                Style::default().fg(Color::DarkGray),
+            ),
         ]));
     }
 
@@ -1257,7 +1277,10 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
 
     let chosen_bump = current_project.chosen_bump.unwrap_or(BumpStrategy::Auto);
     let new_version = match chosen_bump {
-        BumpStrategy::Auto => calculate_next_version(&current_project.current_version, current_project.suggested_bump),
+        BumpStrategy::Auto => calculate_next_version(
+            &current_project.current_version,
+            current_project.suggested_bump,
+        ),
         BumpStrategy::Major => calculate_major_version(&current_project.current_version),
         BumpStrategy::Minor => calculate_minor_version(&current_project.current_version),
         BumpStrategy::Patch => calculate_patch_version(&current_project.current_version),
@@ -1294,13 +1317,19 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
     let content_area = chunks[1];
 
     let rendered_style = if !show_raw {
-        Style::default().fg(Color::Black).bg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Gray)
     };
 
     let source_style = if show_raw {
-        Style::default().fg(Color::Black).bg(Color::Magenta).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Black)
+            .bg(Color::Magenta)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::Gray)
     };
@@ -1320,11 +1349,7 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
     );
 
     let toggle_widget = Paragraph::new(toggle_line)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(title),
-        )
+        .block(Block::default().borders(Borders::ALL).title(title))
         .alignment(ratatui::layout::Alignment::Center);
 
     f.render_widget(toggle_widget, toggle_area);

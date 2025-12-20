@@ -5,13 +5,11 @@ use tracing::{info, warn};
 use crate::{
     atry,
     core::{
+        bump,
         ecosystem::types::EcosystemType,
-        release::{
-            bump,
-            graph::GraphQueryBuilder,
-            session::AppSession,
-            workflow::{create_release_branch, ReleasePipeline, SelectedProject},
-        },
+        graph::GraphQueryBuilder,
+        session::AppSession,
+        workflow::{create_release_branch, ReleasePipeline, SelectedProject},
     },
 };
 

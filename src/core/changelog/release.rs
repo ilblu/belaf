@@ -10,7 +10,7 @@ use super::contributor::RemoteContributor;
 use super::error::Result;
 use super::remote::{RemoteCommit, RemotePullRequest, RemoteReleaseMetadata};
 use super::statistics::Statistics;
-use crate::core::release::bump::BumpConfig;
+use crate::core::bump::BumpConfig;
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase"))]
@@ -102,9 +102,9 @@ impl Release<'_> {
         commits.retain(|v| {
             if let Some(commit) = self.commits.iter_mut().find(|commit| commit.id == v.id()) {
                 let sha_short: Option<String> = Some(v.id().chars().take(12).collect());
-                let pull_request = pull_requests.iter().find(|pr| {
-                    pr.merge_commit() == Some(v.id()) || pr.merge_commit() == sha_short
-                });
+                let pull_request = pull_requests
+                    .iter()
+                    .find(|pr| pr.merge_commit() == Some(v.id()) || pr.merge_commit() == sha_short);
 
                 let remote_contributor = RemoteContributor {
                     username: v.username(),

@@ -17,18 +17,14 @@ use std::collections::HashMap;
 use tracing::info;
 
 use crate::core::{
+    bump::BumpConfig,
     changelog::{Changelog, ChangelogConfig, Commit, GitConfig, Release},
     ecosystem::types::EcosystemType,
-    github::client::GitHubInformation,
-    release::{
-        bump::BumpConfig,
-        manifest::{ProjectRelease, ReleaseManifest, MANIFEST_DIR},
-        repository::{ChangeList, RepoPathBuf, Repository},
-        session::AppSession,
-    },
+    git::repository::{ChangeList, RepoPathBuf, Repository},
+    github::{client::GitHubInformation, pr},
+    manifest::{ProjectRelease, ReleaseManifest, MANIFEST_DIR},
+    session::AppSession,
 };
-
-use super::pr_generator;
 
 #[derive(Debug, Clone)]
 pub struct SelectedProject {
@@ -145,7 +141,8 @@ impl<'a> ReleasePipeline<'a> {
             let changelog_repo_path = RepoPathBuf::new(changelog_rel_path.as_bytes());
             let changelog_full_path = self.sess.repo.resolve_workdir(changelog_repo_path.as_ref());
 
-            let existing_content = std::fs::read_to_string(&changelog_full_path).unwrap_or_default();
+            let existing_content =
+                std::fs::read_to_string(&changelog_full_path).unwrap_or_default();
 
             let commits: Vec<Commit> = project
                 .commit_messages
@@ -172,8 +169,8 @@ impl<'a> ReleasePipeline<'a> {
             let mut output = Vec::new();
             changelog.prepend(existing_content, &mut output)?;
 
-            let final_content = String::from_utf8(output)
-                .context("changelog contains invalid UTF-8")?;
+            let final_content =
+                String::from_utf8(output).context("changelog contains invalid UTF-8")?;
 
             if let Some(parent) = changelog_full_path.parent() {
                 std::fs::create_dir_all(parent).with_context(|| {
@@ -324,7 +321,7 @@ impl<'a> ReleasePipeline<'a> {
         changes: &'b ChangeList,
         changelog_paths: &'b [RepoPathBuf],
         manifest_repo_path: &'b RepoPathBuf,
-    ) -> Vec<&'b crate::core::release::repository::RepoPath> {
+    ) -> Vec<&'b crate::core::git::repository::RepoPath> {
         changes
             .paths()
             .chain(changelog_paths.iter().map(|p| p.as_ref()))
@@ -335,7 +332,7 @@ impl<'a> ReleasePipeline<'a> {
     fn create_commit(
         &self,
         projects: &[SelectedProject],
-        all_changed_paths: &[&crate::core::release::repository::RepoPath],
+        all_changed_paths: &[&crate::core::git::repository::RepoPath],
     ) -> Result<()> {
         let commit_message = format_commit_message(projects);
         self.sess
@@ -362,9 +359,8 @@ impl<'a> ReleasePipeline<'a> {
         let github =
             GitHubInformation::new(self.sess).context("failed to initialize GitHub client")?;
 
-        let pr_title = pr_generator::generate_pr_title(projects);
-        let pr_body =
-            pr_generator::generate_pr_body(projects, manifest_filename, changelog_contents);
+        let pr_title = pr::generate_pr_title(projects);
+        let pr_body = pr::generate_pr_body(projects, manifest_filename, changelog_contents);
 
         let pr_url = github
             .create_pull_request(&self.release_branch, &self.base_branch, &pr_title, &pr_body)
@@ -409,7 +405,11 @@ pub fn cleanup_release_branch(sess: &mut AppSession, base_branch: &str, release_
     }
 
     if let Err(e) = sess.repo.delete_branch(release_branch) {
-        tracing::warn!("failed to delete release branch '{}': {}", release_branch, e);
+        tracing::warn!(
+            "failed to delete release branch '{}': {}",
+            release_branch,
+            e
+        );
     }
 
     info!("cleaned up release branch, returned to '{}'", base_branch);

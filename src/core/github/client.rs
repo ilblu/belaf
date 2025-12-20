@@ -6,7 +6,7 @@ use git_url_parse::types::provider::GenericProvider;
 use octocrab::Octocrab;
 use tracing::{debug, info};
 
-use crate::core::release::{env::require_var, errors::Result, session::AppSession};
+use crate::core::{env::require_var, errors::Result, session::AppSession};
 
 pub struct GitHubInformation {
     owner: String,
@@ -22,7 +22,7 @@ impl GitHubInformation {
     pub fn new_with_scopes(sess: &AppSession, required_scopes: &[&str]) -> Result<Self> {
         let is_ci = sess
             .execution_environment()
-            .map(|env| matches!(env, crate::core::release::session::ExecutionEnvironment::Ci))
+            .map(|env| matches!(env, crate::core::session::ExecutionEnvironment::Ci))
             .unwrap_or(false);
 
         let token = require_var("GITHUB_TOKEN")
@@ -52,7 +52,9 @@ impl GitHubInformation {
             })?;
 
         if !required_scopes.is_empty() {
-            if let Err(e) = crate::core::auth::github::validate_token_scopes_blocking(&token, required_scopes) {
+            if let Err(e) =
+                crate::core::auth::github::validate_token_scopes_blocking(&token, required_scopes)
+            {
                 let revoke_url = crate::core::auth::github::get_revoke_url();
                 return Err(anyhow!(
                     "GitHub token is missing required permissions.\n\n\
@@ -61,7 +63,8 @@ impl GitHubInformation {
                     1. Revoke the current authorization at:\n   {}\n\
                     2. Run 'belaf auth login --github' again\n\
                     3. When prompted, grant repository access",
-                    e, revoke_url
+                    e,
+                    revoke_url
                 ));
             }
         }

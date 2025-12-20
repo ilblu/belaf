@@ -10,7 +10,7 @@ use std::{collections::HashMap, fs, io::Write};
 use tracing::{error, info, warn};
 
 use crate::atry;
-use crate::core::release::{
+use crate::core::{
     errors::{Error, Result},
     project::DepRequirement,
     session::AppBuilder,
@@ -72,7 +72,7 @@ impl BootstrapCommand {
         );
 
         let mut repo = atry!(
-            crate::core::release::repository::Repository::open_from_env();
+            crate::core::git::repository::Repository::open_from_env();
             ["belaf is not being run from a Git working directory"]
             (note "run the bootstrap stage inside the Git work tree that you wish to bootstrap")
         );
@@ -100,7 +100,7 @@ impl BootstrapCommand {
 
         {
             let embedded_config = atry!(
-                crate::core::release::embed::EmbeddedConfig::get_config_string();
+                crate::core::embed::EmbeddedConfig::get_config_string();
                 ["could not load embedded default configuration"]
             );
             let cfg_text = embedded_config.replace(

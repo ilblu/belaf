@@ -7,7 +7,7 @@ use anyhow::Context;
 use clap::Parser;
 use std::path::PathBuf;
 
-use crate::core::release::errors::Result;
+use crate::core::errors::Result;
 
 /// Force-create an ancestor-less branch containing a directory tree.
 #[derive(Debug, Eq, PartialEq, Parser)]

@@ -16,11 +16,11 @@ use tracing::{info, warn};
 
 use crate::{
     a_ok_or, atry,
-    core::release::{
+    core::{
         config::syntax::ProjectConfiguration,
         errors::Result,
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
         project::{DepRequirement, DependencyTarget, ProjectId},
-        repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
         version::Version,

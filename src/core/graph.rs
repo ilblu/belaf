@@ -16,14 +16,14 @@ use petgraph::{
 use std::collections::{HashMap, HashSet};
 use thiserror::Error as ThisError;
 
-use crate::core::release::{
+use crate::core::{
     config::syntax::ProjectConfiguration,
     errors::Result,
+    git::repository::{RepoHistory, Repository},
     project::{
         DepRequirement, Dependency, DependencyBuilder, DependencyTarget, Project, ProjectBuilder,
         ProjectId,
     },
-    repository::{RepoHistory, Repository},
 };
 use crate::{a_ok_or, atry};
 
@@ -567,7 +567,7 @@ impl<'a> Iterator for GraphIter<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::release::{repository::RepoPathBuf, version::Version};
+    use crate::core::{git::repository::RepoPathBuf, version::Version};
 
     fn do_name_assignment_test(spec: &[(&[&str], &str)]) -> Result<()> {
         let mut graph = ProjectGraphBuilder::new();
@@ -647,7 +647,7 @@ mod tests {
 
     #[test]
     fn cycle_detection_simple_two_node() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -681,7 +681,7 @@ mod tests {
 
     #[test]
     fn cycle_detection_self_referential() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -708,7 +708,7 @@ mod tests {
 
     #[test]
     fn cycle_detection_three_node() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -749,7 +749,7 @@ mod tests {
 
     #[test]
     fn cycle_detection_valid_linear_chain() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -784,7 +784,7 @@ mod tests {
 
     #[test]
     fn cycle_detection_valid_diamond() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -862,7 +862,7 @@ mod tests {
 
     #[test]
     fn cycle_detection_complex_valid_dag() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -930,7 +930,7 @@ mod tests {
 
     #[test]
     fn cycle_detection_partial_cycle_in_larger_graph() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -982,7 +982,7 @@ mod tests {
 
     #[test]
     fn dependency_resolution_multiple_paths() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -1040,7 +1040,7 @@ mod tests {
 
     #[test]
     fn dependency_resolution_deep_chain() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -1080,7 +1080,7 @@ mod tests {
 
     #[test]
     fn dependency_resolution_many_to_many() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -1132,7 +1132,7 @@ mod tests {
 
     #[test]
     fn dependency_resolution_multiple_roots() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -1176,7 +1176,7 @@ mod tests {
 
     #[test]
     fn dependency_resolution_parallel_chains() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 
@@ -1259,7 +1259,7 @@ mod tests {
 
     #[test]
     fn dependency_internal_deps_stored_correctly() {
-        use crate::core::release::project::{DepRequirement, DependencyTarget};
+        use crate::core::project::{DepRequirement, DependencyTarget};
 
         let mut graph = ProjectGraphBuilder::new();
 

@@ -10,12 +10,12 @@ use tracing::{error, info, warn};
 
 use crate::{
     atry,
-    core::release::{
+    core::{
         config::{syntax::ChangelogConfiguration, ConfigurationFile},
         errors::Result,
+        git::repository::{ChangeList, ReleaseAvailability, Repository},
         graph::{ProjectGraph, ProjectGraphBuilder, RepoHistories},
         project::{DepRequirement, ProjectId},
-        repository::{ChangeList, ReleaseAvailability, Repository},
         version::Version,
     },
     utils::theme::ReleaseProgressBar,
@@ -278,7 +278,7 @@ impl AppSession {
     /// Ok if clean, an Err downcastable to DirtyRepositoryError if not. The
     /// error may have a different cause if, e.g., there is an I/O failure.
     pub fn ensure_fully_clean(&self) -> Result<()> {
-        use crate::core::release::repository::DirtyRepositoryError;
+        use crate::core::git::repository::DirtyRepositoryError;
 
         if let Some(changed_path) = self.repo.check_if_dirty(&[])? {
             Err(DirtyRepositoryError(changed_path).into())

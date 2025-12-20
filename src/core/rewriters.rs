@@ -3,7 +3,7 @@
 
 //! Updating project versioning metadata in the repository.
 
-use crate::core::release::{errors::Result, repository::ChangeList, session::AppSession};
+use crate::core::{errors::Result, git::repository::ChangeList, session::AppSession};
 
 /// A trait for something that can perform some kind of metadata rewriting.
 pub trait Rewriter: std::fmt::Debug {

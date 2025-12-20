@@ -138,9 +138,7 @@ pub struct ChangelogConfig {
 }
 
 impl CommitParser {
-    pub fn from_config(
-        cfg: &crate::core::release::config::syntax::CommitParserConfig,
-    ) -> Option<Self> {
+    pub fn from_config(cfg: &crate::core::config::syntax::CommitParserConfig) -> Option<Self> {
         Some(Self {
             sha: None,
             message: cfg.message.as_ref().and_then(|p| Regex::new(p).ok()),
@@ -157,9 +155,7 @@ impl CommitParser {
 }
 
 impl LinkParser {
-    pub fn from_config(
-        cfg: &crate::core::release::config::syntax::LinkParserConfig,
-    ) -> Option<Self> {
+    pub fn from_config(cfg: &crate::core::config::syntax::LinkParserConfig) -> Option<Self> {
         let pattern = Regex::new(&cfg.pattern).ok()?;
         Some(Self {
             pattern,
@@ -170,11 +166,10 @@ impl LinkParser {
 }
 
 impl TextProcessor {
-    pub fn from_config(
-        cfg: &crate::core::release::config::syntax::TextProcessorConfig,
-    ) -> Self {
+    pub fn from_config(cfg: &crate::core::config::syntax::TextProcessorConfig) -> Self {
         Self {
-            pattern: Regex::new(&cfg.pattern).unwrap_or_else(|_| Regex::new("$^").expect("valid regex")),
+            pattern: Regex::new(&cfg.pattern)
+                .unwrap_or_else(|_| Regex::new("$^").expect("valid regex")),
             replace: cfg.replace.clone(),
             replace_command: None,
         }
@@ -183,7 +178,7 @@ impl TextProcessor {
 
 impl ChangelogConfig {
     pub fn from_user_config(
-        user_cfg: &crate::core::release::config::syntax::ChangelogConfiguration,
+        user_cfg: &crate::core::config::syntax::ChangelogConfiguration,
     ) -> Self {
         let postprocessors = user_cfg
             .postprocessors
@@ -205,7 +200,7 @@ impl ChangelogConfig {
 
 impl GitConfig {
     pub fn from_user_config(
-        user_cfg: &crate::core::release::config::syntax::ChangelogConfiguration,
+        user_cfg: &crate::core::config::syntax::ChangelogConfiguration,
     ) -> Self {
         let commit_parsers = user_cfg
             .commit_parsers
@@ -232,9 +227,15 @@ impl GitConfig {
             filter_commits: user_cfg.filter_commits,
             sort_commits: user_cfg.sort_commits.clone(),
             limit_commits: user_cfg.limit_commits,
-            tag_pattern: user_cfg.tag_pattern.as_ref().and_then(|p| Regex::new(p).ok()),
+            tag_pattern: user_cfg
+                .tag_pattern
+                .as_ref()
+                .and_then(|p| Regex::new(p).ok()),
             skip_tags: user_cfg.skip_tags.as_ref().and_then(|p| Regex::new(p).ok()),
-            ignore_tags: user_cfg.ignore_tags.as_ref().and_then(|p| Regex::new(p).ok()),
+            ignore_tags: user_cfg
+                .ignore_tags
+                .as_ref()
+                .and_then(|p| Regex::new(p).ok()),
             commit_parsers,
             link_parsers,
             commit_preprocessors,

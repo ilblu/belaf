@@ -13,33 +13,30 @@ pub mod cmd {
 pub mod core {
     pub mod root;
 
+    pub mod bump;
+    pub mod config;
+    pub mod embed;
+    pub mod env;
+    pub mod errors;
+    pub mod graph;
+    pub mod manifest;
+    pub mod project;
+    pub mod rewriters;
+    pub mod session;
+    pub mod version;
+    pub mod workflow;
+
     pub mod auth {
         pub mod github;
         pub mod token;
     }
 
     pub mod git {
-        pub mod belaf_utils;
         pub mod branch;
         pub mod gitignore;
-    }
-
-    pub mod release {
-        pub mod bump;
-        pub mod config;
-        pub mod embed;
-        pub mod env;
-        pub mod errors;
-        pub mod git_validate;
-        pub mod graph;
-        pub mod manifest;
-        pub mod pr_generator;
-        pub mod project;
         pub mod repository;
-        pub mod rewriters;
-        pub mod session;
-        pub mod version;
-        pub mod workflow;
+        pub mod utils;
+        pub mod validate;
     }
 
     pub mod ecosystem {
@@ -56,6 +53,7 @@ pub mod core {
 
     pub mod github {
         pub mod client;
+        pub mod pr;
     }
 
     pub mod changelog;

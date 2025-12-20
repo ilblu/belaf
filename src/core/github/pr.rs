@@ -49,7 +49,7 @@
 
 use std::collections::HashMap;
 
-use super::workflow::SelectedProject;
+use crate::core::workflow::SelectedProject;
 
 const MAX_PROJECTS_IN_TITLE: usize = 3;
 

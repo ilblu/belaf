@@ -8,7 +8,7 @@ use std::fmt::{Display, Formatter};
 use thiserror::Error as ThisError;
 use time::OffsetDateTime;
 
-use crate::core::release::errors::Result;
+use crate::core::errors::Result;
 
 const SECONDS_PER_DAY: i64 = 86400;
 const PEP440_YEAR_MULTIPLIER: usize = 10000;
@@ -313,7 +313,7 @@ pub mod dotnet {
     use anyhow::bail;
     use std::fmt::{Display, Formatter};
 
-    use crate::core::release::errors::{Error, Result};
+    use crate::core::errors::{Error, Result};
 
     /// A version compatible with .NET's System.Version
     ///
@@ -395,7 +395,7 @@ pub mod pep440 {
         fmt::{Display, Formatter},
     };
 
-    use crate::core::release::errors::{Error, Result};
+    use crate::core::errors::{Error, Result};
 
     /// A version compatible with the Python PEP-440 specification.
     ///

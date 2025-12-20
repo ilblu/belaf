@@ -61,9 +61,9 @@ macro_rules! atry {
     };
 
     ($op:expr ; $( $annotation:tt )+) => {{
-        use $crate::core::release::errors::Context;
+        use $crate::core::errors::Context;
         $op.with_context(|| {
-            let mut ar = $crate::core::release::errors::AnnotatedReport::default();
+            let mut ar = $crate::core::errors::AnnotatedReport::default();
             $(
                 atry!(@aa ar $annotation);
             )+
@@ -87,7 +87,7 @@ macro_rules! a_ok_or {
     ($option:expr ; $( $annotation:tt )+) => {{
         use $crate::atry;
         $option.ok_or_else(|| {
-            let mut ar = $crate::core::release::errors::AnnotatedReport::default();
+            let mut ar = $crate::core::errors::AnnotatedReport::default();
             $(
                 atry!(@aa ar $annotation);
             )+

@@ -4,7 +4,7 @@ use std::io::Write;
 
 use crate::{
     atry,
-    core::release::{graph::GraphQueryBuilder, session::AppSession},
+    core::{graph::GraphQueryBuilder, session::AppSession},
 };
 
 const HTML_TEMPLATE: &str = include_str!("templates/graph.html");

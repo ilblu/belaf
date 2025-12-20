@@ -4,7 +4,7 @@ use tracing::info;
 use crate::{
     atry,
     cli::GraphOutputFormat,
-    core::release::{graph::GraphQueryBuilder, session::AppSession},
+    core::{graph::GraphQueryBuilder, session::AppSession},
 };
 
 #[path = "graph/wizard.rs"]

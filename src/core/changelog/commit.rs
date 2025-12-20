@@ -1,7 +1,7 @@
-use git_conventional::Commit as ConventionalCommit;
-use git_conventional::Footer as ConventionalFooter;
 use git2::Commit as GitCommit;
 use git2::Signature as CommitSignature;
+use git_conventional::Commit as ConventionalCommit;
+use git_conventional::Footer as ConventionalFooter;
 use lazy_regex::{lazy_regex, Lazy, Regex};
 use serde::ser::{SerializeStruct, Serializer};
 use serde::{Deserialize, Deserializer, Serialize};

@@ -39,18 +39,11 @@ impl From<&Release<'_>> for Statistics {
                 .commits
                 .iter()
                 .min_by_key(|c| c.committer.timestamp)
-                .zip(
-                    release
-                        .commits
-                        .iter()
-                        .max_by_key(|c| c.committer.timestamp),
-                )
+                .zip(release.commits.iter().max_by_key(|c| c.committer.timestamp))
                 .and_then(|(first, last)| {
                     OffsetDateTime::from_unix_timestamp(first.committer.timestamp)
                         .ok()
-                        .zip(
-                            OffsetDateTime::from_unix_timestamp(last.committer.timestamp).ok(),
-                        )
+                        .zip(OffsetDateTime::from_unix_timestamp(last.committer.timestamp).ok())
                         .map(|(start, end)| {
                             let start_date = start.date();
                             let end_date = end.date();
@@ -59,8 +52,7 @@ impl From<&Release<'_>> for Statistics {
                 })
         };
 
-        let conventional_commit_count =
-            release.commits.iter().filter(|c| c.conv.is_some()).count();
+        let conventional_commit_count = release.commits.iter().filter(|c| c.conv.is_some()).count();
 
         let mut links: Vec<LinkCount> = release
             .commits

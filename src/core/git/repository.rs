@@ -19,7 +19,7 @@ use uuid::Uuid;
 use crate::{
     atry,
     cmd::init::BootstrapConfiguration,
-    core::release::{
+    core::{
         bump::{extract_scope, ScopeMatcher},
         config::syntax::RepoConfiguration,
         errors::{Error, Result},
@@ -79,7 +79,7 @@ pub struct Repository {
     bootstrap_info: BootstrapConfiguration,
 
     /// Analysis configuration for LRU cache sizes.
-    analysis_config: super::config::syntax::AnalysisConfig,
+    analysis_config: crate::core::config::syntax::AnalysisConfig,
 }
 
 impl Repository {
@@ -105,7 +105,7 @@ impl Repository {
             repo,
             upstream_name,
             bootstrap_info: BootstrapConfiguration::default(),
-            analysis_config: super::config::syntax::AnalysisConfig {
+            analysis_config: crate::core::config::syntax::AnalysisConfig {
                 commit_cache_size: 512,
                 tree_cache_size: 3,
             },
@@ -115,7 +115,7 @@ impl Repository {
     /// Set up the upstream info in when bootstrapping.
     pub fn bootstrap_upstream(&mut self, name: Option<&str>) -> Result<String> {
         if let Some(name) = name {
-            crate::core::release::git_validate::validate_remote_name(name)
+            crate::core::git::validate::validate_remote_name(name)
                 .context("invalid remote name")?;
         }
 

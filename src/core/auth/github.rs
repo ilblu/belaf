@@ -98,7 +98,8 @@ pub fn validate_token_scopes_blocking(token: &str, required_scopes: &[&str]) -> 
 }
 
 const GITHUB_API_USER_URL: &str = "https://api.github.com/user";
-const GITHUB_REVOKE_URL: &str = "https://github.com/settings/connections/applications/Ov23liuSrRXBZ7PDX61o";
+const GITHUB_REVOKE_URL: &str =
+    "https://github.com/settings/connections/applications/Ov23liuSrRXBZ7PDX61o";
 
 pub async fn get_token_scopes(token: &str) -> Result<Vec<String>> {
     let client = reqwest::Client::new();

@@ -1,19 +1,17 @@
 # belaf ~ configuration file
 # https://github.com/ilblu/belaf
 
-[release]
-
-[release.repo]
+[repo]
 # Git upstream URLs for the repository
 upstream_urls = []
 
-[release.repo.analysis]
+[repo.analysis]
 # Cache size for commit analysis
 commit_cache_size = 512
 # Cache size for tree analysis
 tree_cache_size = 3
 
-[release.changelog]
+[changelog]
 # Changelog header text
 header = "# Changelog\n"
 
@@ -98,63 +96,63 @@ emoji_groups = true
 
 # Commit parsers for categorizing commits
 # Each parser matches commits and assigns them to groups
-[[release.changelog.commit_parsers]]
+[[changelog.commit_parsers]]
 message = "^feat"
 group = "Features"
 
-[[release.changelog.commit_parsers]]
+[[changelog.commit_parsers]]
 message = "^fix"
 group = "Bug Fixes"
 
-[[release.changelog.commit_parsers]]
+[[changelog.commit_parsers]]
 message = "^doc"
 group = "Documentation"
 
-[[release.changelog.commit_parsers]]
+[[changelog.commit_parsers]]
 message = "^perf"
 group = "Performance"
 
-[[release.changelog.commit_parsers]]
+[[changelog.commit_parsers]]
 message = "^refactor"
 group = "Refactoring"
 
-[[release.changelog.commit_parsers]]
+[[changelog.commit_parsers]]
 message = "^style"
 group = "Styling"
 
-[[release.changelog.commit_parsers]]
+[[changelog.commit_parsers]]
 message = "^test"
 group = "Testing"
 
-[[release.changelog.commit_parsers]]
+[[changelog.commit_parsers]]
 message = "^chore\\(deps\\)"
 skip = true
 
-[[release.changelog.commit_parsers]]
+[[changelog.commit_parsers]]
 message = "^chore\\(release\\)"
 skip = true
 
-[[release.changelog.commit_parsers]]
+[[changelog.commit_parsers]]
 message = "^chore|^ci"
 group = "Miscellaneous"
 
 # Link parsers for converting references to URLs (optional)
-# [[release.changelog.link_parsers]]
+# [[changelog.link_parsers]]
 # pattern = "#(\\d+)"
 # href = "https://github.com/user/repo/issues/$1"
 # text = "#$1"
 
 # Commit preprocessors for modifying commit messages before processing (optional)
-# [[release.changelog.commit_preprocessors]]
+# [[changelog.commit_preprocessors]]
 # pattern = "\\(#(\\d+)\\)"
 # replace = "([#$1](https://github.com/user/repo/pull/$1))"
 
 # Postprocessors for modifying the final changelog output (optional)
-# [[release.changelog.postprocessors]]
+# [[changelog.postprocessors]]
 # pattern = "<REPO>"
 # replace = "https://github.com/user/repo"
 
-[release.bump]
+[bump]
 # Bump minor version for feature commits
 features_always_bump_minor = true
 
@@ -167,7 +165,7 @@ initial_tag = "0.1.0"
 # Override automatic bump detection (major, minor, patch, or empty for auto)
 # bump_type = ""
 
-[release.commit_attribution]
+[commit_attribution]
 # Strategy for attributing commits to projects (scope_first, path_first)
 strategy = "scope_first"
 
@@ -175,17 +173,17 @@ strategy = "scope_first"
 scope_matching = "smart"
 
 # Custom scope to project mappings (optional)
-# [release.commit_attribution.scope_mappings]
+# [commit_attribution.scope_mappings]
 # cli = "belaf-cli"
 # core = "belaf-core"
 
 # Package-specific scopes (optional)
-# [release.commit_attribution.package_scopes]
+# [commit_attribution.package_scopes]
 # belaf-cli = ["cli", "command"]
 # belaf-core = ["core", "lib"]
 
 # Project-specific configurations (optional)
-# [release.projects.my-package]
+# [projects.my-package]
 # ignore = false
-# [release.projects.my-package.cargo]
+# [projects.my-package.cargo]
 # publish = true

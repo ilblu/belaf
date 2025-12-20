@@ -18,12 +18,12 @@ use tracing::info;
 
 use crate::atry;
 use crate::cli::ReleaseOutputFormat;
-use crate::core::release::{graph::GraphQueryBuilder, session::AppSession};
 use crate::core::ui::{
     components::{status_bar::StatusBar, table::Table},
     theme::AppColors,
     utils::is_interactive_terminal,
 };
+use crate::core::{graph::GraphQueryBuilder, session::AppSession};
 
 struct ProjectStatus {
     name: String,

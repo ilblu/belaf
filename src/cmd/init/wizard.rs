@@ -18,9 +18,9 @@ use tracing::info;
 
 use crate::{
     atry,
-    core::release::{
+    core::{
+        git::repository::{PathMatcher, RepoPathBuf, Repository},
         project::DepRequirement,
-        repository::{PathMatcher, RepoPathBuf, Repository},
         session::{AppBuilder, AppSession},
     },
 };
@@ -274,7 +274,7 @@ fn run_wizard_loop(
 }
 
 fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
-    let embedded_config = crate::core::release::embed::EmbeddedConfig::get_config_string()?;
+    let embedded_config = crate::core::embed::EmbeddedConfig::get_config_string()?;
     let cfg_text = embedded_config.replace(
         "upstream_urls = []",
         &format!("upstream_urls = [\"{}\"]", state.upstream_url),

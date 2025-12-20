@@ -1,17 +1,11 @@
 use std::{collections::HashMap, path::Path};
 
 use crate::atry;
-use crate::core::release::errors::{Error, Result};
+use crate::core::errors::{Error, Result};
 
 pub mod syntax {
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
-
-    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-    pub struct UnifiedConfiguration {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pub release: Option<ReleaseConfiguration>,
-    }
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct ReleaseConfiguration {
@@ -216,37 +210,31 @@ impl ConfigurationFile {
             builder = builder.add_source(config::File::from(path.as_ref()));
         }
 
-        let unified: syntax::UnifiedConfiguration = builder
+        let cfg: syntax::ReleaseConfiguration = builder
             .build()
             .map_err(|e| Error::new(e).context("failed to build configuration"))?
             .try_deserialize()
             .map_err(|e| Error::new(e).context("failed to deserialize configuration"))?;
 
-        let release_cfg = unified
-            .release
-            .ok_or_else(|| Error::msg("missing [release] section in configuration"))?;
-
         Ok(ConfigurationFile {
-            repo: release_cfg.repo,
-            changelog: release_cfg.changelog,
-            bump: release_cfg.bump,
-            commit_attribution: release_cfg.commit_attribution,
-            projects: release_cfg.projects,
+            repo: cfg.repo,
+            changelog: cfg.changelog,
+            bump: cfg.bump,
+            commit_attribution: cfg.commit_attribution,
+            projects: cfg.projects,
         })
     }
 
     pub fn into_toml(self) -> Result<String> {
-        let unified_cfg = syntax::UnifiedConfiguration {
-            release: Some(syntax::ReleaseConfiguration {
-                repo: self.repo,
-                changelog: self.changelog,
-                bump: self.bump,
-                commit_attribution: self.commit_attribution,
-                projects: self.projects,
-            }),
+        let cfg = syntax::ReleaseConfiguration {
+            repo: self.repo,
+            changelog: self.changelog,
+            bump: self.bump,
+            commit_attribution: self.commit_attribution,
+            projects: self.projects,
         };
         Ok(atry!(
-            toml::to_string_pretty(&unified_cfg);
+            toml::to_string_pretty(&cfg);
             ["could not serialize configuration into TOML format"]
         ))
     }
