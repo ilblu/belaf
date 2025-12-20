@@ -34,10 +34,6 @@ pub struct Release<'a> {
 }
 
 impl Release<'_> {
-    pub fn calculate_next_version(&self) -> Result<String> {
-        self.calculate_next_version_with_config(&BumpConfig::default())
-    }
-
     pub fn with_statistics(mut self) -> Self {
         self.statistics = Some((&self).into());
         self

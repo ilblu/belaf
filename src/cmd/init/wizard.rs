@@ -19,7 +19,6 @@ use tracing::info;
 use crate::{
     atry,
     core::release::{
-        config::ConfigurationFile,
         project::DepRequirement,
         repository::{PathMatcher, RepoPathBuf, Repository},
         session::{AppBuilder, AppSession},
@@ -275,9 +274,11 @@ fn run_wizard_loop(
 }
 
 fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
-    let mut cfg = ConfigurationFile::default();
-    cfg.repo.upstream_urls = vec![state.upstream_url.clone()];
-    let cfg_text = cfg.into_toml()?;
+    let embedded_config = crate::core::release::embed::EmbeddedConfig::get_config_string()?;
+    let cfg_text = embedded_config.replace(
+        "upstream_urls = []",
+        &format!("upstream_urls = [\"{}\"]", state.upstream_url),
+    );
 
     let mut cfg_path = repo.resolve_config_dir();
     fs::create_dir_all(&cfg_path)?;

@@ -27,6 +27,7 @@ pub mod core {
     pub mod release {
         pub mod bump;
         pub mod config;
+        pub mod embed;
         pub mod env;
         pub mod errors;
         pub mod git_validate;

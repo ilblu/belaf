@@ -99,9 +99,14 @@ impl BootstrapCommand {
         }
 
         {
-            let mut cfg = crate::core::release::config::ConfigurationFile::default();
-            cfg.repo.upstream_urls = vec![upstream_url];
-            let cfg_text = cfg.into_toml()?;
+            let embedded_config = atry!(
+                crate::core::release::embed::EmbeddedConfig::get_config_string();
+                ["could not load embedded default configuration"]
+            );
+            let cfg_text = embedded_config.replace(
+                "upstream_urls = []",
+                &format!("upstream_urls = [\"{}\"]", upstream_url),
+            );
 
             let mut cfg_path = repo.resolve_config_dir();
             atry!(
@@ -110,7 +115,7 @@ impl BootstrapCommand {
             );
 
             cfg_path.push("config.toml");
-            info!("stubbing belaf configuration file `{}`", cfg_path.display(),);
+            info!("writing belaf configuration file `{}`", cfg_path.display());
 
             let f = match fs::OpenOptions::new()
                 .write(true)

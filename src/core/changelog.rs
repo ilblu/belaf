@@ -19,4 +19,4 @@ pub use github::GitHubClient;
 pub use release::{Release, Releases};
 pub use remote::{RemoteCommit, RemoteMetadata, RemotePullRequest, RemoteReleaseMetadata};
 pub use statistics::{LinkCount, Statistics};
-pub use template::{Template, DEFAULT_CHANGELOG_TEMPLATE};
+pub use template::Template;

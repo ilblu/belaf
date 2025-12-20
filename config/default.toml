@@ -1,0 +1,191 @@
+# belaf ~ configuration file
+# https://github.com/ilblu/belaf
+
+[release]
+
+[release.repo]
+# Git upstream URLs for the repository
+upstream_urls = []
+
+[release.repo.analysis]
+# Cache size for commit analysis
+commit_cache_size = 512
+# Cache size for tree analysis
+tree_cache_size = 3
+
+[release.changelog]
+# Changelog header text
+header = "# Changelog\n"
+
+# Tera template for rendering each release
+# See https://keats.github.io/tera/docs/#introduction
+body = """
+{% if version %}
+{% if previous.version %}
+## [{{ version }}]({{ repository }}/compare/{{ previous.version }}...{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
+{% else %}
+## [{{ version }}] - {{ timestamp | date(format="%Y-%m-%d") }}
+{% endif %}
+{% else %}
+## Unreleased
+{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+
+### {{ group | upper_first }}
+
+{% for commit in commits %}
+- {% if commit.breaking %}**BREAKING:** {% endif %}{% if commit.scope %}*({{ commit.scope }})* {% endif %}{{ commit.message | split(pat="\\n") | first | upper_first }}{% if commit.remote.username %} by @{{ commit.remote.username }}{% endif %}{% if commit.remote.pr_number %} in [#{{ commit.remote.pr_number }}]({{ repository }}/pull/{{ commit.remote.pr_number }}){% endif %} - ([{{ commit.id | truncate(length=7, end="") }}]({{ repository }}/commit/{{ commit.id }}))
+{% endfor %}
+{% endfor %}
+
+{% set first_timers = github.contributors | filter(attribute="is_first_time", value=true) %}
+{% if first_timers | length > 0 %}
+## New Contributors
+
+{% for contributor in first_timers %}
+* @{{ contributor.username }} made their first contribution{% if contributor.pr_number %} in [#{{ contributor.pr_number }}]({{ repository }}/pull/{{ contributor.pr_number }}){% endif %}
+{% endfor %}
+{% endif %}
+"""
+
+# Changelog footer text (optional)
+# footer = ""
+
+# Remove leading and trailing whitespaces from changelog body
+trim = true
+
+# Output file path for the changelog
+output = "CHANGELOG.md"
+
+# Parse commits according to conventional commits specification
+conventional_commits = true
+
+# Prevent breaking commits from being excluded by commit parsers
+protect_breaking_commits = true
+
+# Exclude commits that do not match conventional commits specification
+filter_unconventional = false
+
+# Exclude commits that are not matched by any commit parser
+filter_commits = false
+
+# Order of commits in each group (oldest or newest)
+sort_commits = "oldest"
+
+# Limit number of commits to process (optional)
+# limit_commits = 100
+
+# Regex pattern for matching tags (optional)
+# tag_pattern = "^v[0-9]+"
+
+# Regex pattern for tags to skip (optional)
+# skip_tags = "beta|alpha"
+
+# Regex pattern for tags to ignore (optional)
+# ignore_tags = "rc"
+
+# Include a dedicated section for breaking changes
+include_breaking_section = true
+
+# Include contributor information in changelog
+include_contributors = true
+
+# Include commit statistics in changelog
+include_statistics = false
+
+# Use emoji prefixes for commit groups
+emoji_groups = true
+
+# Commit parsers for categorizing commits
+# Each parser matches commits and assigns them to groups
+[[release.changelog.commit_parsers]]
+message = "^feat"
+group = "Features"
+
+[[release.changelog.commit_parsers]]
+message = "^fix"
+group = "Bug Fixes"
+
+[[release.changelog.commit_parsers]]
+message = "^doc"
+group = "Documentation"
+
+[[release.changelog.commit_parsers]]
+message = "^perf"
+group = "Performance"
+
+[[release.changelog.commit_parsers]]
+message = "^refactor"
+group = "Refactoring"
+
+[[release.changelog.commit_parsers]]
+message = "^style"
+group = "Styling"
+
+[[release.changelog.commit_parsers]]
+message = "^test"
+group = "Testing"
+
+[[release.changelog.commit_parsers]]
+message = "^chore\\(deps\\)"
+skip = true
+
+[[release.changelog.commit_parsers]]
+message = "^chore\\(release\\)"
+skip = true
+
+[[release.changelog.commit_parsers]]
+message = "^chore|^ci"
+group = "Miscellaneous"
+
+# Link parsers for converting references to URLs (optional)
+# [[release.changelog.link_parsers]]
+# pattern = "#(\\d+)"
+# href = "https://github.com/user/repo/issues/$1"
+# text = "#$1"
+
+# Commit preprocessors for modifying commit messages before processing (optional)
+# [[release.changelog.commit_preprocessors]]
+# pattern = "\\(#(\\d+)\\)"
+# replace = "([#$1](https://github.com/user/repo/pull/$1))"
+
+# Postprocessors for modifying the final changelog output (optional)
+# [[release.changelog.postprocessors]]
+# pattern = "<REPO>"
+# replace = "https://github.com/user/repo"
+
+[release.bump]
+# Bump minor version for feature commits
+features_always_bump_minor = true
+
+# Bump major version for breaking changes
+breaking_always_bump_major = true
+
+# Initial version tag for new projects
+initial_tag = "0.1.0"
+
+# Override automatic bump detection (major, minor, patch, or empty for auto)
+# bump_type = ""
+
+[release.commit_attribution]
+# Strategy for attributing commits to projects (scope_first, path_first)
+strategy = "scope_first"
+
+# Scope matching mode (smart, exact, prefix)
+scope_matching = "smart"
+
+# Custom scope to project mappings (optional)
+# [release.commit_attribution.scope_mappings]
+# cli = "belaf-cli"
+# core = "belaf-core"
+
+# Package-specific scopes (optional)
+# [release.commit_attribution.package_scopes]
+# belaf-cli = ["cli", "command"]
+# belaf-core = ["core", "lib"]
+
+# Project-specific configurations (optional)
+# [release.projects.my-package]
+# ignore = false
+# [release.projects.my-package.cargo]
+# publish = true

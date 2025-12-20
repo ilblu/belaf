@@ -107,7 +107,7 @@ impl<'a> ReleasePipeline<'a> {
 
         let git_config = GitConfig::from_user_config(&self.sess.changelog_config);
         let changelog_config = ChangelogConfig::from_user_config(&self.sess.changelog_config);
-        let bump_config = BumpConfig::default();
+        let bump_config = BumpConfig::from_user_config(&self.sess.bump_config);
 
         for project in projects {
             let changelog_entry = self.generate_project_changelog(

@@ -219,6 +219,7 @@ impl AppBuilder {
             graph,
             npm_config: NpmConfig::default(),
             changelog_config: config.changelog,
+            bump_config: config.bump,
             is_ci: self.is_ci,
         })
     }
@@ -235,6 +236,7 @@ pub struct AppSession {
     pub repo: Repository,
     pub npm_config: NpmConfig,
     pub changelog_config: ChangelogConfiguration,
+    pub bump_config: super::config::syntax::BumpConfiguration,
     graph: ProjectGraph,
     is_ci: bool,
 }

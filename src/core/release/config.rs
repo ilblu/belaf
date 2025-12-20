@@ -1,5 +1,4 @@
-use anyhow::Context;
-use std::{collections::HashMap, fs::File, io::Read, path::Path};
+use std::{collections::HashMap, path::Path};
 
 use crate::atry;
 use crate::core::release::errors::{Error, Result};
@@ -14,18 +13,14 @@ pub mod syntax {
         pub release: Option<ReleaseConfiguration>,
     }
 
-    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct ReleaseConfiguration {
-        #[serde(default)]
         pub repo: RepoConfiguration,
 
-        #[serde(default)]
         pub changelog: ChangelogConfiguration,
 
-        #[serde(default)]
         pub bump: BumpConfiguration,
 
-        #[serde(default)]
         pub commit_attribution: CommitAttributionConfiguration,
 
         #[serde(default)]
@@ -34,86 +29,119 @@ pub mod syntax {
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct BumpConfiguration {
-        #[serde(default = "default_true")]
         pub features_always_bump_minor: bool,
 
-        #[serde(default = "default_true")]
         pub breaking_always_bump_major: bool,
 
-        #[serde(default = "default_initial_tag")]
         pub initial_tag: String,
-    }
 
-    fn default_initial_tag() -> String {
-        "0.1.0".to_string()
-    }
-
-    impl Default for BumpConfiguration {
-        fn default() -> Self {
-            Self {
-                features_always_bump_minor: true,
-                breaking_always_bump_major: true,
-                initial_tag: default_initial_tag(),
-            }
-        }
+        #[serde(default)]
+        pub bump_type: Option<String>,
     }
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct ChangelogConfiguration {
         #[serde(default)]
-        pub ai_enabled: bool,
+        pub header: Option<String>,
 
-        #[serde(default = "default_true")]
-        pub conventional_commits: bool,
-
-        #[serde(default = "default_true")]
-        pub include_breaking_section: bool,
-
-        #[serde(default = "default_true")]
-        pub include_contributors: bool,
+        pub body: String,
 
         #[serde(default)]
-        pub include_statistics: bool,
+        pub footer: Option<String>,
 
-        #[serde(default = "default_true")]
-        pub emoji_groups: bool,
+        pub trim: bool,
 
-        #[serde(default = "default_changelog_output")]
         pub output: String,
 
+        pub conventional_commits: bool,
+
+        pub protect_breaking_commits: bool,
+
+        pub filter_unconventional: bool,
+
+        pub filter_commits: bool,
+
+        pub sort_commits: String,
+
         #[serde(default)]
-        pub template: Option<String>,
+        pub limit_commits: Option<usize>,
+
+        #[serde(default)]
+        pub tag_pattern: Option<String>,
+
+        #[serde(default)]
+        pub skip_tags: Option<String>,
+
+        #[serde(default)]
+        pub ignore_tags: Option<String>,
+
+        #[serde(default)]
+        pub commit_parsers: Vec<CommitParserConfig>,
+
+        #[serde(default)]
+        pub link_parsers: Vec<LinkParserConfig>,
+
+        #[serde(default)]
+        pub commit_preprocessors: Vec<TextProcessorConfig>,
+
+        #[serde(default)]
+        pub postprocessors: Vec<TextProcessorConfig>,
+
+        pub include_breaking_section: bool,
+
+        pub include_contributors: bool,
+
+        pub include_statistics: bool,
+
+        pub emoji_groups: bool,
     }
 
-    fn default_true() -> bool {
-        true
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    pub struct CommitParserConfig {
+        #[serde(default)]
+        pub message: Option<String>,
+
+        #[serde(default)]
+        pub body: Option<String>,
+
+        #[serde(default)]
+        pub footer: Option<String>,
+
+        #[serde(default)]
+        pub group: Option<String>,
+
+        #[serde(default)]
+        pub scope: Option<String>,
+
+        #[serde(default)]
+        pub default_scope: Option<String>,
+
+        #[serde(default)]
+        pub skip: Option<bool>,
     }
 
-    fn default_changelog_output() -> String {
-        "CHANGELOG.md".to_string()
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    pub struct LinkParserConfig {
+        pub pattern: String,
+
+        pub href: String,
+
+        #[serde(default)]
+        pub text: Option<String>,
     }
 
-    impl Default for ChangelogConfiguration {
-        fn default() -> Self {
-            Self {
-                ai_enabled: false,
-                conventional_commits: true,
-                include_breaking_section: true,
-                include_contributors: true,
-                include_statistics: false,
-                emoji_groups: true,
-                output: default_changelog_output(),
-                template: None,
-            }
-        }
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    pub struct TextProcessorConfig {
+        pub pattern: String,
+
+        #[serde(default)]
+        pub replace: Option<String>,
     }
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct CommitAttributionConfiguration {
-        #[serde(default = "default_attribution_strategy")]
         pub strategy: String,
 
-        #[serde(default = "default_scope_matching")]
         pub scope_matching: String,
 
         #[serde(default)]
@@ -123,60 +151,19 @@ pub mod syntax {
         pub package_scopes: HashMap<String, Vec<String>>,
     }
 
-    fn default_attribution_strategy() -> String {
-        "scope_first".to_string()
-    }
-
-    fn default_scope_matching() -> String {
-        "smart".to_string()
-    }
-
-    impl Default for CommitAttributionConfiguration {
-        fn default() -> Self {
-            Self {
-                strategy: default_attribution_strategy(),
-                scope_matching: default_scope_matching(),
-                scope_mappings: HashMap::new(),
-                package_scopes: HashMap::new(),
-            }
-        }
-    }
-
-    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct RepoConfiguration {
         #[serde(default)]
         pub upstream_urls: Vec<String>,
 
-        #[serde(default)]
         pub analysis: AnalysisConfig,
     }
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct AnalysisConfig {
-        #[serde(default = "AnalysisConfig::default_commit_cache_size")]
         pub commit_cache_size: usize,
 
-        #[serde(default = "AnalysisConfig::default_tree_cache_size")]
         pub tree_cache_size: usize,
-    }
-
-    impl Default for AnalysisConfig {
-        fn default() -> Self {
-            Self {
-                commit_cache_size: Self::default_commit_cache_size(),
-                tree_cache_size: Self::default_tree_cache_size(),
-            }
-        }
-    }
-
-    impl AnalysisConfig {
-        fn default_commit_cache_size() -> usize {
-            512
-        }
-
-        fn default_tree_cache_size() -> usize {
-            3
-        }
     }
 
     #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -207,7 +194,7 @@ pub mod syntax {
     }
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct ConfigurationFile {
     pub repo: syntax::RepoConfiguration,
     pub changelog: syntax::ChangelogConfiguration,
@@ -218,42 +205,34 @@ pub struct ConfigurationFile {
 
 impl ConfigurationFile {
     pub fn get<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let mut f = match File::open(&path) {
-            Ok(f) => f,
-            Err(e) => {
-                return if e.kind() == std::io::ErrorKind::NotFound {
-                    Ok(Self::default())
-                } else {
-                    Err(Error::new(e).context(format!(
-                        "failed to open config file `{}`",
-                        path.as_ref().display()
-                    )))
-                }
-            }
-        };
+        let embedded_config_str = super::embed::EmbeddedConfig::get_config_string()?;
 
-        let mut text = String::new();
-        f.read_to_string(&mut text)
-            .with_context(|| format!("failed to read config file `{}`", path.as_ref().display()))?;
+        let mut builder = config::Config::builder().add_source(config::File::from_str(
+            &embedded_config_str,
+            config::FileFormat::Toml,
+        ));
 
-        let unified: syntax::UnifiedConfiguration = toml::from_str(&text).with_context(|| {
-            format!(
-                "could not parse config file `{}` as TOML",
-                path.as_ref().display()
-            )
-        })?;
-
-        if let Some(release_cfg) = unified.release {
-            Ok(ConfigurationFile {
-                repo: release_cfg.repo,
-                changelog: release_cfg.changelog,
-                bump: release_cfg.bump,
-                commit_attribution: release_cfg.commit_attribution,
-                projects: release_cfg.projects,
-            })
-        } else {
-            Ok(Self::default())
+        if path.as_ref().exists() {
+            builder = builder.add_source(config::File::from(path.as_ref()));
         }
+
+        let unified: syntax::UnifiedConfiguration = builder
+            .build()
+            .map_err(|e| Error::new(e).context("failed to build configuration"))?
+            .try_deserialize()
+            .map_err(|e| Error::new(e).context("failed to deserialize configuration"))?;
+
+        let release_cfg = unified
+            .release
+            .ok_or_else(|| Error::msg("missing [release] section in configuration"))?;
+
+        Ok(ConfigurationFile {
+            repo: release_cfg.repo,
+            changelog: release_cfg.changelog,
+            bump: release_cfg.bump,
+            commit_attribution: release_cfg.commit_attribution,
+            projects: release_cfg.projects,
+        })
     }
 
     pub fn into_toml(self) -> Result<String> {

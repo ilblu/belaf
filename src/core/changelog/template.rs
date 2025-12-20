@@ -8,35 +8,6 @@ use tera::{ast, Context as TeraContext, Result as TeraResult, Tera, Value};
 use super::config::TextProcessor;
 use super::error::{Error, Result};
 
-pub const DEFAULT_CHANGELOG_TEMPLATE: &str = r#"
-{% if version %}
-{% if previous.version %}
-## [{{ version }}]({{ repository }}/compare/{{ previous.version }}...{{ version }}) - {{ timestamp | date(format="%Y-%m-%d") }}
-{% else %}
-## [{{ version }}] - {{ timestamp | date(format="%Y-%m-%d") }}
-{% endif %}
-{% else %}
-## Unreleased
-{% endif %}
-{% for group, commits in commits | group_by(attribute="group") %}
-
-### {{ group | upper_first }}
-
-{% for commit in commits %}
-- {% if commit.breaking %}**BREAKING:** {% endif %}{% if commit.scope %}*({{ commit.scope }})* {% endif %}{{ commit.message | split(pat="\n") | first | upper_first }}{% if commit.remote.username %} by @{{ commit.remote.username }}{% endif %}{% if commit.remote.pr_number %} in [#{{ commit.remote.pr_number }}]({{ repository }}/pull/{{ commit.remote.pr_number }}){% endif %} - ([{{ commit.id | truncate(length=7, end="") }}]({{ repository }}/commit/{{ commit.id }}))
-{% endfor %}
-{% endfor %}
-
-{% set first_timers = github.contributors | filter(attribute="is_first_time", value=true) %}
-{% if first_timers | length > 0 %}
-## New Contributors
-
-{% for contributor in first_timers %}
-* @{{ contributor.username }} made their first contribution{% if contributor.pr_number %} in [#{{ contributor.pr_number }}]({{ repository }}/pull/{{ contributor.pr_number }}){% endif %}
-{% endfor %}
-{% endif %}
-"#;
-
 #[derive(Debug)]
 pub struct Template {
     name: String,

@@ -7,25 +7,20 @@ use serde::{Deserialize, Serialize};
 use super::command;
 use super::error::Result;
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GitConfig {
-    #[serde(default = "default_true")]
     pub conventional_commits: bool,
     #[serde(default)]
     pub require_conventional: bool,
-    #[serde(default)]
     pub filter_unconventional: bool,
     #[serde(default)]
     pub split_commits: bool,
     #[serde(default)]
     pub commit_preprocessors: Vec<TextProcessor>,
-    #[serde(default = "default_commit_parsers")]
     pub commit_parsers: Vec<CommitParser>,
-    #[serde(default = "default_true")]
     pub protect_breaking_commits: bool,
     #[serde(default)]
     pub link_parsers: Vec<LinkParser>,
-    #[serde(default)]
     pub filter_commits: bool,
     #[serde(default)]
     pub fail_on_unmatched_commit: bool,
@@ -41,9 +36,7 @@ pub struct GitConfig {
     pub use_branch_tags: bool,
     #[serde(default)]
     pub topo_order: bool,
-    #[serde(default = "default_true")]
     pub topo_order_commits: bool,
-    #[serde(default = "default_sort_commits")]
     pub sort_commits: String,
     #[serde(default)]
     pub limit_commits: Option<usize>,
@@ -82,69 +75,6 @@ mod serde_pattern {
             .map(|pattern| pattern.parse().map_err(D::Error::custom))
             .collect()
     }
-}
-
-fn default_true() -> bool {
-    true
-}
-
-fn default_sort_commits() -> String {
-    "oldest".to_string()
-}
-
-fn default_commit_parsers() -> Vec<CommitParser> {
-    vec![
-        CommitParser {
-            message: Some(Regex::new("^feat").expect("valid regex")),
-            group: Some("✨ Features".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^fix").expect("valid regex")),
-            group: Some("🐛 Bug Fixes".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^doc").expect("valid regex")),
-            group: Some("📚 Documentation".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^perf").expect("valid regex")),
-            group: Some("⚡ Performance".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^refactor").expect("valid regex")),
-            group: Some("♻️ Refactoring".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^style").expect("valid regex")),
-            group: Some("🎨 Styling".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^test").expect("valid regex")),
-            group: Some("🧪 Testing".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new(r"^chore\(deps\)").expect("valid regex")),
-            skip: Some(true),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new(r"^chore\(release\)").expect("valid regex")),
-            skip: Some(true),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^chore|^ci").expect("valid regex")),
-            group: Some("🔧 Miscellaneous".to_string()),
-            ..Default::default()
-        },
-    ]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -199,7 +129,6 @@ pub struct ChangelogConfig {
     pub header: Option<String>,
     pub body: String,
     pub footer: Option<String>,
-    #[serde(default)]
     pub trim: bool,
     #[serde(default)]
     pub render_always: bool,
@@ -208,16 +137,46 @@ pub struct ChangelogConfig {
     pub output: Option<PathBuf>,
 }
 
-impl Default for ChangelogConfig {
-    fn default() -> Self {
+impl CommitParser {
+    pub fn from_config(
+        cfg: &crate::core::release::config::syntax::CommitParserConfig,
+    ) -> Option<Self> {
+        Some(Self {
+            sha: None,
+            message: cfg.message.as_ref().and_then(|p| Regex::new(p).ok()),
+            body: cfg.body.as_ref().and_then(|p| Regex::new(p).ok()),
+            footer: cfg.footer.as_ref().and_then(|p| Regex::new(p).ok()),
+            group: cfg.group.clone(),
+            default_scope: cfg.default_scope.clone(),
+            scope: cfg.scope.clone(),
+            skip: cfg.skip,
+            field: None,
+            pattern: None,
+        })
+    }
+}
+
+impl LinkParser {
+    pub fn from_config(
+        cfg: &crate::core::release::config::syntax::LinkParserConfig,
+    ) -> Option<Self> {
+        let pattern = Regex::new(&cfg.pattern).ok()?;
+        Some(Self {
+            pattern,
+            href: cfg.href.clone(),
+            text: cfg.text.clone(),
+        })
+    }
+}
+
+impl TextProcessor {
+    pub fn from_config(
+        cfg: &crate::core::release::config::syntax::TextProcessorConfig,
+    ) -> Self {
         Self {
-            header: Some("# Changelog\n".to_string()),
-            body: super::template::DEFAULT_CHANGELOG_TEMPLATE.to_string(),
-            footer: None,
-            trim: true,
-            render_always: false,
-            postprocessors: Vec::new(),
-            output: None,
+            pattern: Regex::new(&cfg.pattern).unwrap_or_else(|_| Regex::new("$^").expect("valid regex")),
+            replace: cfg.replace.clone(),
+            replace_command: None,
         }
     }
 }
@@ -226,14 +185,21 @@ impl ChangelogConfig {
     pub fn from_user_config(
         user_cfg: &crate::core::release::config::syntax::ChangelogConfiguration,
     ) -> Self {
-        let mut config = Self::default();
+        let postprocessors = user_cfg
+            .postprocessors
+            .iter()
+            .map(TextProcessor::from_config)
+            .collect();
 
-        if let Some(ref template) = user_cfg.template {
-            config.body = template.clone();
+        Self {
+            header: user_cfg.header.clone(),
+            body: user_cfg.body.clone(),
+            footer: user_cfg.footer.clone(),
+            trim: user_cfg.trim,
+            render_always: false,
+            postprocessors,
+            output: Some(PathBuf::from(&user_cfg.output)),
         }
-
-        config.output = Some(PathBuf::from(&user_cfg.output));
-        config
     }
 }
 
@@ -241,71 +207,47 @@ impl GitConfig {
     pub fn from_user_config(
         user_cfg: &crate::core::release::config::syntax::ChangelogConfiguration,
     ) -> Self {
-        let commit_parsers = if user_cfg.emoji_groups {
-            default_commit_parsers()
-        } else {
-            default_commit_parsers_no_emoji()
-        };
+        let commit_parsers = user_cfg
+            .commit_parsers
+            .iter()
+            .filter_map(CommitParser::from_config)
+            .collect();
+
+        let link_parsers = user_cfg
+            .link_parsers
+            .iter()
+            .filter_map(LinkParser::from_config)
+            .collect();
+
+        let commit_preprocessors = user_cfg
+            .commit_preprocessors
+            .iter()
+            .map(TextProcessor::from_config)
+            .collect();
 
         Self {
             conventional_commits: user_cfg.conventional_commits,
+            protect_breaking_commits: user_cfg.protect_breaking_commits,
+            filter_unconventional: user_cfg.filter_unconventional,
+            filter_commits: user_cfg.filter_commits,
+            sort_commits: user_cfg.sort_commits.clone(),
+            limit_commits: user_cfg.limit_commits,
+            tag_pattern: user_cfg.tag_pattern.as_ref().and_then(|p| Regex::new(p).ok()),
+            skip_tags: user_cfg.skip_tags.as_ref().and_then(|p| Regex::new(p).ok()),
+            ignore_tags: user_cfg.ignore_tags.as_ref().and_then(|p| Regex::new(p).ok()),
             commit_parsers,
-            ..Default::default()
+            link_parsers,
+            commit_preprocessors,
+            require_conventional: false,
+            split_commits: false,
+            fail_on_unmatched_commit: false,
+            count_tags: None,
+            use_branch_tags: false,
+            topo_order: false,
+            topo_order_commits: true,
+            recurse_submodules: None,
+            include_paths: Vec::new(),
+            exclude_paths: Vec::new(),
         }
     }
-}
-
-fn default_commit_parsers_no_emoji() -> Vec<CommitParser> {
-    vec![
-        CommitParser {
-            message: Some(Regex::new("^feat").expect("valid regex")),
-            group: Some("Features".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^fix").expect("valid regex")),
-            group: Some("Bug Fixes".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^doc").expect("valid regex")),
-            group: Some("Documentation".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^perf").expect("valid regex")),
-            group: Some("Performance".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^refactor").expect("valid regex")),
-            group: Some("Refactoring".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^style").expect("valid regex")),
-            group: Some("Styling".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^test").expect("valid regex")),
-            group: Some("Testing".to_string()),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new(r"^chore\(deps\)").expect("valid regex")),
-            skip: Some(true),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new(r"^chore\(release\)").expect("valid regex")),
-            skip: Some(true),
-            ..Default::default()
-        },
-        CommitParser {
-            message: Some(Regex::new("^chore|^ci").expect("valid regex")),
-            group: Some("Miscellaneous".to_string()),
-            ..Default::default()
-        },
-    ]
 }

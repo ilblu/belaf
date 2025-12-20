@@ -105,7 +105,10 @@ impl Repository {
             repo,
             upstream_name,
             bootstrap_info: BootstrapConfiguration::default(),
-            analysis_config: super::config::syntax::AnalysisConfig::default(),
+            analysis_config: super::config::syntax::AnalysisConfig {
+                commit_cache_size: 512,
+                tree_cache_size: 3,
+            },
         })
     }
 

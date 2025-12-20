@@ -245,11 +245,19 @@ impl WizardState {
         let (tx, rx) = mpsc::channel();
         self.loading_receiver = Some(rx);
 
-        thread::spawn(move || {
-            let git_config = crate::core::changelog::GitConfig::default();
-            let changelog_config = crate::core::changelog::ChangelogConfig::default();
-            let bump_config = crate::core::release::bump::BumpConfig::default();
+        let embedded_config = match crate::core::release::embed::EmbeddedConfig::parse() {
+            Ok(cfg) => cfg,
+            Err(_) => {
+                self.loading_changelog = false;
+                return;
+            }
+        };
 
+        let git_config = crate::core::changelog::GitConfig::from_user_config(&embedded_config.changelog);
+        let changelog_config = crate::core::changelog::ChangelogConfig::from_user_config(&embedded_config.changelog);
+        let bump_config = crate::core::release::bump::BumpConfig::from_user_config(&embedded_config.bump);
+
+        thread::spawn(move || {
             let changelog = generate_changelog_entry(
                 &new_version,
                 &commit_messages,

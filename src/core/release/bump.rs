@@ -5,41 +5,26 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BumpConfig {
-    #[serde(default = "default_true")]
     pub features_always_bump_minor: bool,
 
-    #[serde(default = "default_true")]
     pub breaking_always_bump_major: bool,
 
-    #[serde(default = "default_initial_tag")]
     pub initial_tag: String,
 }
 
-fn default_true() -> bool {
-    true
-}
-
-fn default_initial_tag() -> String {
-    "0.1.0".to_string()
-}
-
-impl Default for BumpConfig {
-    fn default() -> Self {
+impl BumpConfig {
+    pub fn from_user_config(cfg: &super::config::syntax::BumpConfiguration) -> Self {
         Self {
-            features_always_bump_minor: true,
-            breaking_always_bump_major: true,
-            initial_tag: default_initial_tag(),
+            features_always_bump_minor: cfg.features_always_bump_minor,
+            breaking_always_bump_major: cfg.breaking_always_bump_major,
+            initial_tag: cfg.initial_tag.clone(),
         }
     }
 }
 
 impl From<&super::config::syntax::BumpConfiguration> for BumpConfig {
     fn from(cfg: &super::config::syntax::BumpConfiguration) -> Self {
-        Self {
-            features_always_bump_minor: cfg.features_always_bump_minor,
-            breaking_always_bump_major: cfg.breaking_always_bump_major,
-            initial_tag: cfg.initial_tag.clone(),
-        }
+        Self::from_user_config(cfg)
     }
 }
 
@@ -483,7 +468,11 @@ mod tests {
 
     #[test]
     fn test_apply_config_pre_1_0_default() {
-        let config = BumpConfig::default();
+        let config = BumpConfig {
+            features_always_bump_minor: true,
+            breaking_always_bump_major: true,
+            initial_tag: "0.1.0".to_string(),
+        };
         assert_eq!(
             BumpRecommendation::Major.apply_config(&config, Some("0.5.0")),
             BumpRecommendation::Major
