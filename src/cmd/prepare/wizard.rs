@@ -27,7 +27,9 @@ use std::path::Path;
 use crate::{
     atry,
     core::{
-        bump::{self, BumpRecommendation},
+        bump::{self, BumpConfig, BumpRecommendation},
+        changelog::{ChangelogConfig, GitConfig},
+        config::syntax::{BumpConfiguration, ChangelogConfiguration},
         ecosystem::types::EcosystemType,
         git::repository::RepoPathBuf,
         graph::GraphQueryBuilder,
@@ -165,10 +167,16 @@ struct WizardState {
     loading_receiver: Option<Receiver<String>>,
     show_raw_markdown: bool,
     toggle_button_area: Option<Rect>,
+    changelog_config: ChangelogConfiguration,
+    bump_config: BumpConfiguration,
 }
 
 impl WizardState {
-    fn new(projects: Vec<ProjectItem>) -> Self {
+    fn new(
+        projects: Vec<ProjectItem>,
+        changelog_config: ChangelogConfiguration,
+        bump_config: BumpConfiguration,
+    ) -> Self {
         let mut project_list_state = ListState::default();
         if !projects.is_empty() {
             project_list_state.select(Some(0));
@@ -189,6 +197,8 @@ impl WizardState {
             loading_receiver: None,
             show_raw_markdown: false,
             toggle_button_area: None,
+            changelog_config,
+            bump_config,
         }
     }
 
@@ -246,19 +256,9 @@ impl WizardState {
         let (tx, rx) = mpsc::channel();
         self.loading_receiver = Some(rx);
 
-        let embedded_config = match crate::core::embed::EmbeddedConfig::parse() {
-            Ok(cfg) => cfg,
-            Err(_) => {
-                self.loading_changelog = false;
-                return;
-            }
-        };
-
-        let git_config =
-            crate::core::changelog::GitConfig::from_user_config(&embedded_config.changelog);
-        let changelog_config =
-            crate::core::changelog::ChangelogConfig::from_user_config(&embedded_config.changelog);
-        let bump_config = crate::core::bump::BumpConfig::from_user_config(&embedded_config.bump);
+        let git_config = GitConfig::from_user_config(&self.changelog_config);
+        let changelog_config = ChangelogConfig::from_user_config(&self.changelog_config);
+        let bump_config = BumpConfig::from_user_config(&self.bump_config);
 
         thread::spawn(move || {
             let changelog = generate_changelog_entry(
@@ -496,7 +496,7 @@ impl WizardState {
     }
 }
 
-pub fn run() -> Result<i32> {
+pub fn run_with_overrides(project_overrides: Option<Vec<String>>) -> Result<i32> {
     info!("starting interactive TUI wizard for release preparation");
 
     let mut sess =
@@ -604,7 +604,15 @@ pub fn run() -> Result<i32> {
         return Ok(0);
     }
 
-    let wizard_result = run_wizard_ui(projects)?;
+    if let Some(ref overrides) = project_overrides {
+        apply_project_overrides_to_items(&mut projects, overrides)?;
+    }
+
+    let wizard_result = run_wizard_ui(
+        projects,
+        sess.changelog_config.clone(),
+        sess.bump_config.clone(),
+    )?;
 
     let selected_projects = match wizard_result {
         Some(projects) => projects,
@@ -723,14 +731,18 @@ pub fn run() -> Result<i32> {
     Ok(0)
 }
 
-fn run_wizard_ui(projects: Vec<ProjectItem>) -> Result<Option<Vec<ProjectItem>>> {
+fn run_wizard_ui(
+    projects: Vec<ProjectItem>,
+    changelog_config: ChangelogConfiguration,
+    bump_config: BumpConfiguration,
+) -> Result<Option<Vec<ProjectItem>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut state = WizardState::new(projects);
+    let mut state = WizardState::new(projects, changelog_config, bump_config);
     let result = run_app(&mut terminal, &mut state);
 
     disable_raw_mode()?;
@@ -1575,4 +1587,57 @@ fn parse_existing_changelog(path: &Path) -> Option<String> {
     } else {
         Some(result)
     }
+}
+
+fn apply_project_overrides_to_items(
+    projects: &mut [ProjectItem],
+    overrides: &[String],
+) -> Result<()> {
+    let project_names: Vec<String> = projects.iter().map(|p| p.name.clone()).collect();
+
+    for override_str in overrides {
+        let parts: Vec<&str> = override_str.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            return Err(anyhow::anyhow!(
+                "Invalid project override format '{}'. Expected 'project:bump' (e.g., 'gate:major')",
+                override_str
+            ));
+        }
+
+        let project_name = parts[0];
+        let bump_type = parts[1];
+
+        if !project_names.iter().any(|n| n == project_name) {
+            return Err(anyhow::anyhow!(
+                "Unknown project '{}'. Available: {}",
+                project_name,
+                project_names.join(", ")
+            ));
+        }
+
+        let valid_bumps = ["major", "minor", "patch"];
+        if !valid_bumps.contains(&bump_type) {
+            return Err(anyhow::anyhow!(
+                "Invalid bump type '{}' for project '{}'. Valid: major, minor, patch",
+                bump_type,
+                project_name
+            ));
+        }
+
+        if let Some(project) = projects.iter_mut().find(|p| p.name == project_name) {
+            let chosen = match bump_type {
+                "major" => BumpStrategy::Major,
+                "minor" => BumpStrategy::Minor,
+                "patch" => BumpStrategy::Patch,
+                _ => unreachable!(),
+            };
+            info!(
+                "override: {} -> {}",
+                project_name, bump_type
+            );
+            project.chosen_bump = Some(chosen);
+        }
+    }
+
+    Ok(())
 }

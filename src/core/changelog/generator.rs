@@ -42,6 +42,29 @@ impl<'a> Changelog<'a> {
         bump_config: BumpConfig,
     ) -> Result<Self> {
         let trim = changelog_config.trim;
+        let mut additional_context = HashMap::new();
+
+        additional_context.insert(
+            "emoji_groups".to_string(),
+            serde_json::to_value(changelog_config.emoji_groups)?,
+        );
+        additional_context.insert(
+            "group_emojis".to_string(),
+            serde_json::to_value(&changelog_config.group_emojis)?,
+        );
+        additional_context.insert(
+            "include_breaking_section".to_string(),
+            serde_json::to_value(changelog_config.include_breaking_section)?,
+        );
+        additional_context.insert(
+            "include_contributors".to_string(),
+            serde_json::to_value(changelog_config.include_contributors)?,
+        );
+        additional_context.insert(
+            "include_statistics".to_string(),
+            serde_json::to_value(changelog_config.include_statistics)?,
+        );
+
         Ok(Self {
             releases,
             header_template: match &changelog_config.header {
@@ -56,7 +79,7 @@ impl<'a> Changelog<'a> {
             git_config,
             changelog_config,
             bump_config,
-            additional_context: HashMap::new(),
+            additional_context,
             remote: None,
             github_token: None,
         })

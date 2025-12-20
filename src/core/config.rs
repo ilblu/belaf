@@ -88,6 +88,9 @@ pub mod syntax {
         pub include_statistics: bool,
 
         pub emoji_groups: bool,
+
+        #[serde(default)]
+        pub group_emojis: std::collections::HashMap<String, String>,
     }
 
     #[derive(Clone, Debug, Default, Deserialize, Serialize)]

@@ -101,7 +101,7 @@ pub async fn execute(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::Prepare(args) => {
-            let exit_code = cmd::prepare::run(args.bump, args.no_tui, args.ci, args.project)?;
+            let exit_code = cmd::prepare::run(args.ci, args.project)?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }

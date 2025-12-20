@@ -135,6 +135,12 @@ pub struct ChangelogConfig {
     #[serde(default)]
     pub postprocessors: Vec<TextProcessor>,
     pub output: Option<PathBuf>,
+    pub include_breaking_section: bool,
+    pub include_contributors: bool,
+    pub include_statistics: bool,
+    pub emoji_groups: bool,
+    #[serde(default)]
+    pub group_emojis: std::collections::HashMap<String, String>,
 }
 
 impl CommitParser {
@@ -194,7 +200,19 @@ impl ChangelogConfig {
             render_always: false,
             postprocessors,
             output: Some(PathBuf::from(&user_cfg.output)),
+            include_breaking_section: user_cfg.include_breaking_section,
+            include_contributors: user_cfg.include_contributors,
+            include_statistics: user_cfg.include_statistics,
+            emoji_groups: user_cfg.emoji_groups,
+            group_emojis: user_cfg.group_emojis.clone(),
         }
+    }
+
+    pub fn get_emoji(&self, group: &str) -> Option<&str> {
+        self.group_emojis
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(group))
+            .map(|(_, v)| v.as_str())
     }
 }
 

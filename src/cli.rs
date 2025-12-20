@@ -115,15 +115,9 @@ pub struct StatusArgs {
 
 #[derive(Args)]
 pub struct PrepareArgs {
-    #[arg(help = "Version bump type: major, minor, patch, auto, or manual")]
-    pub bump: Option<String>,
-
-    #[arg(long, help = "Force auto mode, skip interactive TUI wizard")]
-    pub no_tui: bool,
-
     #[arg(
         long,
-        help = "Full CI/CD mode: auto-bump, changelog, commit, push, and PR creation"
+        help = "CI/CD mode: auto-bump, changelog, commit, push, and PR creation"
     )]
     pub ci: bool,
 
@@ -131,7 +125,7 @@ pub struct PrepareArgs {
         short,
         long,
         value_delimiter = ',',
-        help = "Per-project version bumps (e.g., gate:major,rig:minor)"
+        help = "Override bump for specific projects (e.g., gate:major,core:minor)"
     )]
     pub project: Option<Vec<String>>,
 }

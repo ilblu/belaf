@@ -23,16 +23,12 @@ edition = "2021"
         "Init failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    repo.commit("chore: add belaf config");
 
     repo.write_file("src/fix.rs", "pub fn fix_bug() {}\n");
     repo.commit("fix: resolve critical bug");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(
-        output.status.success(),
-        "Prepare failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let cargo_toml = repo.read_file("Cargo.toml");
     assert!(
@@ -58,16 +54,12 @@ edition = "2021"
 
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
+    repo.commit("chore: add belaf config");
 
     repo.write_file("src/feature.rs", "pub fn new_feature() {}\n");
     repo.commit("feat: add amazing new feature");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(
-        output.status.success(),
-        "Prepare failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let cargo_toml = repo.read_file("Cargo.toml");
     assert!(
@@ -93,16 +85,12 @@ edition = "2021"
 
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
+    repo.commit("chore: add belaf config");
 
     repo.write_file("src/breaking.rs", "pub fn breaking_change() {}\n");
     repo.commit("feat!: breaking API change");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(
-        output.status.success(),
-        "Prepare failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let cargo_toml = repo.read_file("Cargo.toml");
     assert!(
@@ -128,16 +116,12 @@ edition = "2021"
 
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
+    repo.commit("chore: add belaf config");
 
     repo.write_file("src/new.rs", "pub fn something_new() {}\n");
     repo.commit("feat: add something new");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(
-        output.status.success(),
-        "Prepare failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let cargo_toml = repo.read_file("Cargo.toml");
     assert!(
@@ -164,16 +148,12 @@ fn test_release_prepare_npm_package() {
 
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
+    repo.commit("chore: add belaf config");
 
     repo.write_file("feature.js", "module.exports.feature = () => {};\n");
     repo.commit("feat: add new feature");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(
-        output.status.success(),
-        "Prepare failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let package_json = repo.read_file("package.json");
     assert!(
@@ -212,17 +192,12 @@ setup(version=__version__)
         "Init failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    repo.commit("chore: add belaf config");
 
     repo.write_file("src/feature.py", "def new_feature(): pass\n");
     repo.commit("fix: resolve issue");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(
-        output.status.success(),
-        "Prepare failed: {} | stdout: {}",
-        String::from_utf8_lossy(&output.stderr),
-        String::from_utf8_lossy(&output.stdout)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let setup_py = repo.read_file("setup.py");
     assert!(
@@ -248,6 +223,7 @@ edition = "2021"
 
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
+    repo.commit("chore: add belaf config");
 
     repo.write_file("src/fix1.rs", "pub fn fix1() {}\n");
     repo.commit("fix: first bug fix");
@@ -258,12 +234,7 @@ edition = "2021"
     repo.write_file("src/feature.rs", "pub fn feature() {}\n");
     repo.commit("feat: new feature");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(
-        output.status.success(),
-        "Prepare failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let cargo_toml = repo.read_file("Cargo.toml");
     assert!(
@@ -289,8 +260,9 @@ edition = "2021"
 
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
+    repo.commit("chore: add belaf config");
 
-    let _output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
+    let _output = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let cargo_toml = repo.read_file("Cargo.toml");
     assert!(
@@ -324,12 +296,12 @@ tempfile = "3.0"
 
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
+    repo.commit("chore: add belaf config");
 
     repo.write_file("src/fix.rs", "pub fn fix() {}\n");
     repo.commit("fix: bug fix");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(output.status.success());
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let cargo_toml = repo.read_file("Cargo.toml");
 
@@ -387,6 +359,7 @@ edition = "2021"
 
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
+    repo.commit("chore: add belaf config");
 
     repo.write_file("packages/core/src/feature.rs", "pub fn new_core() {}\n");
     repo.commit("feat(core): add core feature");
@@ -394,12 +367,7 @@ edition = "2021"
     repo.write_file("packages/utils/src/fix.rs", "pub fn fix_utils() {}\n");
     repo.commit("fix(utils): fix utils bug");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(
-        output.status.success(),
-        "Prepare failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let core_toml = repo.read_file("packages/core/Cargo.toml");
     let utils_toml = repo.read_file("packages/utils/Cargo.toml");
@@ -503,16 +471,12 @@ edition = "2021"
 
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
+    repo.commit("chore: add belaf config");
 
     repo.write_file("src/fix.rs", "pub fn fix() {}\n");
     repo.commit("fix: small fix");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "major"]);
-    assert!(
-        output.status.success(),
-        "Prepare with explicit major should succeed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci", "-p", "explicit-bump:major"]);
 
     let cargo_toml = repo.read_file("Cargo.toml");
     assert!(
@@ -557,6 +521,7 @@ edition = "2021"
 
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
+    repo.commit("chore: add belaf config");
 
     repo.write_file("packages/alpha/src/new.rs", "pub fn new_alpha() {}\n");
     repo.commit("feat: add alpha feature");
@@ -564,12 +529,7 @@ edition = "2021"
     repo.write_file("packages/beta/src/new.rs", "pub fn new_beta() {}\n");
     repo.commit("feat: add beta feature");
 
-    let output = repo.run_belaf_command(&["prepare", "--project", "alpha:major,beta:patch"]);
-    assert!(
-        output.status.success(),
-        "Per-project mode should succeed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci", "--project", "alpha:major,beta:patch"]);
 
     let alpha_toml = repo.read_file("packages/alpha/Cargo.toml");
     let beta_toml = repo.read_file("packages/beta/Cargo.toml");

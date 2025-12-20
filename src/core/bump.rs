@@ -10,6 +10,8 @@ pub struct BumpConfig {
     pub breaking_always_bump_major: bool,
 
     pub initial_tag: String,
+
+    pub bump_type: Option<String>,
 }
 
 impl BumpConfig {
@@ -18,6 +20,7 @@ impl BumpConfig {
             features_always_bump_minor: cfg.features_always_bump_minor,
             breaking_always_bump_major: cfg.breaking_always_bump_major,
             initial_tag: cfg.initial_tag.clone(),
+            bump_type: cfg.bump_type.clone(),
         }
     }
 }
@@ -73,6 +76,38 @@ impl BumpRecommendation {
         } else {
             self
         }
+    }
+
+    pub fn from_string(s: &str) -> Option<Self> {
+        match s.to_lowercase().as_str() {
+            "major" => Some(Self::Major),
+            "minor" => Some(Self::Minor),
+            "patch" => Some(Self::Patch),
+            _ => None,
+        }
+    }
+
+    pub fn from_commits_with_config(
+        commits: &[String],
+        config: &BumpConfig,
+        current_version: Option<&str>,
+    ) -> Result<Self> {
+        let analysis = analyze_commit_messages(commits)?;
+        Ok(analysis.recommendation.apply_config(config, current_version))
+    }
+
+    pub fn from_config_or_commits(
+        commits: &[String],
+        config: &BumpConfig,
+        current_version: Option<&str>,
+    ) -> Result<(Self, bool)> {
+        if let Some(bump_str) = &config.bump_type {
+            if let Some(bump) = Self::from_string(bump_str) {
+                return Ok((bump, true));
+            }
+        }
+        let recommendation = Self::from_commits_with_config(commits, config, current_version)?;
+        Ok((recommendation, false))
     }
 }
 
@@ -470,6 +505,7 @@ mod tests {
             features_always_bump_minor: true,
             breaking_always_bump_major: true,
             initial_tag: "0.1.0".to_string(),
+            bump_type: None,
         };
         assert_eq!(
             BumpRecommendation::Major.apply_config(&config, Some("0.5.0")),
@@ -487,6 +523,7 @@ mod tests {
             features_always_bump_minor: false,
             breaking_always_bump_major: false,
             initial_tag: "0.1.0".to_string(),
+            bump_type: None,
         };
         assert_eq!(
             BumpRecommendation::Major.apply_config(&config, Some("0.5.0")),
@@ -504,6 +541,7 @@ mod tests {
             features_always_bump_minor: false,
             breaking_always_bump_major: false,
             initial_tag: "0.1.0".to_string(),
+            bump_type: None,
         };
         assert_eq!(
             BumpRecommendation::Major.apply_config(&config, Some("1.0.0")),
@@ -521,6 +559,7 @@ mod tests {
             features_always_bump_minor: false,
             breaking_always_bump_major: false,
             initial_tag: "0.1.0".to_string(),
+            bump_type: None,
         };
         assert_eq!(
             BumpRecommendation::Minor.apply_config(&config, Some("v0.5.0")),
