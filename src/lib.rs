@@ -1,5 +1,4 @@
 pub mod cli;
-pub mod config;
 pub mod error;
 
 pub mod cmd {
@@ -14,13 +13,6 @@ pub mod cmd {
 pub mod core {
     pub mod root;
 
-    pub mod ai {
-        pub mod changelog;
-        pub mod client;
-        pub mod credentials;
-        pub mod oauth;
-    }
-
     pub mod auth {
         pub mod github;
         pub mod token;
@@ -33,9 +25,7 @@ pub mod core {
     }
 
     pub mod release {
-        pub mod changelog;
-        pub mod changelog_generator;
-        pub mod commit_analyzer;
+        pub mod bump;
         pub mod config;
         pub mod env;
         pub mod errors;
@@ -47,7 +37,6 @@ pub mod core {
         pub mod repository;
         pub mod rewriters;
         pub mod session;
-        mod template;
         pub mod version;
         pub mod workflow;
     }
@@ -68,10 +57,7 @@ pub mod core {
         pub mod client;
     }
 
-    pub mod config {
-        pub mod loader;
-        pub mod types;
-    }
+    pub mod changelog;
 
     pub mod ui;
 }
@@ -89,17 +75,8 @@ pub async fn execute(cli: Cli) -> Result<()> {
     let command = cli.command.expect("Command must be present");
     match command {
         Commands::Auth(auth_cmd) => match auth_cmd {
-            AuthCommands::Login {
-                github,
-                anthropic,
-                all,
-                no_browser,
-            } => cmd::auth::login(github, anthropic, all, no_browser).await,
-            AuthCommands::Logout {
-                github,
-                anthropic,
-                all,
-            } => cmd::auth::logout(github, anthropic, all).await,
+            AuthCommands::Login { no_browser } => cmd::auth::login(no_browser).await,
+            AuthCommands::Logout => cmd::auth::logout().await,
             AuthCommands::Status => cmd::auth::status().await,
         },
         Commands::Completions { shell } => {

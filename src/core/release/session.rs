@@ -15,7 +15,7 @@ use crate::{
         errors::Result,
         graph::{ProjectGraph, ProjectGraphBuilder, RepoHistories},
         project::{DepRequirement, ProjectId},
-        repository::{ChangeList, PathMatcher, ReleaseAvailability, Repository},
+        repository::{ChangeList, ReleaseAvailability, Repository},
         version::Version,
     },
     utils::theme::ReleaseProgressBar,
@@ -279,28 +279,6 @@ impl AppSession {
         use crate::core::release::repository::DirtyRepositoryError;
 
         if let Some(changed_path) = self.repo.check_if_dirty(&[])? {
-            Err(DirtyRepositoryError(changed_path).into())
-        } else {
-            Ok(())
-        }
-    }
-
-    /// Check that the working tree is clean, excepting modifications to any
-    /// files interpreted as changelogs. Returns Ok if clean, an Err
-    /// downcastable to DirtyRepositoryError if not. The error may have a
-    /// different cause if, e.g., there is an I/O failure.
-    pub fn ensure_changelog_clean(&self) -> Result<()> {
-        use crate::core::release::repository::DirtyRepositoryError;
-
-        let mut matchers: Vec<Result<PathMatcher>> = self
-            .graph
-            .projects()
-            .map(|p| p.changelog.create_path_matcher(p))
-            .collect();
-        let matchers: Result<Vec<PathMatcher>> = matchers.drain(..).collect();
-        let matchers = matchers?;
-
-        if let Some(changed_path) = self.repo.check_if_dirty(&matchers[..])? {
             Err(DirtyRepositoryError(changed_path).into())
         } else {
             Ok(())

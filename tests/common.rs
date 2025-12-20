@@ -86,6 +86,7 @@ impl TestRepo {
         Command::new(belaf_bin)
             .args(args)
             .current_dir(&self.path)
+            .env("GITHUB_TOKEN", "test-token-for-tests")
             .output()
             .expect("failed to run belaf command")
     }

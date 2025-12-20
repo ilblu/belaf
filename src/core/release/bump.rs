@@ -1,6 +1,47 @@
 use anyhow::Result;
 use git_conventional::{Commit, Type};
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BumpConfig {
+    #[serde(default = "default_true")]
+    pub features_always_bump_minor: bool,
+
+    #[serde(default = "default_true")]
+    pub breaking_always_bump_major: bool,
+
+    #[serde(default = "default_initial_tag")]
+    pub initial_tag: String,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_initial_tag() -> String {
+    "0.1.0".to_string()
+}
+
+impl Default for BumpConfig {
+    fn default() -> Self {
+        Self {
+            features_always_bump_minor: true,
+            breaking_always_bump_major: true,
+            initial_tag: default_initial_tag(),
+        }
+    }
+}
+
+impl From<&super::config::syntax::BumpConfiguration> for BumpConfig {
+    fn from(cfg: &super::config::syntax::BumpConfiguration) -> Self {
+        Self {
+            features_always_bump_minor: cfg.features_always_bump_minor,
+            breaking_always_bump_major: cfg.breaking_always_bump_major,
+            initial_tag: cfg.initial_tag.clone(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BumpRecommendation {
@@ -10,60 +51,6 @@ pub enum BumpRecommendation {
     None,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ChangelogCategory {
-    Added,
-    Changed,
-    Deprecated,
-    Removed,
-    Fixed,
-    Security,
-}
-
-impl ChangelogCategory {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Added => "Added",
-            Self::Changed => "Changed",
-            Self::Deprecated => "Deprecated",
-            Self::Removed => "Removed",
-            Self::Fixed => "Fixed",
-            Self::Security => "Security",
-        }
-    }
-
-    pub fn from_conventional_type(commit_type: &Type) -> Option<Self> {
-        match commit_type.as_str() {
-            "feat" => Some(Self::Added),
-            "fix" => Some(Self::Fixed),
-            "perf" => Some(Self::Changed),
-            "refactor" => Some(Self::Changed),
-            "docs" | "chore" | "ci" | "test" | "style" | "build" => None,
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct CategorizedCommit {
-    pub category: ChangelogCategory,
-    pub message: String,
-    pub scope: Option<String>,
-    pub breaking: bool,
-    pub original: String,
-}
-
-impl CategorizedCommit {
-    pub fn format_for_changelog(&self) -> String {
-        let scope_part = self
-            .scope
-            .as_ref()
-            .map(|s| format!("**{}**: ", s))
-            .unwrap_or_default();
-        let breaking_mark = if self.breaking { " [BREAKING]" } else { "" };
-        format!("- {}{}{}", scope_part, self.message, breaking_mark)
-    }
-}
 
 impl BumpRecommendation {
     pub fn as_str(&self) -> &'static str {
@@ -81,6 +68,26 @@ impl BumpRecommendation {
             (Self::Minor, _) | (_, Self::Minor) => Self::Minor,
             (Self::Patch, _) | (_, Self::Patch) => Self::Patch,
             (Self::None, Self::None) => Self::None,
+        }
+    }
+
+    pub fn apply_config(self, config: &BumpConfig, current_version: Option<&str>) -> Self {
+        let is_pre_1_0 = current_version
+            .and_then(|v| {
+                let v = v.trim_start_matches('v');
+                v.split('.').next()?.parse::<u32>().ok()
+            })
+            .map(|major| major == 0)
+            .unwrap_or(false);
+
+        if is_pre_1_0 {
+            match self {
+                Self::Major if !config.breaking_always_bump_major => Self::Minor,
+                Self::Minor if !config.features_always_bump_minor => Self::Patch,
+                other => other,
+            }
+        } else {
+            self
         }
     }
 }
@@ -192,39 +199,6 @@ pub fn recommend_bump_for_commits(commit_summaries: &[String]) -> Result<BumpRec
     Ok(analysis.recommendation)
 }
 
-pub fn categorize_commits(messages: &[String]) -> Vec<CategorizedCommit> {
-    let mut categorized = Vec::new();
-
-    for message in messages {
-        let commit_result = Commit::parse(message);
-
-        if let Ok(commit) = commit_result {
-            let commit_type = commit.type_();
-            let breaking = commit.breaking();
-
-            if breaking {
-                categorized.push(CategorizedCommit {
-                    category: ChangelogCategory::Changed,
-                    message: commit.description().to_string(),
-                    scope: commit.scope().map(|s| s.to_string()),
-                    breaking: true,
-                    original: message.clone(),
-                });
-            } else if let Some(category) = ChangelogCategory::from_conventional_type(&commit_type) {
-                categorized.push(CategorizedCommit {
-                    category,
-                    message: commit.description().to_string(),
-                    scope: commit.scope().map(|s| s.to_string()),
-                    breaking: false,
-                    original: message.clone(),
-                });
-            }
-        }
-    }
-
-    categorized.sort_by_key(|c| c.category);
-    categorized
-}
 
 pub fn extract_scope(message: &str) -> Option<String> {
     Commit::parse(message)
@@ -504,6 +478,70 @@ mod tests {
         assert_eq!(
             matcher.find_matching_project("auth", &projects),
             Some(&"belaf-jwt".to_string())
+        );
+    }
+
+    #[test]
+    fn test_apply_config_pre_1_0_default() {
+        let config = BumpConfig::default();
+        assert_eq!(
+            BumpRecommendation::Major.apply_config(&config, Some("0.5.0")),
+            BumpRecommendation::Major
+        );
+        assert_eq!(
+            BumpRecommendation::Minor.apply_config(&config, Some("0.5.0")),
+            BumpRecommendation::Minor
+        );
+    }
+
+    #[test]
+    fn test_apply_config_pre_1_0_conservative() {
+        let config = BumpConfig {
+            features_always_bump_minor: false,
+            breaking_always_bump_major: false,
+            initial_tag: "0.1.0".to_string(),
+        };
+        assert_eq!(
+            BumpRecommendation::Major.apply_config(&config, Some("0.5.0")),
+            BumpRecommendation::Minor
+        );
+        assert_eq!(
+            BumpRecommendation::Minor.apply_config(&config, Some("0.5.0")),
+            BumpRecommendation::Patch
+        );
+    }
+
+    #[test]
+    fn test_apply_config_post_1_0_ignores_config() {
+        let config = BumpConfig {
+            features_always_bump_minor: false,
+            breaking_always_bump_major: false,
+            initial_tag: "0.1.0".to_string(),
+        };
+        assert_eq!(
+            BumpRecommendation::Major.apply_config(&config, Some("1.0.0")),
+            BumpRecommendation::Major
+        );
+        assert_eq!(
+            BumpRecommendation::Minor.apply_config(&config, Some("2.3.4")),
+            BumpRecommendation::Minor
+        );
+    }
+
+    #[test]
+    fn test_apply_config_with_v_prefix() {
+        let config = BumpConfig {
+            features_always_bump_minor: false,
+            breaking_always_bump_major: false,
+            initial_tag: "0.1.0".to_string(),
+        };
+        assert_eq!(
+            BumpRecommendation::Minor.apply_config(&config, Some("v0.5.0")),
+            BumpRecommendation::Patch
+        );
+        assert_eq!(
+            BumpRecommendation::Minor.apply_config(&config, Some("v1.0.0")),
+            BumpRecommendation::Minor
         );
     }
 }

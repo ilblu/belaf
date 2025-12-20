@@ -12,7 +12,6 @@
 use anyhow::{anyhow, bail};
 
 use crate::core::release::{
-    changelog::{self, Changelog},
     errors::Result,
     repository::{CommitId, PathMatcher, RepoPath, RepoPathBuf},
     rewriters::Rewriter,
@@ -65,9 +64,6 @@ pub struct Project {
     /// A data structure describing the paths inside the repository that are
     /// considered to affect this project.
     pub repo_paths: PathMatcher,
-
-    /// How this project's changelog is formatted and updated.
-    pub changelog: Box<dyn Changelog>,
 
     /// This project's internal dependencies.
     pub internal_deps: Vec<Dependency>,
@@ -237,7 +233,6 @@ impl ProjectBuilder {
             prefix: prefix.clone(),
             rewriters: self.rewriters,
             repo_paths: PathMatcher::new_include(prefix),
-            changelog: changelog::default(),
             internal_deps,
         })
     }

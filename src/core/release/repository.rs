@@ -20,7 +20,7 @@ use crate::{
     atry,
     cmd::init::BootstrapConfiguration,
     core::release::{
-        commit_analyzer::{extract_scope, ScopeMatcher},
+        bump::{extract_scope, ScopeMatcher},
         config::syntax::RepoConfiguration,
         errors::{Error, Result},
         project::{DepRequirement, Project},
@@ -867,59 +867,6 @@ impl Repository {
             Ok(s.to_owned())
         } else {
             Ok(format!("[commit {0}: non-Unicode summary]", cid.0))
-        }
-    }
-
-    pub fn scan_bump_spec(
-        &self,
-        proj: &Project,
-        changes: &mut ChangeList,
-        dirty_allowed: bool,
-    ) -> Result<Option<String>> {
-        let mut saw_changelog = false;
-        let changelog_matcher = proj.changelog.create_path_matcher(proj)?;
-
-        let mut opts = git2::StatusOptions::new();
-        opts.include_untracked(true);
-        opts.include_ignored(true);
-
-        for entry in self.repo.statuses(Some(&mut opts))?.iter() {
-            let path = RepoPath::new(entry.path_bytes());
-            if !proj.repo_paths.repo_path_matches(path) {
-                continue;
-            }
-
-            let status = entry.status();
-
-            if changelog_matcher.repo_path_matches(path) {
-                if status.is_conflicted() {
-                    return Err(DirtyRepositoryError(path.to_owned()).into());
-                } else if status.is_index_new()
-                    || status.is_index_modified()
-                    || status.is_wt_new()
-                    || status.is_wt_modified()
-                {
-                    changes.add_path(path);
-                    saw_changelog = true;
-                } else if status.is_wt_deleted()
-                    || status.is_wt_renamed()
-                    || status.is_wt_typechange()
-                {
-                    bail!(
-                        "changelog file `{}` has unexpected status (deleted, renamed, or typechange)",
-                        path.escaped()
-                    );
-                }
-            } else if status.is_ignored() || status.is_wt_new() || status == git2::Status::CURRENT {
-            } else if !dirty_allowed {
-                return Err(DirtyRepositoryError(path.to_owned()).into());
-            }
-        }
-
-        if saw_changelog {
-            Ok(Some(proj.changelog.scan_bump_spec(proj, self)?))
-        } else {
-            Ok(None)
         }
     }
 

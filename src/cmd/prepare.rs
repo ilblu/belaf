@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use owo_colors::OwoColorize;
 use tracing::{info, warn};
 
 use crate::{
@@ -6,7 +7,7 @@ use crate::{
     core::{
         ecosystem::types::EcosystemType,
         release::{
-            commit_analyzer,
+            bump,
             graph::GraphQueryBuilder,
             session::AppSession,
             workflow::{create_release_branch, ReleasePipeline, SelectedProject},
@@ -16,6 +17,24 @@ use crate::{
 
 #[path = "prepare/wizard.rs"]
 mod wizard;
+
+fn print_no_changes_message() {
+    println!();
+    println!(
+        "{} No projects with unreleased changes found.",
+        "ℹ".cyan().bold()
+    );
+    println!();
+    println!(
+        "  {} All projects are up-to-date with their latest release tags.",
+        "→".dimmed()
+    );
+    println!(
+        "  {} Make commits with conventional format (feat:, fix:, etc.) to trigger a release.",
+        "→".dimmed()
+    );
+    println!();
+}
 
 pub fn run(
     bump: Option<String>,
@@ -72,7 +91,7 @@ fn run_ci_mode() -> Result<i32> {
     let projects = discover_and_prepare_projects(&mut sess)?;
 
     if projects.is_empty() {
-        info!("no projects needed version bumps");
+        print_no_changes_message();
         return Ok(0);
     }
 
@@ -118,7 +137,7 @@ fn discover_and_prepare_projects(sess: &mut AppSession) -> Result<Vec<SelectedPr
             .collect();
 
         let analysis = atry!(
-            commit_analyzer::analyze_commit_messages(&commit_messages);
+            bump::analyze_commit_messages(&commit_messages);
             ["failed to analyze commit messages for {}", proj.user_facing_name]
         );
 
@@ -262,7 +281,7 @@ fn run_simple_bump_mode(bump: Option<String>) -> Result<i32> {
     }
 
     if n_prepared == 0 {
-        info!("no projects needed version bumps");
+        print_no_changes_message();
         return Ok(0);
     }
 
@@ -346,7 +365,7 @@ fn run_auto_mode(bump: Option<String>) -> Result<i32> {
             .collect();
 
         let analysis = atry!(
-            commit_analyzer::analyze_commit_messages(&commit_messages);
+            bump::analyze_commit_messages(&commit_messages);
             ["failed to analyze commit messages for {}", proj.user_facing_name]
         );
 
@@ -402,7 +421,7 @@ fn run_auto_mode(bump: Option<String>) -> Result<i32> {
     }
 
     if n_prepared == 0 {
-        info!("no projects needed version bumps");
+        print_no_changes_message();
         return Ok(0);
     }
 

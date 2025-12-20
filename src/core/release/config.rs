@@ -23,16 +23,89 @@ pub mod syntax {
         pub changelog: ChangelogConfiguration,
 
         #[serde(default)]
+        pub bump: BumpConfiguration,
+
+        #[serde(default)]
         pub commit_attribution: CommitAttributionConfiguration,
 
         #[serde(default)]
         pub projects: HashMap<String, ProjectConfiguration>,
     }
 
-    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    pub struct BumpConfiguration {
+        #[serde(default = "default_true")]
+        pub features_always_bump_minor: bool,
+
+        #[serde(default = "default_true")]
+        pub breaking_always_bump_major: bool,
+
+        #[serde(default = "default_initial_tag")]
+        pub initial_tag: String,
+    }
+
+    fn default_initial_tag() -> String {
+        "0.1.0".to_string()
+    }
+
+    impl Default for BumpConfiguration {
+        fn default() -> Self {
+            Self {
+                features_always_bump_minor: true,
+                breaking_always_bump_major: true,
+                initial_tag: default_initial_tag(),
+            }
+        }
+    }
+
+    #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct ChangelogConfiguration {
         #[serde(default)]
         pub ai_enabled: bool,
+
+        #[serde(default = "default_true")]
+        pub conventional_commits: bool,
+
+        #[serde(default = "default_true")]
+        pub include_breaking_section: bool,
+
+        #[serde(default = "default_true")]
+        pub include_contributors: bool,
+
+        #[serde(default)]
+        pub include_statistics: bool,
+
+        #[serde(default = "default_true")]
+        pub emoji_groups: bool,
+
+        #[serde(default = "default_changelog_output")]
+        pub output: String,
+
+        #[serde(default)]
+        pub template: Option<String>,
+    }
+
+    fn default_true() -> bool {
+        true
+    }
+
+    fn default_changelog_output() -> String {
+        "CHANGELOG.md".to_string()
+    }
+
+    impl Default for ChangelogConfiguration {
+        fn default() -> Self {
+            Self {
+                ai_enabled: false,
+                conventional_commits: true,
+                include_breaking_section: true,
+                include_contributors: true,
+                include_statistics: false,
+                emoji_groups: true,
+                output: default_changelog_output(),
+                template: None,
+            }
+        }
     }
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -138,6 +211,7 @@ pub mod syntax {
 pub struct ConfigurationFile {
     pub repo: syntax::RepoConfiguration,
     pub changelog: syntax::ChangelogConfiguration,
+    pub bump: syntax::BumpConfiguration,
     pub commit_attribution: syntax::CommitAttributionConfiguration,
     pub projects: HashMap<String, syntax::ProjectConfiguration>,
 }
@@ -173,6 +247,7 @@ impl ConfigurationFile {
             Ok(ConfigurationFile {
                 repo: release_cfg.repo,
                 changelog: release_cfg.changelog,
+                bump: release_cfg.bump,
                 commit_attribution: release_cfg.commit_attribution,
                 projects: release_cfg.projects,
             })
@@ -186,6 +261,7 @@ impl ConfigurationFile {
             release: Some(syntax::ReleaseConfiguration {
                 repo: self.repo,
                 changelog: self.changelog,
+                bump: self.bump,
                 commit_attribution: self.commit_attribution,
                 projects: self.projects,
             }),

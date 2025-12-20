@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use owo_colors::OwoColorize;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, MouseButton, MouseEvent, MouseEventKind},
     execute,
@@ -18,20 +19,21 @@ use std::thread;
 use std::time::Duration;
 use tracing::info;
 
+use std::path::Path;
+
 use crate::{
     atry,
     core::{
         ecosystem::types::EcosystemType,
         release::{
-            changelog_generator::parse_existing_changelog,
-            commit_analyzer::{self, BumpRecommendation},
+            bump::{self, BumpRecommendation},
             graph::GraphQueryBuilder,
             project::ProjectId,
             session::AppSession,
             repository::RepoPathBuf,
             workflow::{
                 cleanup_release_branch, create_release_branch, generate_changelog_entry,
-                polish_changelog_with_ai, ReleasePipeline, SelectedProject,
+                ReleasePipeline, SelectedProject,
             },
         },
         ui::markdown,
@@ -157,7 +159,6 @@ struct WizardState {
     bump_list_state: ListState,
     show_changelog: bool,
     show_help: bool,
-    ai_enabled: bool,
     loading_changelog: bool,
     loading_frame: usize,
     loading_receiver: Option<Receiver<String>>,
@@ -166,7 +167,7 @@ struct WizardState {
 }
 
 impl WizardState {
-    fn new(projects: Vec<ProjectItem>, ai_enabled: bool) -> Self {
+    fn new(projects: Vec<ProjectItem>) -> Self {
         let mut project_list_state = ListState::default();
         if !projects.is_empty() {
             project_list_state.select(Some(0));
@@ -182,7 +183,6 @@ impl WizardState {
             bump_list_state,
             show_changelog: false,
             show_help: false,
-            ai_enabled,
             loading_changelog: false,
             loading_frame: 0,
             loading_receiver: None,
@@ -231,7 +231,6 @@ impl WizardState {
         }
 
         let commit_messages = project.commit_messages.clone();
-        let ai_enabled = self.ai_enabled;
         let current_version = project.current_version.clone();
         let chosen_bump = project.chosen_bump.unwrap_or(BumpStrategy::Auto);
         let suggested_bump = project.suggested_bump;
@@ -247,19 +246,20 @@ impl WizardState {
         self.loading_receiver = Some(rx);
 
         thread::spawn(move || {
-            let draft = generate_changelog_entry(&new_version, &commit_messages);
-            let result = if ai_enabled {
-                match polish_changelog_with_ai(&draft, &commit_messages) {
-                    Ok(polished) => polished,
-                    Err(e) => {
-                        tracing::warn!("AI changelog polishing failed, using draft: {:#}", e);
-                        draft
-                    }
-                }
-            } else {
-                draft
-            };
-            let _ = tx.send(result);
+            let git_config = crate::core::changelog::GitConfig::default();
+            let changelog_config = crate::core::changelog::ChangelogConfig::default();
+            let bump_config = crate::core::release::bump::BumpConfig::default();
+
+            let changelog = generate_changelog_entry(
+                &new_version,
+                &commit_messages,
+                &git_config,
+                &changelog_config,
+                &bump_config,
+            )
+            .unwrap_or_else(|_| "Failed to generate changelog".to_string());
+
+            let _ = tx.send(changelog);
         });
     }
 
@@ -533,7 +533,7 @@ pub fn run() -> Result<i32> {
             .filter_map(|cid| sess.repo.get_commit_summary(*cid).ok())
             .collect();
 
-        let analysis = commit_analyzer::analyze_commit_messages(&commit_messages)
+        let analysis = bump::analyze_commit_messages(&commit_messages)
             .context("failed to analyze commit messages")?;
 
         let qnames = proj.qualified_names();
@@ -574,13 +574,26 @@ pub fn run() -> Result<i32> {
     }
 
     if projects.is_empty() {
-        info!("no projects with changes found");
         cleanup_release_branch(&mut sess, &base_branch, &release_branch);
+        println!();
+        println!(
+            "{} No projects with unreleased changes found.",
+            "ℹ".cyan().bold()
+        );
+        println!();
+        println!(
+            "  {} All projects are up-to-date with their latest release tags.",
+            "→".dimmed()
+        );
+        println!(
+            "  {} Make commits with conventional format (feat:, fix:, etc.) to trigger a release.",
+            "→".dimmed()
+        );
+        println!();
         return Ok(0);
     }
 
-    let ai_enabled = sess.changelog_config.ai_enabled;
-    let wizard_result = run_wizard_ui(projects, ai_enabled)?;
+    let wizard_result = run_wizard_ui(projects)?;
 
     let selected_projects = match wizard_result {
         Some(projects) => projects,
@@ -666,24 +679,53 @@ pub fn run() -> Result<i32> {
     }
 
     if prepared.is_empty() {
-        info!("no projects needed version bumps");
+        println!();
+        println!(
+            "{} No projects needed version bumps.",
+            "ℹ".cyan().bold()
+        );
+        println!();
+        println!(
+            "  {} All selected projects had 'no bump' recommendations.",
+            "→".dimmed()
+        );
+        println!();
         return Ok(0);
     }
 
     let pipeline = ReleasePipeline::new(&mut sess, base_branch, release_branch)?;
-    pipeline.execute(prepared)?;
+    let pr_url = pipeline.execute(prepared.clone())?;
+
+    println!();
+    println!(
+        "{} Release preparation complete!",
+        "✓".green().bold()
+    );
+    println!();
+    for project in &prepared {
+        println!(
+            "  {} {} → {}",
+            "•".cyan(),
+            project.name,
+            project.new_version.green()
+        );
+    }
+    println!();
+    println!("  {} Pull request created:", "→".cyan());
+    println!("    {}", pr_url.cyan().underline());
+    println!();
 
     Ok(0)
 }
 
-fn run_wizard_ui(projects: Vec<ProjectItem>, ai_enabled: bool) -> Result<Option<Vec<ProjectItem>>> {
+fn run_wizard_ui(projects: Vec<ProjectItem>) -> Result<Option<Vec<ProjectItem>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut state = WizardState::new(projects, ai_enabled);
+    let mut state = WizardState::new(projects);
     let result = run_app(&mut terminal, &mut state);
 
     disable_raw_mode()?;
@@ -950,7 +992,7 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
         )
         .highlight_style(
             Style::default()
-                .bg(if state.is_loading() { Color::DarkGray } else { Color::DarkGray })
+                .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol(if state.is_loading() { "⏳" } else { "► " });
@@ -1476,4 +1518,28 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
             Constraint::Percentage((100 - percent_x) / 2),
         ])
         .split(popup_layout[1])[1]
+}
+
+fn parse_existing_changelog(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+
+    let mut result = String::new();
+    let mut found_header = false;
+
+    for line in content.lines() {
+        if line.starts_with("## [") || line.starts_with("## Unreleased") {
+            found_header = true;
+        }
+
+        if found_header {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
 }

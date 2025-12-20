@@ -71,34 +71,16 @@ pub enum Commands {
 #[derive(Subcommand)]
 pub enum AuthCommands {
     #[command(
-        about = "Authenticate with services",
-        long_about = "Authenticate with GitHub and/or Anthropic.\n\nWithout flags, shows an interactive menu to choose the service.\nCredentials are stored securely in the system keychain."
+        about = "Authenticate with GitHub",
+        long_about = "Authenticate with GitHub for PR creation and release management.\n\nCredentials are stored securely in the system keychain."
     )]
     Login {
-        #[arg(long, help = "Authenticate with GitHub")]
-        github: bool,
-
-        #[arg(long, help = "Authenticate with Anthropic (Claude)")]
-        anthropic: bool,
-
-        #[arg(long, help = "Authenticate with all services")]
-        all: bool,
-
         #[arg(long, help = "Skip opening browser and show URL only")]
         no_browser: bool,
     },
 
-    #[command(about = "Sign out from services")]
-    Logout {
-        #[arg(long, help = "Sign out from GitHub")]
-        github: bool,
-
-        #[arg(long, help = "Sign out from Anthropic (Claude)")]
-        anthropic: bool,
-
-        #[arg(long, help = "Sign out from all services")]
-        all: bool,
-    },
+    #[command(about = "Sign out from GitHub")]
+    Logout,
 
     #[command(about = "Show authentication status")]
     Status,
