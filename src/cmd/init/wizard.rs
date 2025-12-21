@@ -463,47 +463,17 @@ fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
 }
 
 fn render(frame: &mut Frame, state: &mut WizardState) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(10),
-            Constraint::Length(3),
-        ])
-        .split(frame.area());
-
-    render_header(frame, chunks[0], state);
+    let area = frame.area();
 
     match state.step {
-        WizardStep::Welcome => render_welcome(frame, chunks[1], state),
-        WizardStep::PresetSelection => render_preset_selection(frame, chunks[1], state),
-        WizardStep::ProjectSelection => render_project_selection(frame, chunks[1], state),
-        WizardStep::UpstreamConfig => render_upstream_config(frame, chunks[1], state),
-        WizardStep::Confirmation => render_confirmation(frame, chunks[1], state),
-        WizardStep::Processing => render_processing(frame, chunks[1]),
-        WizardStep::Complete => render_complete(frame, chunks[1], state),
+        WizardStep::Welcome => render_welcome(frame, area, state),
+        WizardStep::PresetSelection => render_preset_selection(frame, area, state),
+        WizardStep::ProjectSelection => render_project_selection(frame, area, state),
+        WizardStep::UpstreamConfig => render_upstream_config(frame, area, state),
+        WizardStep::Confirmation => render_confirmation(frame, area, state),
+        WizardStep::Processing => render_processing(frame, area),
+        WizardStep::Complete => render_complete(frame, area, state),
     }
-
-    render_footer(frame, chunks[2], state);
-}
-
-fn render_header(frame: &mut Frame, area: Rect, state: &WizardState) {
-    let step_text = match state.step {
-        WizardStep::Welcome => "Welcome",
-        WizardStep::PresetSelection => "Step 1/4: Changelog Preset",
-        WizardStep::ProjectSelection => "Step 2/4: Project Selection",
-        WizardStep::UpstreamConfig => "Step 3/4: Upstream Configuration",
-        WizardStep::Confirmation => "Step 4/4: Confirmation",
-        WizardStep::Processing => "Processing...",
-        WizardStep::Complete => "Complete!",
-    };
-
-    let block = Block::default()
-        .title(format!(" Clikd Release Init - {} ", step_text))
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
-
-    frame.render_widget(block, area);
 }
 
 fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
@@ -788,40 +758,96 @@ fn render_preset_selection(frame: &mut Frame, area: Rect, state: &mut WizardStat
     use crate::core::embed::{EmbeddedConfig, EmbeddedPresets};
     use ratatui::widgets::{Padding, Wrap};
 
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            " Step 1: Changelog Preset ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    let outer_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
+
+    let header_text = vec![Line::from(vec![
+        Span::styled("📋 ", Style::default()),
+        Span::styled(
+            "Choose a changelog format that fits your project",
+            Style::default().fg(Color::White),
+        ),
+    ])];
+    let header = Paragraph::new(header_text).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(header, outer_chunks[0]);
+
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(area);
+        .split(outer_chunks[1]);
 
     let items: Vec<ListItem> = state
         .available_presets
         .iter()
         .enumerate()
         .map(|(idx, name)| {
-            let description = match name.as_str() {
-                "default" => "Standard Conventional Commits",
-                "keepachangelog" => "Keep a Changelog spec",
-                "flat" => "What's Changed - flat list",
-                "minimal" => "Version + Date only",
-                _ => "Custom preset",
+            let (icon, description) = match name.as_str() {
+                "default" => ("📦", "Conventional Commits grouped by type"),
+                "keepachangelog" => ("📝", "Keep a Changelog specification"),
+                "flat" => ("📄", "Simple flat list - What's Changed"),
+                "minimal" => ("✨", "Minimal - just version and date"),
+                _ => ("📋", "Custom preset"),
             };
-            let text = format!("{}\n  {}", name, description);
-            let style = if idx == state.selected_preset_idx {
-                Style::default()
-                    .bg(Color::DarkGray)
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD)
+            let is_selected = idx == state.selected_preset_idx;
+            let lines = vec![
+                Line::from(vec![
+                    Span::styled(
+                        format!(" {} ", icon),
+                        if is_selected {
+                            Style::default().fg(Color::Cyan)
+                        } else {
+                            Style::default()
+                        },
+                    ),
+                    Span::styled(
+                        name.clone(),
+                        if is_selected {
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::White)
+                        },
+                    ),
+                ]),
+                Line::from(Span::styled(
+                    format!("    {}", description),
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ];
+            let style = if is_selected {
+                Style::default().bg(Color::Rgb(40, 40, 50))
             } else {
                 Style::default()
             };
-            ListItem::new(text).style(style)
+            ListItem::new(lines).style(style)
         })
         .collect();
 
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Select Changelog Preset "),
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(" Presets ", Style::default().fg(Color::White))),
     );
 
     frame.render_widget(list, main_chunks[0]);
@@ -852,7 +878,11 @@ fn render_preset_selection(frame: &mut Frame, area: Rect, state: &mut WizardStat
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" TOML Source ")
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(Span::styled(
+                        " TOML Source ",
+                        Style::default().fg(Color::Magenta),
+                    ))
                     .padding(Padding::horizontal(1)),
             )
             .wrap(Wrap { trim: false })
@@ -866,12 +896,29 @@ fn render_preset_selection(frame: &mut Frame, area: Rect, state: &mut WizardStat
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(" Changelog Preview ")
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(Span::styled(
+                        " Changelog Preview ",
+                        Style::default().fg(Color::Cyan),
+                    ))
                     .padding(Padding::horizontal(1)),
             )
             .wrap(Wrap { trim: false });
         frame.render_widget(paragraph, right_chunks[1]);
     }
+
+    let hints = Line::from(vec![
+        Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+        Span::styled(" select  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("m", Style::default().fg(Color::Cyan)),
+        Span::styled(" toggle view  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter", Style::default().fg(Color::Green)),
+        Span::styled(" continue  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("q", Style::default().fg(Color::Red)),
+        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+    ]);
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(hints_para, outer_chunks[2]);
 }
 
 fn generate_preset_example(preset_name: &str) -> String {
@@ -942,171 +989,635 @@ fn generate_preset_example(preset_name: &str) -> String {
 }
 
 fn render_project_selection(frame: &mut Frame, area: Rect, state: &WizardState) {
+    let selected_count = state.projects.iter().filter(|p| p.selected).count();
+    let total_count = state.projects.len();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            " Step 2: Project Selection ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
+
+    let header_lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("📦 ", Style::default()),
+            Span::styled(
+                "Select which projects to include in release management",
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("   Selected: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}", selected_count),
+                Style::default()
+                    .fg(if selected_count > 0 {
+                        Color::Green
+                    } else {
+                        Color::Yellow
+                    })
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" / {}", total_count),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+    ];
+    let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(header, chunks[0]);
+
     let items: Vec<ListItem> = state
         .projects
         .iter()
         .enumerate()
         .map(|(idx, proj)| {
-            let checkbox = if proj.selected { "[✓]" } else { "[ ]" };
-            let text = format!(
-                "{} {} @ {} ({})",
-                checkbox, proj.name, proj.version, proj.prefix
-            );
-            let style = if idx == state.selected_project_idx {
-                Style::default().bg(Color::DarkGray).fg(Color::White)
-            } else if proj.selected {
-                Style::default().fg(Color::Green)
+            let is_current = idx == state.selected_project_idx;
+            let checkbox = if proj.selected { "✅" } else { "⬜" };
+            let lines = vec![Line::from(vec![
+                Span::styled(
+                    format!(" {} ", checkbox),
+                    Style::default(),
+                ),
+                Span::styled(
+                    proj.name.clone(),
+                    if is_current {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else if proj.selected {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::White)
+                    },
+                ),
+                Span::styled(
+                    format!(" @ {}", proj.version),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(
+                    format!("  ({})", proj.prefix),
+                    Style::default().fg(Color::Rgb(100, 100, 100)),
+                ),
+            ])];
+            let style = if is_current {
+                Style::default().bg(Color::Rgb(40, 40, 50))
             } else {
                 Style::default()
             };
-            ListItem::new(text).style(style)
+            ListItem::new(lines).style(style)
         })
         .collect();
 
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Select Projects (Space=toggle, a=all, n=none) "),
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(
+                " Projects ",
+                Style::default().fg(Color::White),
+            )),
     );
 
-    frame.render_widget(list, area);
+    frame.render_widget(list, chunks[1]);
+
+    let hints = Line::from(vec![
+        Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+        Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Space", Style::default().fg(Color::Cyan)),
+        Span::styled(" toggle  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("a", Style::default().fg(Color::Green)),
+        Span::styled(" all  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("n", Style::default().fg(Color::Yellow)),
+        Span::styled(" none  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter", Style::default().fg(Color::Green)),
+        Span::styled(" continue  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("q", Style::default().fg(Color::Red)),
+        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+    ]);
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(hints_para, chunks[2]);
 
     if let Some(ref error) = state.error_message {
         let popup_area = centered_rect(60, 20, area);
         frame.render_widget(Clear, popup_area);
-        let popup = Paragraph::new(error.clone())
-            .style(Style::default().fg(Color::Red))
-            .block(Block::default().borders(Borders::ALL).title(" Error "));
+        let popup = Paragraph::new(vec![
+            Line::from(""),
+            Line::from(Span::styled(
+                error.clone(),
+                Style::default().fg(Color::Red),
+            )),
+        ])
+        .alignment(ratatui::layout::Alignment::Center)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Red))
+                .title(Span::styled(
+                    " ⚠ Error ",
+                    Style::default()
+                        .fg(Color::Red)
+                        .add_modifier(Modifier::BOLD),
+                )),
+        );
         frame.render_widget(popup, popup_area);
     }
 }
 
 fn render_upstream_config(frame: &mut Frame, area: Rect, state: &WizardState) {
-    let lines = vec![
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            " Step 3: Repository Configuration ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
+
+    let header_lines = vec![
         Line::from(""),
-        Line::from("Enter the upstream Git URL for your repository:"),
-        Line::from(""),
+        Line::from(vec![
+            Span::styled("🔗 ", Style::default()),
+            Span::styled(
+                "Configure the upstream Git repository URL",
+                Style::default().fg(Color::White),
+            ),
+        ]),
         Line::from(Span::styled(
-            if state.upstream_url.is_empty() {
-                "(empty)"
-            } else {
-                &state.upstream_url
-            },
-            Style::default().fg(if state.upstream_input_active {
-                Color::Yellow
-            } else {
-                Color::White
-            }),
+            "   Used for changelog links and release references",
+            Style::default().fg(Color::DarkGray),
         )),
+    ];
+    let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(header, chunks[0]);
+
+    let content_area = centered_rect(80, 50, chunks[1]);
+
+    let input_border_color = if state.upstream_input_active {
+        Color::Yellow
+    } else {
+        Color::DarkGray
+    };
+
+    let url_display = if state.upstream_url.is_empty() {
+        Span::styled(
+            "https://github.com/user/repo",
+            Style::default().fg(Color::Rgb(80, 80, 80)),
+        )
+    } else {
+        Span::styled(
+            state.upstream_url.clone(),
+            Style::default()
+                .fg(if state.upstream_input_active {
+                    Color::Yellow
+                } else {
+                    Color::White
+                })
+                .add_modifier(if state.upstream_input_active {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        )
+    };
+
+    let cursor = if state.upstream_input_active {
+        Span::styled("▌", Style::default().fg(Color::Yellow))
+    } else {
+        Span::raw("")
+    };
+
+    let input_lines = vec![
         Line::from(""),
-        Line::from("Press TAB to edit, ENTER to continue."),
+        Line::from(vec![Span::raw("  "), url_display, cursor]),
+        Line::from(""),
     ];
 
-    let para = Paragraph::new(lines).block(
+    let input_block = Paragraph::new(input_lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Upstream Configuration "),
+            .border_style(Style::default().fg(input_border_color))
+            .title(Span::styled(
+                if state.upstream_input_active {
+                    " ✏️  Editing URL "
+                } else {
+                    " URL "
+                },
+                Style::default().fg(if state.upstream_input_active {
+                    Color::Yellow
+                } else {
+                    Color::White
+                }),
+            )),
     );
 
-    frame.render_widget(para, area);
+    frame.render_widget(input_block, content_area);
+
+    let hints = if state.upstream_input_active {
+        Line::from(vec![
+            Span::styled("Type", Style::default().fg(Color::Yellow)),
+            Span::styled(" to enter URL  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Backspace", Style::default().fg(Color::Yellow)),
+            Span::styled(" delete  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tab/Esc", Style::default().fg(Color::Cyan)),
+            Span::styled(" finish editing", Style::default().fg(Color::DarkGray)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("Tab", Style::default().fg(Color::Cyan)),
+            Span::styled(" edit URL  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Enter", Style::default().fg(Color::Green)),
+            Span::styled(" continue  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Backspace", Style::default().fg(Color::Yellow)),
+            Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("q", Style::default().fg(Color::Red)),
+            Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+        ])
+    };
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(hints_para, chunks[2]);
 }
 
 fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
     let selected = state.selected_projects();
-    let mut lines = vec![
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            " Step 4: Confirmation ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
+
+    let header_lines = vec![
         Line::from(""),
+        Line::from(vec![
+            Span::styled("📋 ", Style::default()),
+            Span::styled(
+                "Review your configuration before initializing",
+                Style::default().fg(Color::White),
+            ),
+        ]),
+    ];
+    let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(header, chunks[0]);
+
+    let content_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .margin(1)
+        .split(chunks[1]);
+
+    let mut summary_lines = vec![
+        Line::from(vec![
+            Span::styled("🔗 ", Style::default()),
+            Span::styled("Repository", Style::default().fg(Color::White)),
+        ]),
         Line::from(Span::styled(
-            "Configuration Summary:",
-            Style::default().add_modifier(Modifier::BOLD),
+            format!("   {}", state.upstream_url),
+            Style::default().fg(Color::DarkGray),
         )),
         Line::from(""),
-        Line::from(format!("Upstream URL: {}", state.upstream_url)),
-        Line::from(format!("Selected Projects: {}", selected.len())),
-        Line::from(""),
+        Line::from(vec![
+            Span::styled("📦 ", Style::default()),
+            Span::styled(
+                format!("Projects ({})", selected.len()),
+                Style::default().fg(Color::White),
+            ),
+        ]),
     ];
 
-    for proj in selected.iter().take(10) {
-        lines.push(Line::from(format!("  • {} @ {}", proj.name, proj.version)));
+    for proj in selected.iter().take(8) {
+        summary_lines.push(Line::from(vec![
+            Span::styled("   ✅ ", Style::default().fg(Color::Green)),
+            Span::styled(proj.name.clone(), Style::default().fg(Color::White)),
+            Span::styled(
+                format!(" @ {}", proj.version),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
     }
 
-    if selected.len() > 10 {
-        lines.push(Line::from(format!(
-            "  ... and {} more",
-            selected.len() - 10
+    if selected.len() > 8 {
+        summary_lines.push(Line::from(Span::styled(
+            format!("   ... and {} more", selected.len() - 8),
+            Style::default().fg(Color::DarkGray),
         )));
     }
 
-    lines.push(Line::from(""));
-    lines.push(Line::from("This will:"));
-    lines.push(Line::from("  • Create belaf/config.toml"));
-    lines.push(Line::from("  • Create belaf/bootstrap.toml"));
-    lines.push(Line::from("  • Update project version files"));
-    lines.push(Line::from("  • Create baseline Git tags"));
-    lines.push(Line::from(""));
-    lines.push(Line::from(
-        "Press 'y' or ENTER to confirm, 'n' or ESC to go back.",
-    ));
-
-    let para = Paragraph::new(lines).block(
+    let summary_block = Paragraph::new(summary_lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .title(" Confirmation "),
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(
+                " Summary ",
+                Style::default().fg(Color::White),
+            )),
     );
+    frame.render_widget(summary_block, content_chunks[0]);
 
-    frame.render_widget(para, area);
+    let action_lines = vec![
+        Line::from(vec![
+            Span::styled("⚡ ", Style::default()),
+            Span::styled("Actions", Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("   📄 ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                "Create belaf/config.toml",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("   📄 ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                "Create belaf/bootstrap.toml",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("   ✏️  ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "Update project version files",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("   🏷️  ", Style::default().fg(Color::Green)),
+            Span::styled(
+                "Create baseline Git tags",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+    ];
+
+    let action_block = Paragraph::new(action_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(
+                " Will Execute ",
+                Style::default().fg(Color::White),
+            )),
+    );
+    frame.render_widget(action_block, content_chunks[1]);
+
+    let hints = Line::from(vec![
+        Span::styled("Enter/y", Style::default().fg(Color::Green)),
+        Span::styled(" confirm  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Backspace/n", Style::default().fg(Color::Yellow)),
+        Span::styled(" go back  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("q", Style::default().fg(Color::Red)),
+        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+    ]);
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(hints_para, chunks[2]);
 }
 
 fn render_processing(frame: &mut Frame, area: Rect) {
-    let lines = vec![
-        Line::from(""),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Processing...",
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(Span::styled(
+            " Processing ",
             Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from("Please wait while we initialize your release configuration."),
+        ));
+
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(35),
+            Constraint::Length(3),
+            Constraint::Length(2),
+            Constraint::Length(6),
+            Constraint::Min(0),
+        ])
+        .split(inner_area);
+
+    let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let frame_idx =
+        (std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            / 100) as usize
+            % spinner_frames.len();
+
+    let spinner_line = Line::from(vec![
+        Span::styled(
+            spinner_frames[frame_idx],
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "  Initializing...",
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]);
+
+    let spinner_para = Paragraph::new(spinner_line).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(spinner_para, chunks[1]);
+
+    let subtitle = Line::from(Span::styled(
+        "Setting up your release configuration",
+        Style::default().fg(Color::DarkGray),
+    ));
+    let subtitle_para = Paragraph::new(subtitle).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(subtitle_para, chunks[2]);
+
+    let steps_lines = vec![
+        Line::from(vec![
+            Span::styled("   📄 ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Creating configuration files...",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("   ✏️  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Updating version files...",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("   🏷️  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Creating Git tags...",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
     ];
 
-    let para =
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Processing "));
-
-    frame.render_widget(para, area);
+    let steps_para = Paragraph::new(steps_lines).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(steps_para, chunks[3]);
 }
 
 fn render_complete(frame: &mut Frame, area: Rect, state: &WizardState) {
-    let message = state
-        .success_message
-        .as_deref()
-        .unwrap_or("Initialization complete!");
+    let is_reconfigure = state.config_exists;
 
-    let lines: Vec<Line> = message.lines().map(|l| Line::from(l.to_string())).collect();
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green))
+        .title(Span::styled(
+            " ✓ Complete ",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ));
 
-    let para = Paragraph::new(lines)
-        .style(Style::default().fg(Color::Green))
-        .block(Block::default().borders(Borders::ALL).title(" Success "));
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
 
-    frame.render_widget(para, area);
-}
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage(30),
+            Constraint::Length(3),
+            Constraint::Length(2),
+            Constraint::Length(8),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
 
-fn render_footer(frame: &mut Frame, area: Rect, state: &WizardState) {
-    let help_text = match state.step {
-        WizardStep::Welcome => "ENTER: Continue  q: Quit",
-        WizardStep::PresetSelection => "↑/↓: Navigate  m: Toggle View  ENTER: Select  ESC: Back",
-        WizardStep::ProjectSelection => {
-            "↑/↓: Navigate  SPACE: Toggle  a: All  n: None  ENTER: Next  ESC: Back"
-        }
-        WizardStep::UpstreamConfig => "TAB: Edit  ENTER: Next  ESC: Back",
-        WizardStep::Confirmation => "y/ENTER: Confirm  n/ESC: Back",
-        WizardStep::Processing => "Please wait...",
-        WizardStep::Complete => "ENTER/q: Exit",
+    let checkmark = vec![
+        Line::from(Span::styled(
+            "✓",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        )),
+    ];
+    let checkmark_para = Paragraph::new(checkmark)
+        .alignment(ratatui::layout::Alignment::Center)
+        .style(Style::default());
+    frame.render_widget(checkmark_para, chunks[0]);
+
+    let title = if is_reconfigure {
+        "Repository Reconfigured!"
+    } else {
+        "Repository Initialized!"
     };
+    let title_line = Line::from(Span::styled(
+        title,
+        Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::BOLD),
+    ));
+    let title_para = Paragraph::new(title_line).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(title_para, chunks[1]);
 
-    let para = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
-        .block(Block::default().borders(Borders::ALL));
+    let subtitle = Line::from(Span::styled(
+        "Your release management is ready to go",
+        Style::default().fg(Color::DarkGray),
+    ));
+    let subtitle_para = Paragraph::new(subtitle).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(subtitle_para, chunks[2]);
 
-    frame.render_widget(para, area);
+    let next_steps = vec![
+        Line::from(""),
+        Line::from(Span::styled(
+            "Next Steps:",
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("  1. ", Style::default().fg(Color::Cyan)),
+            Span::styled("Run ", Style::default().fg(Color::DarkGray)),
+            Span::styled("belaf status", Style::default().fg(Color::White)),
+            Span::styled(" to see project versions", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  2. ", Style::default().fg(Color::Cyan)),
+            Span::styled("Run ", Style::default().fg(Color::DarkGray)),
+            Span::styled("belaf prepare", Style::default().fg(Color::White)),
+            Span::styled(" when ready to release", Style::default().fg(Color::DarkGray)),
+        ]),
+        Line::from(vec![
+            Span::styled("  3. ", Style::default().fg(Color::Cyan)),
+            Span::styled("Edit ", Style::default().fg(Color::DarkGray)),
+            Span::styled("belaf/config.toml", Style::default().fg(Color::White)),
+            Span::styled(" to customize", Style::default().fg(Color::DarkGray)),
+        ]),
+    ];
+    let next_steps_para =
+        Paragraph::new(next_steps).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(next_steps_para, chunks[3]);
+
+    let hints = Line::from(vec![
+        Span::styled("Press ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "Enter",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" or ", Style::default().fg(Color::DarkGray)),
+        Span::styled(
+            "q",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(" to exit", Style::default().fg(Color::DarkGray)),
+    ]);
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    frame.render_widget(hints_para, chunks[5]);
 }
+
