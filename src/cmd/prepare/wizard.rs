@@ -31,7 +31,11 @@ use crate::core::{
     ecosystem::types::EcosystemType,
     git::repository::RepoPathBuf,
     session::AppSession,
-    ui::{markdown, utils::centered_rect},
+    ui::{
+        components::toggle_panel::TogglePanel,
+        markdown,
+        utils::centered_rect,
+    },
     workflow::{
         generate_changelog_entry, BumpChoice, PrepareContext, ProjectCandidate, ProjectSelection,
     },
@@ -173,8 +177,7 @@ struct WizardState {
     loading_changelog: bool,
     loading_frame: usize,
     loading_receiver: Option<Receiver<String>>,
-    show_raw_markdown: bool,
-    toggle_button_area: Option<Rect>,
+    changelog_toggle: TogglePanel,
     changelog_config: ChangelogConfiguration,
     bump_config: BumpConfiguration,
 }
@@ -203,25 +206,18 @@ impl WizardState {
             loading_changelog: false,
             loading_frame: 0,
             loading_receiver: None,
-            show_raw_markdown: false,
-            toggle_button_area: None,
+            changelog_toggle: TogglePanel::default(),
             changelog_config,
             bump_config,
         }
     }
 
     fn toggle_markdown_view(&mut self) {
-        self.show_raw_markdown = !self.show_raw_markdown;
+        self.changelog_toggle.toggle();
     }
 
     fn handle_mouse_click(&mut self, x: u16, y: u16) -> bool {
-        if let Some(area) = self.toggle_button_area {
-            if x >= area.x && x < area.x + area.width && y >= area.y && y < area.y + area.height {
-                self.toggle_markdown_view();
-                return true;
-            }
-        }
-        false
+        self.changelog_toggle.handle_click(x, y)
     }
 
     fn is_loading(&self) -> bool {
@@ -1186,8 +1182,6 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
         changelog_content.push_str(&current_project.existing_changelog);
     }
 
-    let show_raw = state.show_raw_markdown;
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(3), Constraint::Min(0)])
@@ -1196,33 +1190,6 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
     let toggle_area = chunks[0];
     let content_area = chunks[1];
 
-    let rendered_style = if !show_raw {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Cyan)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
-
-    let source_style = if show_raw {
-        Style::default()
-            .fg(Color::Black)
-            .bg(Color::Magenta)
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(Color::Gray)
-    };
-
-    let toggle_line = Line::from(vec![
-        Span::raw("  "),
-        Span::styled(" ◉ Preview ", rendered_style),
-        Span::raw("  "),
-        Span::styled(" ◉ Source ", source_style),
-        Span::raw("  "),
-        Span::styled("(m)", Style::default().fg(Color::DarkGray)),
-    ]);
-
     let title = format!(
         "{} ({} → {})",
         current_project.name(),
@@ -1230,15 +1197,9 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
         new_version
     );
 
-    let toggle_widget = Paragraph::new(toggle_line)
-        .block(Block::default().borders(Borders::ALL).title(title))
-        .alignment(ratatui::layout::Alignment::Center);
+    state.changelog_toggle.render(f, toggle_area, &title);
 
-    f.render_widget(toggle_widget, toggle_area);
-
-    state.toggle_button_area = Some(toggle_area);
-
-    if show_raw {
+    if state.changelog_toggle.is_right() {
         let raw_text = Text::from(changelog_content.clone());
         let paragraph = Paragraph::new(raw_text)
             .block(

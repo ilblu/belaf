@@ -2,7 +2,10 @@ use std::{collections::HashMap, fs, io, io::Write as _};
 
 use anyhow::Result;
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseButton,
+        MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -14,15 +17,16 @@ use ratatui::{
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame, Terminal,
 };
-use tracing::info;
-
 use crate::{
     atry,
     core::{
         git::repository::{PathMatcher, RepoPathBuf, Repository},
         project::DepRequirement,
         session::{AppBuilder, AppSession},
-        ui::utils::centered_rect,
+        ui::{
+            components::toggle_panel::TogglePanel,
+            utils::centered_rect,
+        },
     },
 };
 
@@ -61,6 +65,8 @@ struct WizardState {
     preset_from_cli: bool,
     selected_preset_idx: usize,
     available_presets: Vec<String>,
+    preset_toggle: TogglePanel,
+    config_exists: bool,
 }
 
 impl WizardState {
@@ -68,7 +74,9 @@ impl WizardState {
         use crate::core::embed::EmbeddedPresets;
 
         let preset_from_cli = preset.is_some();
-        let available_presets = EmbeddedPresets::list_presets();
+        let mut available_presets = vec!["default".to_string()];
+        available_presets.extend(EmbeddedPresets::list_presets());
+
         let selected_preset_idx = preset
             .as_ref()
             .and_then(|p| available_presets.iter().position(|x| x == p))
@@ -88,6 +96,8 @@ impl WizardState {
             preset_from_cli,
             selected_preset_idx,
             available_presets,
+            preset_toggle: TogglePanel::default(),
+            config_exists: false,
         }
     }
 
@@ -96,6 +106,10 @@ impl WizardState {
             .get(self.selected_preset_idx)
             .map(|s| s.as_str())
             .unwrap_or("default")
+    }
+
+    fn handle_preset_toggle_click(&mut self, x: u16, y: u16) -> bool {
+        self.preset_toggle.handle_click(x, y)
     }
 
     fn selected_projects(&self) -> Vec<&DetectedProject> {
@@ -128,6 +142,10 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
         Repository::open_from_env();
         ["belaf is not being run from a Git working directory"]
     );
+
+    let mut config_path = repo.resolve_config_dir();
+    config_path.push("config.toml");
+    state.config_exists = config_path.exists();
 
     let belaf_config_matcher = PathMatcher::new_include(RepoPathBuf::new(b"belaf"));
     if let Some(dirty) = atry!(
@@ -174,14 +192,14 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     let result = run_wizard_loop(&mut terminal, &mut state, &repo);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
 
     result
 }
@@ -194,8 +212,20 @@ fn run_wizard_loop(
     loop {
         terminal.draw(|frame| render(frame, state))?;
 
-        if let Event::Key(key) = event::read()? {
-            match (key.code, key.modifiers, state.step) {
+        match event::read()? {
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                ..
+            }) => {
+                if state.step == WizardStep::PresetSelection
+                    && state.handle_preset_toggle_click(column, row)
+                {
+                    continue;
+                }
+            }
+            Event::Key(key) => match (key.code, key.modifiers, state.step) {
                 (KeyCode::Char('c'), KeyModifiers::CONTROL, _)
                 | (KeyCode::Char('q'), _, WizardStep::Welcome) => {
                     return Ok(1);
@@ -228,8 +258,16 @@ fn run_wizard_loop(
                     }
                 }
                 (KeyCode::Enter, _, WizardStep::PresetSelection) => {
-                    state.preset = Some(state.selected_preset_name().to_string());
+                    let selected = state.selected_preset_name().to_string();
+                    state.preset = if selected == "default" {
+                        None
+                    } else {
+                        Some(selected)
+                    };
                     state.step = WizardStep::ProjectSelection;
+                }
+                (KeyCode::Char('m'), _, WizardStep::PresetSelection) => {
+                    state.preset_toggle.toggle();
                 }
                 (KeyCode::Esc, _, WizardStep::PresetSelection) => {
                     state.step = WizardStep::Welcome;
@@ -325,7 +363,8 @@ fn run_wizard_loop(
                 }
 
                 _ => {}
-            }
+            },
+            _ => {}
         }
     }
 }
@@ -348,12 +387,8 @@ fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
 
     cfg_path.push("config.toml");
 
-    if cfg_path.exists() {
-        info!("config file already exists, skipping");
-    } else {
-        let mut f = fs::File::create(&cfg_path)?;
-        f.write_all(cfg_text.as_bytes())?;
-    }
+    let mut f = fs::File::create(&cfg_path)?;
+    f.write_all(cfg_text.as_bytes())?;
 
     let mut sess = AppSession::initialize_default()?;
 
@@ -414,13 +449,20 @@ fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
 
     repo.create_baseline_tag()?;
 
+    let action = if state.config_exists {
+        "reconfigured"
+    } else {
+        "initialized"
+    };
+
     Ok(format!(
-        "Successfully initialized {} project(s)!\n\nNext steps:\n1. Review the changes\n2. Add belaf/ to your repository\n3. Commit the changes\n4. Try `belaf status`",
+        "Successfully {} {} project(s)!\n\nNext steps:\n1. Review the changes\n2. Commit the changes\n3. Try `belaf status`",
+        action,
         selected_names.len()
     ))
 }
 
-fn render(frame: &mut Frame, state: &WizardState) {
+fn render(frame: &mut Frame, state: &mut WizardState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -465,54 +507,290 @@ fn render_header(frame: &mut Frame, area: Rect, state: &WizardState) {
 }
 
 fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
-    let mut lines = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Welcome to Clikd Release Management!",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from("This wizard will help you initialize release management for your repository."),
-        Line::from(""),
-        Line::from(format!(
-            "Detected {} project(s) in your repository.",
-            state.projects.len()
-        )),
-        Line::from(""),
-    ];
+    let is_reconfigure = state.config_exists;
 
-    if let Some(ref warning) = state.dirty_warning {
-        lines.push(Line::from(Span::styled(
-            warning.clone(),
-            Style::default().fg(Color::Yellow),
+    let border_color = if is_reconfigure {
+        Color::Red
+    } else {
+        Color::Cyan
+    };
+
+    let logo_color = if is_reconfigure {
+        Color::Red
+    } else {
+        Color::Cyan
+    };
+
+    let project_count = state.projects.len();
+    let project_text = if project_count == 1 {
+        "1 project".to_string()
+    } else {
+        format!("{} projects", project_count)
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(if is_reconfigure {
+            Span::styled(
+                " ⚠ Reconfigure ",
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            )
+        } else {
+            Span::styled(
+                " Welcome ",
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            )
+        });
+
+    let inner_area = block.inner(area);
+    frame.render_widget(block, area);
+
+    if is_reconfigure {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(8),
+                Constraint::Length(3),
+                Constraint::Length(3),
+                Constraint::Min(0),
+                Constraint::Length(3),
+            ])
+            .margin(1)
+            .split(inner_area);
+
+        let logo = vec![
+            Line::from(Span::styled(
+                "   ██████╗██╗     ██╗██╗  ██╗██████╗ ",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "  ██╔════╝██║     ██║██║ ██╔╝██╔══██╗",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "  ██║     ██║     ██║█████╔╝ ██║  ██║",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "  ██║     ██║     ██║██╔═██╗ ██║  ██║",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "  ╚██████╗███████╗██║██║  ██╗██████╔╝",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "   ╚═════╝╚══════╝╚═╝╚═╝  ╚═╝╚═════╝ ",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "         Release Management",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        let logo_para = Paragraph::new(logo).alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(logo_para, chunks[0]);
+
+        let warning_header = vec![
+            Line::from(""),
+            Line::from(vec![Span::styled(
+                "⚠️  RECONFIGURE MODE  ⚠️",
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            )]),
+        ];
+        let warning_para =
+            Paragraph::new(warning_header).alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(warning_para, chunks[1]);
+
+        let warning_text = vec![
+            Line::from(Span::styled(
+                "A configuration already exists in this repo.",
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(Span::styled(
+                "Continuing will overwrite your settings.",
+                Style::default().fg(Color::Yellow),
+            )),
+        ];
+        let warning_text_para =
+            Paragraph::new(warning_text).alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(warning_text_para, chunks[2]);
+
+        let info_lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("📦 ", Style::default()),
+                Span::styled("Detected: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    project_text,
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+        ];
+        let info_para = Paragraph::new(info_lines).alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(info_para, chunks[3]);
+
+        let action_text = vec![Line::from(vec![
+            Span::styled("Press ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "ENTER",
+                Style::default()
+                    .fg(Color::Red)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" to reconfigure  •  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Q",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" to quit", Style::default().fg(Color::DarkGray)),
+        ])];
+        let action_para =
+            Paragraph::new(action_text).alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(action_para, chunks[4]);
+    } else {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(8),
+                Constraint::Min(0),
+                Constraint::Length(3),
+            ])
+            .margin(1)
+            .split(inner_area);
+
+        let logo = vec![
+            Line::from(Span::styled(
+                "   ██████╗██╗     ██╗██╗  ██╗██████╗ ",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "  ██╔════╝██║     ██║██║ ██╔╝██╔══██╗",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "  ██║     ██║     ██║█████╔╝ ██║  ██║",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "  ██║     ██║     ██║██╔═██╗ ██║  ██║",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "  ╚██████╗███████╗██║██║  ██╗██████╔╝",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "   ╚═════╝╚══════╝╚═╝╚═╝  ╚═╝╚═════╝ ",
+                Style::default().fg(logo_color),
+            )),
+            Line::from(Span::styled(
+                "         Release Management",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ];
+        let logo_para = Paragraph::new(logo).alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(logo_para, chunks[0]);
+
+        let mut info_lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("📦 ", Style::default()),
+                Span::styled("Detected: ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    project_text,
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ]),
+            Line::from(""),
+        ];
+
+        if let Some(ref warning) = state.dirty_warning {
+            info_lines.push(Line::from(vec![
+                Span::styled("⚠️  ", Style::default()),
+                Span::styled(warning.clone(), Style::default().fg(Color::Yellow)),
+            ]));
+            info_lines.push(Line::from(""));
+        }
+
+        if let Some(ref error) = state.error_message {
+            info_lines.push(Line::from(vec![
+                Span::styled("❌ ", Style::default()),
+                Span::styled(error.clone(), Style::default().fg(Color::Red)),
+            ]));
+            info_lines.push(Line::from(""));
+        }
+
+        info_lines.push(Line::from(""));
+        info_lines.push(Line::from(Span::styled(
+            "This wizard will guide you through:",
+            Style::default().fg(Color::White),
         )));
-        lines.push(Line::from(""));
+        info_lines.push(Line::from(vec![
+            Span::styled("  → ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                "Changelog preset selection",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        info_lines.push(Line::from(vec![
+            Span::styled("  → ", Style::default().fg(Color::Cyan)),
+            Span::styled(
+                "Project configuration",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+        info_lines.push(Line::from(vec![
+            Span::styled("  → ", Style::default().fg(Color::Cyan)),
+            Span::styled("Repository setup", Style::default().fg(Color::DarkGray)),
+        ]));
+
+        let info_para = Paragraph::new(info_lines).alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(info_para, chunks[1]);
+
+        let action_text = vec![Line::from(vec![
+            Span::styled("Press ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "ENTER",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" to start  •  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                "Q",
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(" to quit", Style::default().fg(Color::DarkGray)),
+        ])];
+        let action_para =
+            Paragraph::new(action_text).alignment(ratatui::layout::Alignment::Center);
+        frame.render_widget(action_para, chunks[2]);
     }
-
-    if let Some(ref error) = state.error_message {
-        lines.push(Line::from(Span::styled(
-            error.clone(),
-            Style::default().fg(Color::Red),
-        )));
-        lines.push(Line::from(""));
-    }
-
-    lines.push(Line::from("Press ENTER to continue or 'q' to quit."));
-
-    let para =
-        Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Welcome "));
-
-    frame.render_widget(para, area);
 }
 
-fn render_preset_selection(frame: &mut Frame, area: Rect, state: &WizardState) {
-    use crate::core::embed::EmbeddedPresets;
+fn render_preset_selection(frame: &mut Frame, area: Rect, state: &mut WizardState) {
+    use crate::core::embed::{EmbeddedConfig, EmbeddedPresets};
+    use ratatui::widgets::{Padding, Wrap};
 
-    let chunks = Layout::default()
+    let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
         .split(area);
 
     let items: Vec<ListItem> = state
@@ -521,10 +799,10 @@ fn render_preset_selection(frame: &mut Frame, area: Rect, state: &WizardState) {
         .enumerate()
         .map(|(idx, name)| {
             let description = match name.as_str() {
-                "default" => "Standard Conventional Commits format",
-                "keepachangelog" => "Keep a Changelog specification",
-                "flat" => "What's Changed - no grouping",
-                "minimal" => "Version + Date + Commits only",
+                "default" => "Standard Conventional Commits",
+                "keepachangelog" => "Keep a Changelog spec",
+                "flat" => "What's Changed - flat list",
+                "minimal" => "Version + Date only",
                 _ => "Custom preset",
             };
             let text = format!("{}\n  {}", name, description);
@@ -546,28 +824,121 @@ fn render_preset_selection(frame: &mut Frame, area: Rect, state: &WizardState) {
             .title(" Select Changelog Preset "),
     );
 
-    frame.render_widget(list, chunks[0]);
+    frame.render_widget(list, main_chunks[0]);
 
-    let preview_content = EmbeddedPresets::get_preset_string(state.selected_preset_name())
-        .map(|content| {
-            let lines: Vec<&str> = content.lines().take(30).collect();
-            if content.lines().count() > 30 {
-                format!("{}\n\n... (truncated)", lines.join("\n"))
-            } else {
-                lines.join("\n")
-            }
-        })
-        .unwrap_or_else(|_| "Preview not available".to_string());
+    let right_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .split(main_chunks[1]);
 
-    let preview = Paragraph::new(preview_content)
-        .style(Style::default().fg(Color::DarkGray))
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Preview (cliff.toml) "),
-        );
+    let preset_name = state.selected_preset_name().to_string();
+    state.preset_toggle.render(frame, right_chunks[0], &preset_name);
 
-    frame.render_widget(preview, chunks[1]);
+    let config_content = if preset_name == "default" {
+        EmbeddedConfig::get_config_string().unwrap_or_else(|_| "Config not available".to_string())
+    } else {
+        EmbeddedPresets::get_preset_string(&preset_name)
+            .unwrap_or_else(|_| "Preset not available".to_string())
+    };
+
+    if state.preset_toggle.is_right() {
+        let source_text = config_content
+            .lines()
+            .take(50)
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let paragraph = Paragraph::new(source_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" TOML Source ")
+                    .padding(Padding::horizontal(1)),
+            )
+            .wrap(Wrap { trim: false })
+            .style(Style::default().fg(Color::Rgb(180, 180, 180)));
+        frame.render_widget(paragraph, right_chunks[1]);
+    } else {
+        let example_changelog = generate_preset_example(&preset_name);
+        let markdown_text = crate::core::ui::markdown::render_markdown(&example_changelog);
+
+        let paragraph = Paragraph::new(markdown_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Changelog Preview ")
+                    .padding(Padding::horizontal(1)),
+            )
+            .wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, right_chunks[1]);
+    }
+}
+
+fn generate_preset_example(preset_name: &str) -> String {
+    match preset_name {
+        "default" => r#"## [1.2.0] - 2025-01-15
+
+### ✨ Features
+
+- **cli:** Add `--verbose` flag for detailed output
+- **api:** Implement rate limiting for requests
+
+### 🐛 Bug Fixes
+
+- **auth:** Resolve token refresh race condition
+- **parser:** Handle unicode characters in paths
+
+### ⚡ Performance
+
+- Optimize database queries
+
+### 📚 Documentation
+
+- Update installation guide
+"#
+        .to_string(),
+        "keepachangelog" => r#"## [1.2.0] - 2025-01-15
+
+### Added
+
+- Add `--verbose` flag for detailed output
+- Implement rate limiting for requests
+
+### Fixed
+
+- Resolve token refresh race condition
+- Handle unicode characters in paths
+
+### Changed
+
+- Optimize database queries
+- Update installation guide
+"#
+        .to_string(),
+        "flat" => r#"## What's Changed
+
+* Add `--verbose` flag for detailed output by @nyxb
+* Implement rate limiting for requests by @nyxb
+* Resolve token refresh race condition by @nyxb
+* Handle unicode characters in paths by @nyxb
+* Optimize database queries by @nyxb
+* Update installation guide by @nyxb
+
+**Full Changelog**: https://github.com/user/repo/compare/v1.1.0...v1.2.0
+"#
+        .to_string(),
+        "minimal" => r#"## 1.2.0 (2025-01-15)
+
+- Add `--verbose` flag for detailed output
+- Implement rate limiting for requests
+- Resolve token refresh race condition
+- Handle unicode characters in paths
+- Optimize database queries
+- Update installation guide
+"#
+        .to_string(),
+        _ => "Preview not available for this preset.".to_string(),
+    }
 }
 
 fn render_project_selection(frame: &mut Frame, area: Rect, state: &WizardState) {
@@ -723,7 +1094,7 @@ fn render_complete(frame: &mut Frame, area: Rect, state: &WizardState) {
 fn render_footer(frame: &mut Frame, area: Rect, state: &WizardState) {
     let help_text = match state.step {
         WizardStep::Welcome => "ENTER: Continue  q: Quit",
-        WizardStep::PresetSelection => "↑/↓: Navigate  ENTER: Select  ESC: Back",
+        WizardStep::PresetSelection => "↑/↓: Navigate  m: Toggle View  ENTER: Select  ESC: Back",
         WizardStep::ProjectSelection => {
             "↑/↓: Navigate  SPACE: Toggle  a: All  n: None  ENTER: Next  ESC: Back"
         }
