@@ -620,8 +620,8 @@ edition = "2021"
         serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
 
     assert_eq!(
-        manifest["schema_version"], "1.0",
-        "Schema version should be 1.0"
+        manifest["schema_version"], "1.2",
+        "Schema version should be 1.2"
     );
     assert!(
         manifest["created_at"].is_string(),

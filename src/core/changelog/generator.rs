@@ -336,6 +336,38 @@ impl Changelog {
         Ok(())
     }
 
+    pub fn add_github_metadata_sync(&mut self, ref_name: Option<&str>) -> Result<()> {
+        if self.remote.is_none() || self.github_token.is_none() {
+            log::debug!("Remote or GitHub token not configured, skipping GitHub metadata");
+            return Ok(());
+        }
+
+        let future = self.add_github_metadata(ref_name);
+
+        let result = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+            Err(_) => {
+                let rt = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt,
+                    Err(e) => {
+                        log::warn!("Failed to create tokio runtime for GitHub metadata: {}", e);
+                        return Ok(());
+                    }
+                };
+                rt.block_on(future)
+            }
+        };
+
+        if let Err(e) = result {
+            log::warn!(
+                "Failed to fetch GitHub metadata (continuing without it): {}",
+                e
+            );
+        }
+
+        Ok(())
+    }
+
     pub fn bump_version(&mut self) -> Result<Option<String>> {
         if let Some(ref mut last_release) = self.releases.iter_mut().next() {
             if last_release.version.is_none() {

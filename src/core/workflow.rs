@@ -13,8 +13,9 @@
 //! a PR review process before being finalized by a GitHub App.
 
 use anyhow::{Context, Result};
+use secrecy::SecretString;
 use std::collections::HashMap;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::core::{
     bump::{self, BumpConfig, BumpRecommendation},
@@ -24,7 +25,7 @@ use crate::core::{
     git::repository::{ChangeList, RepoPathBuf, Repository},
     github::{client::GitHubInformation, pr},
     graph::GraphQueryBuilder,
-    manifest::{ProjectRelease, ReleaseManifest, MANIFEST_DIR},
+    manifest::{ProjectRelease, ReleaseManifest, ReleaseStatistics, MANIFEST_DIR},
     project::ProjectId,
     session::AppSession,
 };
@@ -79,6 +80,12 @@ pub struct ProjectSelection {
     pub bump_choice: BumpChoice,
     pub cached_changelog: Option<String>,
 }
+
+type ChangelogGenerationResult = (
+    Vec<RepoPathBuf>,
+    HashMap<String, String>,
+    HashMap<String, Vec<Commit>>,
+);
 
 pub struct PrepareContext<'a> {
     pub sess: &'a mut AppSession,
@@ -170,17 +177,7 @@ impl<'a> PrepareContext<'a> {
             let commits: Vec<Commit> = history
                 .commits()
                 .into_iter()
-                .filter_map(|cid| {
-                    self.sess
-                        .repo
-                        .get_commit_summary(*cid)
-                        .ok()
-                        .map(|msg| Commit {
-                            id: cid.to_string(),
-                            message: msg,
-                            ..Default::default()
-                        })
-                })
+                .filter_map(|cid| self.sess.repo.get_commit_details(*cid).ok())
                 .collect();
 
             let current_version = proj.version.to_string();
@@ -347,13 +344,14 @@ impl<'a> ReleasePipeline<'a> {
             .context("failed to update project files")?;
 
         info!("generating changelogs...");
-        let (changelog_paths, changelog_contents) = self.generate_changelogs(&projects)?;
+        let (changelog_paths, changelog_contents, processed_commits) =
+            self.generate_changelogs(&projects)?;
 
         self.print_modified_files(&changes, &changelog_paths);
 
         info!("creating release manifest...");
         let (_manifest, manifest_filename, manifest_repo_path) =
-            self.create_manifest(&projects, &changelog_contents)?;
+            self.create_manifest(&projects, &changelog_contents, &processed_commits)?;
 
         info!("creating release commit...");
         let all_changed_paths =
@@ -375,13 +373,21 @@ impl<'a> ReleasePipeline<'a> {
     fn generate_changelogs(
         &self,
         projects: &[SelectedProject],
-    ) -> Result<(Vec<RepoPathBuf>, HashMap<String, String>)> {
+    ) -> Result<ChangelogGenerationResult> {
         let mut changelog_paths: Vec<RepoPathBuf> = Vec::new();
         let mut changelog_contents: HashMap<String, String> = HashMap::new();
+        let mut processed_commits_map: HashMap<String, Vec<Commit>> = HashMap::new();
 
         let git_config = GitConfig::from_user_config(&self.sess.changelog_config);
         let changelog_config = ChangelogConfig::from_user_config(&self.sess.changelog_config);
         let bump_config = BumpConfig::from_user_config(&self.sess.bump_config);
+
+        let github_remote = extract_github_remote(&self.sess.repo);
+        let github_token = load_github_token();
+
+        if github_remote.is_some() && github_token.is_some() {
+            debug!("GitHub metadata will be fetched for changelog generation");
+        }
 
         for project in projects {
             let params = ChangelogGenerationParams {
@@ -395,10 +401,14 @@ impl<'a> ReleasePipeline<'a> {
                 bump_config: &bump_config,
                 write_to_file: true,
                 custom_output_path: None,
+                github_owner: github_remote.as_ref().map(|r| r.owner.as_str()),
+                github_repo: github_remote.as_ref().map(|r| r.repo.as_str()),
+                github_token: github_token.clone(),
             };
             let result = generate_and_write_project_changelog(&params)?;
 
             changelog_contents.insert(project.name.clone(), result.content);
+            processed_commits_map.insert(project.name.clone(), result.processed_commits);
 
             if let Some(path) = result.path {
                 changelog_paths.push(path);
@@ -410,7 +420,7 @@ impl<'a> ReleasePipeline<'a> {
             }
         }
 
-        Ok((changelog_paths, changelog_contents))
+        Ok((changelog_paths, changelog_contents, processed_commits_map))
     }
 
     fn print_modified_files(&self, changes: &ChangeList, changelog_paths: &[RepoPathBuf]) {
@@ -431,6 +441,7 @@ impl<'a> ReleasePipeline<'a> {
         &mut self,
         projects: &[SelectedProject],
         changelog_contents: &HashMap<String, String>,
+        processed_commits: &HashMap<String, Vec<Commit>>,
     ) -> Result<(ReleaseManifest, String, RepoPathBuf)> {
         let git_user = self
             .sess
@@ -438,6 +449,8 @@ impl<'a> ReleasePipeline<'a> {
             .get_signature()
             .map(|sig| sig.name().unwrap_or("unknown").to_string())
             .unwrap_or_else(|_| "belaf-ci".to_string());
+
+        let github_base_url = self.get_github_compare_base_url();
 
         let mut manifest = ReleaseManifest::new(self.base_branch.clone(), git_user);
 
@@ -447,7 +460,16 @@ impl<'a> ReleasePipeline<'a> {
                 .cloned()
                 .unwrap_or_default();
 
-            let release = ProjectRelease::new(
+            let commits = processed_commits
+                .get(&project.name)
+                .map(|c| c.as_slice())
+                .unwrap_or(&project.commits);
+
+            let contributors = Self::extract_contributors(commits);
+            let first_time_contributors = Self::extract_first_time_contributors(commits);
+            let statistics = Self::extract_commit_statistics(commits);
+
+            let mut release = ProjectRelease::new(
                 project.name.clone(),
                 project.ecosystem.display_name().to_string(),
                 project.old_version.clone(),
@@ -455,7 +477,14 @@ impl<'a> ReleasePipeline<'a> {
                 project.bump_type.clone(),
                 changelog_content,
                 project.prefix.clone(),
-            );
+            )
+            .with_contributors(contributors)
+            .with_first_time_contributors(first_time_contributors)
+            .with_statistics(statistics);
+
+            if let Some(base_url) = &github_base_url {
+                release = release.with_compare_url(base_url);
+            }
 
             manifest.add_release(release);
         }
@@ -542,6 +571,94 @@ impl<'a> ReleasePipeline<'a> {
             if projects.len() == 1 { "" } else { "s" }
         );
         info!("pull request created: {}", pr_url);
+    }
+
+    fn get_github_compare_base_url(&self) -> Option<String> {
+        self.sess.repo.upstream_url().ok().and_then(|url| {
+            let url = url
+                .trim_end_matches(".git")
+                .replace("git@github.com:", "https://github.com/");
+            if url.contains("github.com") {
+                Some(url)
+            } else {
+                None
+            }
+        })
+    }
+
+    fn extract_contributors(commits: &[Commit]) -> Vec<String> {
+        let mut contributors: Vec<String> = commits
+            .iter()
+            .filter_map(|c| c.author.name.clone())
+            .collect();
+        contributors.sort();
+        contributors.dedup();
+        contributors
+    }
+
+    fn extract_first_time_contributors(commits: &[Commit]) -> Vec<String> {
+        let mut first_timers: Vec<String> = commits
+            .iter()
+            .filter_map(|c| {
+                c.remote.as_ref().and_then(|r| {
+                    if r.is_first_time {
+                        r.username.clone()
+                    } else {
+                        None
+                    }
+                })
+            })
+            .collect();
+        first_timers.sort();
+        first_timers.dedup();
+        first_timers
+    }
+
+    fn extract_commit_statistics(commits: &[Commit]) -> ReleaseStatistics {
+        let commit_count = commits.len();
+
+        let breaking_changes_count = commits
+            .iter()
+            .filter(|c| c.conv.as_ref().map(|conv| conv.breaking).unwrap_or(false))
+            .count();
+
+        let features_count = commits
+            .iter()
+            .filter(|c| {
+                c.conv
+                    .as_ref()
+                    .map(|conv| conv.type_ == "feat")
+                    .unwrap_or(false)
+            })
+            .count();
+
+        let fixes_count = commits
+            .iter()
+            .filter(|c| {
+                c.conv
+                    .as_ref()
+                    .map(|conv| conv.type_ == "fix")
+                    .unwrap_or(false)
+            })
+            .count();
+
+        let pr_count_value = commits
+            .iter()
+            .filter(|c| c.remote.as_ref().and_then(|r| r.pr_number).is_some())
+            .count();
+
+        ReleaseStatistics {
+            commit_count,
+            days_since_last_release: None,
+            breaking_changes_count,
+            features_count,
+            fixes_count,
+            pr_count: if pr_count_value > 0 {
+                Some(pr_count_value)
+            } else {
+                None
+            },
+        }
     }
 }
 
@@ -641,11 +758,39 @@ pub fn generate_changelog_entry(
     String::from_utf8(output).context("changelog contains invalid UTF-8")
 }
 
+pub struct GitHubRemoteInfo {
+    pub owner: String,
+    pub repo: String,
+}
+
+pub fn extract_github_remote(repo: &Repository) -> Option<GitHubRemoteInfo> {
+    let upstream_url = repo.upstream_url().ok()?;
+    let parsed = git_url_parse::GitUrl::parse(&upstream_url).ok()?;
+    let provider: git_url_parse::types::provider::GenericProvider = parsed.provider_info().ok()?;
+
+    Some(GitHubRemoteInfo {
+        owner: provider.owner().to_string(),
+        repo: provider.repo().to_string(),
+    })
+}
+
+pub fn load_github_token() -> Option<SecretString> {
+    crate::core::env::require_var("GITHUB_TOKEN")
+        .ok()
+        .map(SecretString::from)
+        .or_else(|| {
+            crate::core::auth::token::load_token()
+                .ok()
+                .map(SecretString::from)
+        })
+}
+
 #[derive(Debug)]
 pub struct ChangelogResult {
     pub content: String,
     pub path: Option<RepoPathBuf>,
     pub has_user_changes: bool,
+    pub processed_commits: Vec<Commit>,
 }
 
 pub struct ChangelogGenerationParams<'a> {
@@ -659,6 +804,9 @@ pub struct ChangelogGenerationParams<'a> {
     pub bump_config: &'a BumpConfig,
     pub write_to_file: bool,
     pub custom_output_path: Option<&'a str>,
+    pub github_owner: Option<&'a str>,
+    pub github_repo: Option<&'a str>,
+    pub github_token: Option<secrecy::SecretString>,
 }
 
 pub fn generate_and_write_project_changelog(
@@ -686,6 +834,7 @@ pub fn generate_and_write_project_changelog(
             content,
             path: None,
             has_user_changes: false,
+            processed_commits: Vec::new(),
         });
     }
 
@@ -703,15 +852,24 @@ pub fn generate_and_write_project_changelog(
         changelog_config.clone(),
         bump_config.clone(),
     )?;
-    changelog.process_commits()?;
 
-    let processed_commits = changelog
+    if let (Some(owner), Some(repo_name)) = (params.github_owner, params.github_repo) {
+        changelog = changelog.with_remote(owner.to_string(), repo_name.to_string());
+        if let Some(token) = params.github_token.clone() {
+            changelog = changelog.with_github_token(token);
+        }
+    }
+
+    changelog.process_commits()?;
+    changelog.add_github_metadata_sync(version)?;
+
+    let commit_list = changelog
         .releases
         .first()
-        .map(|r| r.commits.len())
-        .unwrap_or(0);
+        .map(|r| r.commits.clone())
+        .unwrap_or_default();
 
-    if processed_commits == 0 {
+    if commit_list.is_empty() {
         let now = time::OffsetDateTime::now_utc();
         let version_str = version.unwrap_or("Unreleased");
         let content = format!(
@@ -723,6 +881,7 @@ pub fn generate_and_write_project_changelog(
             content,
             path: None,
             has_user_changes: false,
+            processed_commits: Vec::new(),
         });
     }
 
@@ -736,6 +895,7 @@ pub fn generate_and_write_project_changelog(
             content: generated_content,
             path: None,
             has_user_changes: true,
+            processed_commits: commit_list.clone(),
         });
     }
 
@@ -789,5 +949,6 @@ pub fn generate_and_write_project_changelog(
         content: generated_content,
         path: Some(changelog_repo_path),
         has_user_changes: true,
+        processed_commits: commit_list,
     })
 }

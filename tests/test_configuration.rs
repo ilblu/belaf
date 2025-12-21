@@ -1014,6 +1014,80 @@ scope_matching = "smart"
 }
 
 #[test]
+fn test_changelog_include_contributors() {
+    let repo = TestRepo::new();
+    setup_basic_cargo_project(&repo);
+
+    let _ = repo.run_belaf_command(&["init", "--force"]);
+
+    let config = r##"[repo]
+upstream_urls = []
+
+[repo.analysis]
+commit_cache_size = 512
+tree_cache_size = 3
+
+[changelog]
+header = "# Changelog"
+body = """
+## {{ version }}
+{% for group, group_commits in commits | group_by(attribute="group") %}
+### {{ group }}
+{% for commit in group_commits %}
+- {{ commit.message }}{% if commit.author.name %} by {{ commit.author.name }}{% endif %}
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+output = "CHANGELOG.md"
+conventional_commits = true
+protect_breaking_commits = true
+filter_unconventional = false
+filter_commits = false
+sort_commits = "oldest"
+include_breaking_section = false
+include_contributors = true
+include_statistics = false
+emoji_groups = false
+
+[[changelog.commit_parsers]]
+message = "^feat"
+group = "Features"
+
+[[changelog.commit_parsers]]
+message = "^fix"
+group = "Bug Fixes"
+
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = true
+initial_tag = "0.1.0"
+
+[commit_attribution]
+strategy = "scope_first"
+scope_matching = "smart"
+"##;
+    write_custom_config(&repo, config);
+
+    repo.write_file("src/feat1.rs", "pub fn feat1() {}");
+    repo.commit("feat: first feature");
+
+    let output = repo.run_belaf_command(&["changelog", "--preview"]);
+
+    assert!(
+        output.status.success(),
+        "Command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(" by "),
+        "Changelog should contain author names when commit.author.name is available, got: {stdout}"
+    );
+}
+
+#[test]
 fn test_changelog_emoji_groups() {
     let repo = TestRepo::new();
     setup_basic_cargo_project(&repo);

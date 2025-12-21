@@ -871,6 +871,12 @@ impl Repository {
         }
     }
 
+    /// Get full commit details including author and committer information.
+    pub fn get_commit_details(&self, cid: CommitId) -> Result<crate::core::changelog::Commit> {
+        let commit = self.repo.find_commit(cid.0)?;
+        Ok(crate::core::changelog::Commit::from(&commit))
+    }
+
     /// Update the specified files in the working tree to reset them to what
     /// HEAD says they should be.
     pub fn hard_reset_changes(&self, changes: &ChangeList) -> Result<()> {

@@ -8,7 +8,10 @@ use crate::core::{
     ecosystem::types::EcosystemType,
     graph::GraphQueryBuilder,
     session::AppSession,
-    workflow::{generate_and_write_project_changelog, ChangelogGenerationParams},
+    workflow::{
+        extract_github_remote, generate_and_write_project_changelog, load_github_token,
+        ChangelogGenerationParams,
+    },
 };
 
 pub fn run(
@@ -42,6 +45,9 @@ pub fn run(
     let changelog_config = ChangelogConfig::from_user_config(&sess.changelog_config);
     let bump_config = BumpConfig::from_user_config(&sess.bump_config);
 
+    let github_remote = extract_github_remote(&sess.repo);
+    let github_token = load_github_token();
+
     let mut processed_count = 0;
 
     for ident in &idents {
@@ -67,13 +73,7 @@ pub fn run(
         let commits: Vec<Commit> = history
             .commits()
             .into_iter()
-            .filter_map(|cid| {
-                sess.repo.get_commit_summary(*cid).ok().map(|msg| Commit {
-                    id: cid.to_string(),
-                    message: msg,
-                    ..Default::default()
-                })
-            })
+            .filter_map(|cid| sess.repo.get_commit_details(*cid).ok())
             .collect();
 
         if commits.is_empty() {
@@ -123,6 +123,9 @@ pub fn run(
             bump_config: &bump_config,
             write_to_file,
             custom_output_path: output_path.as_deref(),
+            github_owner: github_remote.as_ref().map(|r| r.owner.as_str()),
+            github_repo: github_remote.as_ref().map(|r| r.repo.as_str()),
+            github_token: github_token.clone(),
         };
         let result = generate_and_write_project_changelog(&params)?;
 

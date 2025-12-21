@@ -16,7 +16,7 @@ use time::OffsetDateTime;
 use tracing::warn;
 use uuid::Uuid;
 
-const SCHEMA_VERSION: &str = "1.0";
+const SCHEMA_VERSION: &str = "1.2";
 pub const MANIFEST_DIR: &str = "belaf/releases";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -26,6 +26,25 @@ pub struct ReleaseManifest {
     pub created_by: String,
     pub base_branch: String,
     pub releases: Vec<ProjectRelease>,
+}
+
+fn is_zero(n: &usize) -> bool {
+    *n == 0
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ReleaseStatistics {
+    pub commit_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub days_since_last_release: Option<i64>,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub breaking_changes_count: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub features_count: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub fixes_count: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_count: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +57,18 @@ pub struct ProjectRelease {
     pub changelog: String,
     pub tag_name: String,
     pub prefix: String,
+    #[serde(default)]
+    pub is_prerelease: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub previous_tag: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compare_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contributors: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub first_time_contributors: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub statistics: Option<ReleaseStatistics>,
 }
 
 impl ReleaseManifest {
@@ -111,6 +142,16 @@ impl ProjectRelease {
             format!("{prefix}/v{new_version}")
         };
 
+        let previous_tag = if previous_version.is_empty() {
+            None
+        } else if prefix.is_empty() {
+            Some(format!("v{previous_version}"))
+        } else {
+            Some(format!("{prefix}/v{previous_version}"))
+        };
+
+        let is_prerelease = Self::detect_prerelease(&new_version);
+
         Self {
             name,
             ecosystem,
@@ -120,7 +161,48 @@ impl ProjectRelease {
             changelog,
             tag_name,
             prefix,
+            is_prerelease,
+            previous_tag,
+            compare_url: None,
+            contributors: Vec::new(),
+            first_time_contributors: Vec::new(),
+            statistics: None,
         }
+    }
+
+    fn detect_prerelease(version: &str) -> bool {
+        let prerelease_markers = ["-alpha", "-beta", "-rc", "-dev", "-pre", "-snapshot"];
+        let version_lower = version.to_lowercase();
+        prerelease_markers
+            .iter()
+            .any(|marker| version_lower.contains(marker))
+    }
+
+    pub fn with_compare_url(mut self, base_url: &str) -> Self {
+        if let Some(prev_tag) = &self.previous_tag {
+            self.compare_url = Some(format!(
+                "{}/compare/{}...{}",
+                base_url.trim_end_matches('/'),
+                prev_tag,
+                self.tag_name
+            ));
+        }
+        self
+    }
+
+    pub fn with_contributors(mut self, contributors: Vec<String>) -> Self {
+        self.contributors = contributors;
+        self
+    }
+
+    pub fn with_first_time_contributors(mut self, contributors: Vec<String>) -> Self {
+        self.first_time_contributors = contributors;
+        self
+    }
+
+    pub fn with_statistics(mut self, statistics: ReleaseStatistics) -> Self {
+        self.statistics = Some(statistics);
+        self
     }
 }
 
@@ -131,7 +213,7 @@ mod tests {
     #[test]
     fn test_manifest_new_has_correct_schema_version() {
         let manifest = ReleaseManifest::new("main".to_string(), "test-user".to_string());
-        assert_eq!(manifest.schema_version, "1.0");
+        assert_eq!(manifest.schema_version, "1.2");
     }
 
     #[test]
@@ -181,7 +263,7 @@ mod tests {
 
         let json = manifest.to_json().expect("serialization should succeed");
 
-        assert!(json.contains("\"schema_version\": \"1.0\""));
+        assert!(json.contains("\"schema_version\": \"1.2\""));
         assert!(json.contains("\"base_branch\": \"develop\""));
         assert!(json.contains("\"created_by\": \"ci-bot\""));
         assert!(json.contains("\"name\": \"test-pkg\""));
