@@ -861,7 +861,7 @@ pub fn generate_and_write_project_changelog(
     }
 
     changelog.process_commits()?;
-    changelog.add_github_metadata_sync(version)?;
+    changelog.add_github_metadata_sync(None)?;
 
     let commit_list = changelog
         .releases
