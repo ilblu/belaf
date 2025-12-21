@@ -168,7 +168,6 @@ impl TuiState {
     fn render(&self, frame: &mut ratatui::Frame) {
         let outer_block = Block::default()
             .title(" 📊 Release Status ")
-            .title_alignment(Alignment::Center)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Cyan));
 
@@ -177,11 +176,28 @@ impl TuiState {
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([Constraint::Min(0), Constraint::Length(2)])
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(0),
+                Constraint::Length(2),
+            ])
             .split(inner_area);
 
-        self.render_projects(frame, chunks[0]);
-        self.render_hints(frame, chunks[1]);
+        let header_lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("📦 ", Style::default()),
+                Span::styled(
+                    "View project versions and release information",
+                    Style::default().fg(Color::White),
+                ),
+            ]),
+        ];
+        let header = Paragraph::new(header_lines).alignment(Alignment::Center);
+        frame.render_widget(header, chunks[0]);
+
+        self.render_projects(frame, chunks[1]);
+        self.render_hints(frame, chunks[2]);
 
         if self.show_help {
             self.render_help_popup(frame);
@@ -269,6 +285,7 @@ impl TuiState {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .margin(1)
             .split(area);
 
         self.render_project_list(frame, chunks[0]);

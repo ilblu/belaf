@@ -220,7 +220,6 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<i32>
 fn ui(f: &mut Frame, app: &mut App) {
     let outer_block = Block::default()
         .title(" 🔗 Dependency Graph ")
-        .title_alignment(Alignment::Center)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
@@ -229,13 +228,31 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(0), Constraint::Length(2)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
         .split(inner_area);
+
+    let header_lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("📦 ", Style::default()),
+            Span::styled(
+                "Explore package dependencies and release order",
+                Style::default().fg(Color::White),
+            ),
+        ]),
+    ];
+    let header = Paragraph::new(header_lines).alignment(Alignment::Center);
+    f.render_widget(header, chunks[0]);
 
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[0]);
+        .margin(1)
+        .split(chunks[1]);
 
     render_packages_panel(f, app, main_chunks[0]);
     render_details_panel(f, app, main_chunks[1]);
@@ -261,7 +278,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     ]);
 
     let hints_widget = Paragraph::new(hints).alignment(Alignment::Center);
-    f.render_widget(hints_widget, chunks[1]);
+    f.render_widget(hints_widget, chunks[2]);
 
     if app.show_help {
         render_help_popup(f);
