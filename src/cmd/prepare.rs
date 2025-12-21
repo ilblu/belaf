@@ -44,8 +44,8 @@ pub fn run(ci: bool, project_overrides: Option<Vec<String>>) -> Result<i32> {
 fn run_ci_mode(project_overrides: Option<Vec<String>>) -> Result<i32> {
     info!("running in CI mode (PR-based workflow)");
 
-    let mut sess = AppSession::initialize_default()
-        .context("could not initialize app and project graph")?;
+    let mut sess =
+        AppSession::initialize_default().context("could not initialize app and project graph")?;
 
     let mut ctx = PrepareContext::initialize(&mut sess, false)?;
     ctx.discover_projects()?;
@@ -95,7 +95,10 @@ fn apply_project_overrides(
     selections: &mut [ProjectSelection],
     overrides: &[String],
 ) -> Result<()> {
-    let project_names: Vec<String> = selections.iter().map(|s| s.candidate.name.clone()).collect();
+    let project_names: Vec<String> = selections
+        .iter()
+        .map(|s| s.candidate.name.clone())
+        .collect();
 
     for override_str in overrides {
         let parts: Vec<&str> = override_str.splitn(2, ':').collect();
@@ -126,7 +129,10 @@ fn apply_project_overrides(
             ));
         }
 
-        if let Some(selection) = selections.iter_mut().find(|s| s.candidate.name == project_name) {
+        if let Some(selection) = selections
+            .iter_mut()
+            .find(|s| s.candidate.name == project_name)
+        {
             selection.bump_choice = match bump_type {
                 "major" => BumpChoice::Major,
                 "minor" => BumpChoice::Minor,
@@ -135,7 +141,9 @@ fn apply_project_overrides(
             };
             info!(
                 "override: {} -> {} (was: {})",
-                project_name, bump_type, selection.candidate.suggested_bump.as_str()
+                project_name,
+                bump_type,
+                selection.candidate.suggested_bump.as_str()
             );
         }
     }

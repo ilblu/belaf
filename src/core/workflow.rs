@@ -129,13 +129,20 @@ impl<'a> PrepareContext<'a> {
         })
     }
 
-    pub fn resolve_workdir(&self, path: &crate::core::git::repository::RepoPath) -> std::path::PathBuf {
+    pub fn resolve_workdir(
+        &self,
+        path: &crate::core::git::repository::RepoPath,
+    ) -> std::path::PathBuf {
         self.sess.repo.resolve_workdir(path)
     }
 
     pub fn discover_projects(&mut self) -> Result<()> {
         let q = GraphQueryBuilder::default();
-        let idents = self.sess.graph().query(q).context("could not select projects")?;
+        let idents = self
+            .sess
+            .graph()
+            .query(q)
+            .context("could not select projects")?;
 
         if idents.is_empty() {
             info!("no projects found in repository");
@@ -178,11 +185,17 @@ impl<'a> PrepareContext<'a> {
 
             let current_version = proj.version.to_string();
 
-            let analysis = bump::analyze_commits(&commits)
-                .with_context(|| format!("failed to analyze commit messages for {}", proj.user_facing_name))?;
+            let analysis = bump::analyze_commits(&commits).with_context(|| {
+                format!(
+                    "failed to analyze commit messages for {}",
+                    proj.user_facing_name
+                )
+            })?;
 
             let bump_config = BumpConfig::from_user_config(&self.bump_config);
-            let suggested_bump = analysis.recommendation.apply_config(&bump_config, Some(&current_version));
+            let suggested_bump = analysis
+                .recommendation
+                .apply_config(&bump_config, Some(&current_version));
 
             info!("{}: {}", proj.user_facing_name, analysis.summary());
 
@@ -225,7 +238,9 @@ impl<'a> PrepareContext<'a> {
         for selection in &selections {
             let proj = self.sess.graph().lookup(selection.candidate.ident);
 
-            let bump_scheme_text = selection.bump_choice.resolve(selection.candidate.suggested_bump);
+            let bump_scheme_text = selection
+                .bump_choice
+                .resolve(selection.candidate.suggested_bump);
 
             if bump_scheme_text == "no bump" {
                 info!("{}: no version bump needed", proj.user_facing_name);
@@ -247,7 +262,10 @@ impl<'a> PrepareContext<'a> {
             let proj_mut = self.sess.graph_mut().lookup_mut(selection.candidate.ident);
 
             bump_scheme.apply(&mut proj_mut.version).with_context(|| {
-                format!("failed to apply version bump to {}", proj_mut.user_facing_name)
+                format!(
+                    "failed to apply version bump to {}",
+                    proj_mut.user_facing_name
+                )
             })?;
 
             let new_version = proj_mut.version.to_string();
@@ -258,7 +276,11 @@ impl<'a> PrepareContext<'a> {
                 old_version,
                 new_version,
                 selection.candidate.commit_count,
-                if selection.candidate.commit_count == 1 { "" } else { "s" }
+                if selection.candidate.commit_count == 1 {
+                    ""
+                } else {
+                    "s"
+                }
             );
 
             prepared.push(SelectedProject {
@@ -639,7 +661,9 @@ pub struct ChangelogGenerationParams<'a> {
     pub custom_output_path: Option<&'a str>,
 }
 
-pub fn generate_and_write_project_changelog(params: &ChangelogGenerationParams) -> Result<ChangelogResult> {
+pub fn generate_and_write_project_changelog(
+    params: &ChangelogGenerationParams,
+) -> Result<ChangelogResult> {
     let repo = params.repo;
     let project_name = params.project_name;
     let prefix = params.prefix;
@@ -704,7 +728,8 @@ pub fn generate_and_write_project_changelog(params: &ChangelogGenerationParams) 
 
     let mut output = Vec::new();
     changelog.generate(&mut output)?;
-    let generated_content = String::from_utf8(output).context("changelog contains invalid UTF-8")?;
+    let generated_content =
+        String::from_utf8(output).context("changelog contains invalid UTF-8")?;
 
     if !write_to_file {
         return Ok(ChangelogResult {
@@ -736,7 +761,8 @@ pub fn generate_and_write_project_changelog(params: &ChangelogGenerationParams) 
 
     let mut prepend_output = Vec::new();
     changelog.prepend(existing_content, &mut prepend_output)?;
-    let final_content = String::from_utf8(prepend_output).context("changelog contains invalid UTF-8")?;
+    let final_content =
+        String::from_utf8(prepend_output).context("changelog contains invalid UTF-8")?;
 
     if let Some(parent) = changelog_full_path.parent() {
         std::fs::create_dir_all(parent).with_context(|| {

@@ -95,7 +95,9 @@ impl BumpRecommendation {
         current_version: Option<&str>,
     ) -> Result<Self> {
         let analysis = analyze_commit_messages(commits)?;
-        Ok(analysis.recommendation.apply_config(config, current_version))
+        Ok(analysis
+            .recommendation
+            .apply_config(config, current_version))
     }
 
     pub fn from_config_or_commits(

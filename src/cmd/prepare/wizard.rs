@@ -809,7 +809,10 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
 
             let content = format!(
                 "{} {} ({} commits){}",
-                checkbox, project.name(), project.commit_count(), suggestion
+                checkbox,
+                project.name(),
+                project.commit_count(),
+                suggestion
             );
 
             ListItem::new(content).style(if project.selected {
@@ -1230,7 +1233,9 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
 
     let title = format!(
         "{} ({} → {})",
-        current_project.name(), current_version, new_version
+        current_project.name(),
+        current_version,
+        new_version
     );
 
     let toggle_widget = Paragraph::new(toggle_line)
@@ -1478,10 +1483,7 @@ fn apply_project_overrides_to_items(
                 "patch" => BumpChoice::Patch,
                 _ => unreachable!(),
             };
-            info!(
-                "override: {} -> {}",
-                project_name, bump_type
-            );
+            info!("override: {} -> {}", project_name, bump_type);
             project.chosen_bump = Some(chosen);
         }
     }

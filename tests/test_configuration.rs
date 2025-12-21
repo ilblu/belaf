@@ -1563,7 +1563,10 @@ scope_matching = "smart"
     write_custom_config(&repo, config);
 
     for i in 1..=5 {
-        repo.write_file(&format!("src/feature{i}.rs"), &format!("pub fn feature{i}() {{}}"));
+        repo.write_file(
+            &format!("src/feature{i}.rs"),
+            &format!("pub fn feature{i}() {{}}"),
+        );
         repo.commit(&format!("feat: add feature {i}"));
     }
 

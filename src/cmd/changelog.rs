@@ -23,14 +23,11 @@ pub fn run(
         env!("CARGO_PKG_VERSION")
     );
 
-    let sess = AppSession::initialize_default()
-        .context("could not initialize app and project graph")?;
+    let sess =
+        AppSession::initialize_default().context("could not initialize app and project graph")?;
 
     let q = GraphQueryBuilder::default();
-    let idents = sess
-        .graph()
-        .query(q)
-        .context("could not query projects")?;
+    let idents = sess.graph().query(q).context("could not query projects")?;
 
     if idents.is_empty() {
         println!("{} No projects found in repository.", "ℹ".cyan().bold());
@@ -71,14 +68,11 @@ pub fn run(
             .commits()
             .into_iter()
             .filter_map(|cid| {
-                sess.repo
-                    .get_commit_summary(*cid)
-                    .ok()
-                    .map(|msg| Commit {
-                        id: cid.to_string(),
-                        message: msg,
-                        ..Default::default()
-                    })
+                sess.repo.get_commit_summary(*cid).ok().map(|msg| Commit {
+                    id: cid.to_string(),
+                    message: msg,
+                    ..Default::default()
+                })
             })
             .collect();
 
@@ -101,16 +95,10 @@ pub fn run(
             let bump_scheme = version_clone
                 .parse_bump_scheme(suggested_bump.as_str())
                 .with_context(|| {
-                    format!(
-                        "invalid bump scheme for project {}",
-                        proj.user_facing_name
-                    )
+                    format!("invalid bump scheme for project {}", proj.user_facing_name)
                 })?;
             bump_scheme.apply(&mut version_clone).with_context(|| {
-                format!(
-                    "failed to apply version bump to {}",
-                    proj.user_facing_name
-                )
+                format!("failed to apply version bump to {}", proj.user_facing_name)
             })?;
             Some(version_clone.to_string())
         };
@@ -139,7 +127,10 @@ pub fn run(
         let result = generate_and_write_project_changelog(&params)?;
 
         if !result.has_user_changes {
-            info!("{}: no user-facing changes, skipping", proj.user_facing_name);
+            info!(
+                "{}: no user-facing changes, skipping",
+                proj.user_facing_name
+            );
             continue;
         }
 

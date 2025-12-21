@@ -444,7 +444,9 @@ fn test_history_boundary_release_tag() {
         version: semver::Version::new(1, 2, 3),
     };
     match boundary {
-        HistoryBoundary::ReleaseTag { tag_name, version, .. } => {
+        HistoryBoundary::ReleaseTag {
+            tag_name, version, ..
+        } => {
             assert_eq!(tag_name, "my-package-v1.2.3");
             assert_eq!(version, semver::Version::new(1, 2, 3));
         }

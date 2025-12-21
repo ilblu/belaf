@@ -153,36 +153,19 @@ pub struct GraphArgs {
 
 #[derive(Args)]
 pub struct ChangelogArgs {
-    #[arg(
-        long,
-        help = "Preview changelog without writing files"
-    )]
+    #[arg(long, help = "Preview changelog without writing files")]
     pub preview: bool,
 
-    #[arg(
-        long,
-        help = "Output changelog to stdout instead of files"
-    )]
+    #[arg(long, help = "Output changelog to stdout instead of files")]
     pub stdout: bool,
 
-    #[arg(
-        short,
-        long,
-        help = "Generate changelog only for specific project"
-    )]
+    #[arg(short, long, help = "Generate changelog only for specific project")]
     pub project: Option<String>,
 
-    #[arg(
-        short,
-        long,
-        help = "Custom output file path (overrides config)"
-    )]
+    #[arg(short, long, help = "Custom output file path (overrides config)")]
     pub output: Option<String>,
 
-    #[arg(
-        long,
-        help = "Include unreleased changes (no version tag)"
-    )]
+    #[arg(long, help = "Include unreleased changes (no version tag)")]
     pub unreleased: bool,
 }
 
