@@ -118,7 +118,7 @@ impl MarkdownRenderer {
                 self.flush_line();
                 self.in_code_block = true;
                 self.style_stack
-                    .push(Style::default().fg(Color::White).bg(Color::DarkGray));
+                    .push(Style::default().fg(Color::White).bg(Color::Gray));
             }
             Tag::BlockQuote(_) => {
                 self.style_stack.push(

@@ -248,13 +248,13 @@ fn ui(f: &mut Frame, app: &mut App) {
 
     let hints = Line::from(vec![
         Span::styled(" ↑↓/jk", Style::default().fg(Color::Cyan)),
-        Span::styled(" Navigate  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" Navigate  ", Style::default().fg(Color::Gray)),
         Span::styled("g", Style::default().fg(Color::Green)),
-        Span::styled(" Browser  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" Browser  ", Style::default().fg(Color::Gray)),
         Span::styled("h", Style::default().fg(Color::Yellow)),
-        Span::styled(" Help  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" Help  ", Style::default().fg(Color::Gray)),
         Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" Quit", Style::default().fg(Color::DarkGray)),
+        Span::styled(" Quit", Style::default().fg(Color::Gray)),
         Span::raw("  │  "),
         Span::styled("📦 Package ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         Span::styled(format!("[{}]", position_text), Style::default().fg(Color::White)),
@@ -328,7 +328,7 @@ fn render_help_popup(f: &mut Frame) {
         Span::styled(
             "Press any key to close",
             Style::default()
-                .fg(Color::DarkGray)
+                .fg(Color::Gray)
                 .add_modifier(Modifier::ITALIC),
         )
         .into_centered_line(),
@@ -375,7 +375,7 @@ fn render_packages_panel(f: &mut Frame, app: &mut App, area: Rect) {
             let version_style = if is_selected {
                 Style::default().fg(Color::Cyan)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(Color::Gray)
             };
 
             let deps_style = if is_root {
@@ -387,7 +387,7 @@ fn render_packages_panel(f: &mut Frame, app: &mut App, area: Rect) {
             let symbol_style = if is_root {
                 Style::default().fg(Color::Green)
             } else {
-                Style::default().fg(Color::DarkGray)
+                Style::default().fg(Color::Gray)
             };
 
             ListItem::new(Line::from(vec![
@@ -443,7 +443,7 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
     let Some(proj) = selected else {
         let no_selection = Paragraph::new(Line::from(vec![
             Span::styled("  ⚠ ", Style::default().fg(Color::Yellow)),
-            Span::styled("No project selected", Style::default().fg(Color::DarkGray)),
+            Span::styled("No project selected", Style::default().fg(Color::Gray)),
         ]));
         f.render_widget(no_selection, inner);
         return;
@@ -455,11 +455,11 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
 
     let mut lines = vec![
         Line::from(vec![
-            Span::styled(" 🏷️  Version: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" 🏷️  Version: ", Style::default().fg(Color::Gray)),
             Span::styled(&proj.version, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
         ]),
         Line::from(vec![
-            Span::styled(" 🎯 Release:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" 🎯 Release:  ", Style::default().fg(Color::Gray)),
             Span::styled(
                 format!("#{} of {}", release_pos, total),
                 Style::default().fg(Color::Yellow),
@@ -483,7 +483,7 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
     if proj.deps.is_empty() {
         lines.push(Line::from(Span::styled(
             "     ✨ No dependencies",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )));
     } else {
         for dep in &proj.deps {
@@ -506,7 +506,7 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
     if proj.dependents.is_empty() {
         lines.push(Line::from(Span::styled(
             "     ✨ No dependents",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )));
     } else {
         for dep in &proj.dependents {

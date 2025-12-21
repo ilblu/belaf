@@ -248,7 +248,7 @@ impl TuiState {
             Span::styled(
                 "Press any key to close",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(Color::Gray)
                     .add_modifier(Modifier::ITALIC),
             )
             .into_centered_line(),
@@ -296,9 +296,7 @@ impl TuiState {
                 let indicator = if is_selected { "▶ " } else { "  " };
 
                 let style = if is_selected {
-                    Style::default()
-                        .bg(Color::Rgb(40, 40, 60))
-                        .fg(Color::White)
+                    Style::default().bg(Color::Rgb(40, 40, 60)).fg(Color::White)
                 } else {
                     Style::default().fg(Color::Gray)
                 };
@@ -306,7 +304,7 @@ impl TuiState {
                 let version_style = if is_selected {
                     Style::default().fg(Color::Green)
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(Color::Gray)
                 };
 
                 let commits_style = if proj.commits_count > 0 {
@@ -316,12 +314,13 @@ impl TuiState {
                         Style::default().fg(Color::Yellow)
                     }
                 } else {
-                    Style::default().fg(Color::DarkGray)
+                    Style::default().fg(Color::Gray)
                 };
 
                 Row::new(vec![
                     Cell::from(format!("{}{}", indicator, proj.name)).style(style),
-                    Cell::from(proj.version.clone().unwrap_or_else(|| "—".to_string())).style(version_style),
+                    Cell::from(proj.version.clone().unwrap_or_else(|| "—".to_string()))
+                        .style(version_style),
                     Cell::from(proj.commits_count.to_string()).style(commits_style),
                 ])
             })
@@ -336,7 +335,7 @@ impl TuiState {
         let border_color = if self.selected_panel == SelectablePanel::Projects {
             Color::Cyan
         } else {
-            Color::DarkGray
+            Color::Gray
         };
 
         let title = format!(" 📦 Projects ({}) ", self.project_data.len());
@@ -346,19 +345,14 @@ impl TuiState {
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
 
-        let table = Table::new(rows, &widths)
-            .header(header)
-            .block(block);
+        let table = Table::new(rows, &widths).header(header).block(block);
 
         table.render(frame, area);
     }
 
     fn render_project_details(&self, frame: &mut ratatui::Frame, area: Rect) {
         if let Some(proj) = self.project_data.get(self.selected_project_index) {
-            let header = Row::new(vec![
-                Cell::from(" #"),
-                Cell::from("Commit Summary"),
-            ]).style(
+            let header = Row::new(vec![Cell::from(" #"), Cell::from("Commit Summary")]).style(
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -383,7 +377,7 @@ impl TuiState {
                     };
 
                     Row::new(vec![
-                        Cell::from(format!(" {}", idx + 1)).style(Style::default().fg(Color::DarkGray)),
+                        Cell::from(format!(" {}", idx + 1)).style(Style::default().fg(Color::Gray)),
                         Cell::from(commit.clone()).style(style),
                     ])
                 })
@@ -420,7 +414,7 @@ impl TuiState {
             let border_color = if self.selected_panel == SelectablePanel::Commits {
                 Color::Cyan
             } else {
-                Color::DarkGray
+                Color::Gray
             };
 
             let block = Block::default()
@@ -431,7 +425,7 @@ impl TuiState {
             if rows.is_empty() {
                 let empty_msg = Paragraph::new(Line::from(vec![
                     Span::styled("  ✨ ", Style::default().fg(Color::Green)),
-                    Span::styled("No pending commits", Style::default().fg(Color::DarkGray)),
+                    Span::styled("No pending commits", Style::default().fg(Color::Gray)),
                 ]))
                 .block(block);
                 frame.render_widget(empty_msg, area);
@@ -471,18 +465,26 @@ impl TuiState {
 
         let hints = Line::from(vec![
             Span::styled(" Tab", Style::default().fg(Color::Cyan)),
-            Span::styled(" Switch  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Switch  ", Style::default().fg(Color::Gray)),
             Span::styled("↑↓/jk", Style::default().fg(Color::Cyan)),
-            Span::styled(" Navigate  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Navigate  ", Style::default().fg(Color::Gray)),
             Span::styled("g/G", Style::default().fg(Color::Cyan)),
-            Span::styled(" Top/Bottom  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Top/Bottom  ", Style::default().fg(Color::Gray)),
             Span::styled("h", Style::default().fg(Color::Yellow)),
-            Span::styled(" Help  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Help  ", Style::default().fg(Color::Gray)),
             Span::styled("q", Style::default().fg(Color::Red)),
-            Span::styled(" Quit", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Quit", Style::default().fg(Color::Gray)),
             Span::raw("  │  "),
-            Span::styled(panel_name, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-            Span::styled(format!(" [{}]", count_text), Style::default().fg(Color::White)),
+            Span::styled(
+                panel_name,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" [{}]", count_text),
+                Style::default().fg(Color::White),
+            ),
         ]);
 
         let hints_widget = Paragraph::new(hints).alignment(Alignment::Center);

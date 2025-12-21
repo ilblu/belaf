@@ -106,7 +106,7 @@ impl TogglePanel {
             Span::raw("  "),
             Span::styled(format!(" ◉ {} ", self.right_label), right_style),
             Span::raw("  "),
-            Span::styled("(m)", Style::default().fg(Color::DarkGray)),
+            Span::styled("(m)", Style::default().fg(Color::Gray)),
         ]);
 
         let widget = Paragraph::new(toggle_line)

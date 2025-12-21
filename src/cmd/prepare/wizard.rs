@@ -31,11 +31,7 @@ use crate::core::{
     ecosystem::types::EcosystemType,
     git::repository::RepoPathBuf,
     session::AppSession,
-    ui::{
-        components::toggle_panel::TogglePanel,
-        markdown,
-        utils::centered_rect,
-    },
+    ui::{components::toggle_panel::TogglePanel, markdown, utils::centered_rect},
     workflow::{
         generate_changelog_entry, BumpChoice, PrepareContext, ProjectCandidate, ProjectSelection,
     },
@@ -750,7 +746,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
             ),
         ]),
         Line::from(vec![
-            Span::styled("   Selected: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("   Selected: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 format!("{}", selected_count),
                 Style::default()
@@ -763,7 +759,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
             ),
             Span::styled(
                 format!(" / {}", total_count),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]),
     ];
@@ -781,7 +777,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
                 BumpRecommendation::Major => ("MAJOR", Color::Red),
                 BumpRecommendation::Minor => ("MINOR", Color::Yellow),
                 BumpRecommendation::Patch => ("PATCH", Color::Green),
-                BumpRecommendation::None => ("", Color::DarkGray),
+                BumpRecommendation::None => ("", Color::Gray),
             };
 
             let lines = vec![Line::from(vec![
@@ -800,7 +796,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
                 ),
                 Span::styled(
                     format!(" ({} commits)", project.commit_count()),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Gray),
                 ),
                 if !suggestion_text.is_empty() {
                     Span::styled(
@@ -825,8 +821,11 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(Span::styled(" Projects ", Style::default().fg(Color::White))),
+                .border_style(Style::default().fg(Color::Gray))
+                .title(Span::styled(
+                    " Projects ",
+                    Style::default().fg(Color::White),
+                )),
         )
         .highlight_symbol("");
 
@@ -834,17 +833,17 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
 
     let hints = Line::from(vec![
         Span::styled("↑↓", Style::default().fg(Color::Cyan)),
-        Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" navigate  ", Style::default().fg(Color::Gray)),
         Span::styled("Space", Style::default().fg(Color::Cyan)),
-        Span::styled(" toggle  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" toggle  ", Style::default().fg(Color::Gray)),
         Span::styled("a", Style::default().fg(Color::Green)),
-        Span::styled(" all  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" all  ", Style::default().fg(Color::Gray)),
         Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::styled(" continue  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" continue  ", Style::default().fg(Color::Gray)),
         Span::styled("?", Style::default().fg(Color::Yellow)),
-        Span::styled(" help  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" help  ", Style::default().fg(Color::Gray)),
         Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+        Span::styled(" quit", Style::default().fg(Color::Gray)),
     ]);
     let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(hints_para, chunks[2]);
@@ -912,11 +911,11 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
             ),
             Span::styled(
                 format!("  v{}", current_version),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
             Span::styled(
                 format!("  ({} commits)", commits.len()),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]),
     ];
@@ -957,7 +956,7 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
                 ),
                 Span::styled(
                     format!("  →  {}", next_ver),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Gray),
                 ),
             ])];
             let style = if is_selected {
@@ -973,7 +972,7 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray))
+                .border_style(Style::default().fg(Color::Gray))
                 .title(Span::styled(
                     " Version Bump ",
                     Style::default().fg(Color::White),
@@ -1009,7 +1008,7 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_style(Style::default().fg(Color::Gray))
                     .title(Span::styled(
                         format!(" {} Details ", selected_strategy.as_str()),
                         Style::default().fg(Color::White),
@@ -1028,20 +1027,20 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
                 Style::default().fg(Color::Yellow),
             ),
             Span::styled("Esc", Style::default().fg(Color::Red)),
-            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+            Span::styled(" cancel", Style::default().fg(Color::Gray)),
         ])
     } else {
         Line::from(vec![
             Span::styled("↑↓", Style::default().fg(Color::Cyan)),
-            Span::styled(" select  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" select  ", Style::default().fg(Color::Gray)),
             Span::styled("Tab", Style::default().fg(Color::Cyan)),
-            Span::styled(" preview changelog  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" preview changelog  ", Style::default().fg(Color::Gray)),
             Span::styled("Enter", Style::default().fg(Color::Green)),
-            Span::styled(" next  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" next  ", Style::default().fg(Color::Gray)),
             Span::styled("Esc", Style::default().fg(Color::Yellow)),
-            Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" back  ", Style::default().fg(Color::Gray)),
             Span::styled("q", Style::default().fg(Color::Red)),
-            Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+            Span::styled(" quit", Style::default().fg(Color::Gray)),
         ])
     };
     let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
@@ -1074,19 +1073,19 @@ fn build_loading_panel(state: &WizardState, commits: &[Commit]) -> Text<'static>
             commit_count,
             if commit_count == 1 { "" } else { "s" }
         ),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(Color::Gray),
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "   This may take a few seconds.",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(Color::Gray),
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "─".repeat(40),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(Color::Gray),
     )));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
@@ -1113,12 +1112,12 @@ fn build_detail_panel(
     };
 
     lines.push(Line::from(vec![
-        Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Version: ", Style::default().fg(Color::Gray)),
         Span::styled(
             current_version.to_string(),
             Style::default().fg(Color::Yellow),
         ),
-        Span::styled(" → ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" → ", Style::default().fg(Color::Gray)),
         Span::styled(
             next_version,
             Style::default()
@@ -1137,7 +1136,7 @@ fn build_detail_panel(
                 BumpRecommendation::None => "NO CHANGES",
             };
             lines.push(Line::from(vec![
-                Span::styled("Detected: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Detected: ", Style::default().fg(Color::Gray)),
                 Span::styled(bump_name.to_string(), Style::default().fg(Color::Cyan)),
             ]));
         }
@@ -1148,7 +1147,7 @@ fn build_detail_panel(
             )));
             lines.push(Line::from(Span::styled(
                 "  Consider updating migration guides",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             )));
         }
         BumpChoice::Minor => {
@@ -1158,7 +1157,7 @@ fn build_detail_panel(
             )));
             lines.push(Line::from(Span::styled(
                 "  Backwards compatible additions",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             )));
         }
         BumpChoice::Patch => {
@@ -1168,7 +1167,7 @@ fn build_detail_panel(
             )));
             lines.push(Line::from(Span::styled(
                 "  Bug fixes only",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             )));
         }
     }
@@ -1205,11 +1204,8 @@ fn build_detail_panel(
     }
     if other_count > 0 {
         lines.push(Line::from(vec![
-            Span::styled("  other:     ", Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                format!("{}", other_count),
-                Style::default().fg(Color::DarkGray),
-            ),
+            Span::styled("  other:     ", Style::default().fg(Color::Gray)),
+            Span::styled(format!("{}", other_count), Style::default().fg(Color::Gray)),
         ]));
     }
 
@@ -1234,7 +1230,7 @@ fn build_detail_panel(
         } else if msg.contains("BREAKING") || msg.contains("!:") {
             Color::Red
         } else {
-            Color::DarkGray
+            Color::Gray
         };
 
         lines.push(Line::from(Span::styled(
@@ -1246,14 +1242,14 @@ fn build_detail_panel(
     if commits.len() > 8 {
         lines.push(Line::from(Span::styled(
             format!("  ... and {} more", commits.len() - 8),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )));
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Press Tab to preview full changelog",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(Color::Gray),
     )));
 
     Text::from(lines)
@@ -1375,7 +1371,7 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_style(Style::default().fg(Color::Gray))
                     .title(Span::styled(
                         " Markdown Source ",
                         Style::default().fg(Color::Magenta),
@@ -1391,7 +1387,7 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_style(Style::default().fg(Color::Gray))
                     .title(Span::styled(
                         " Rendered Preview ",
                         Style::default().fg(Color::Cyan),
@@ -1404,15 +1400,15 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
 
     let hints = Line::from(vec![
         Span::styled("m", Style::default().fg(Color::Cyan)),
-        Span::styled(" toggle view  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" toggle view  ", Style::default().fg(Color::Gray)),
         Span::styled("Tab", Style::default().fg(Color::Cyan)),
-        Span::styled(" back to bump  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" back to bump  ", Style::default().fg(Color::Gray)),
         Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::styled(" next  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" next  ", Style::default().fg(Color::Gray)),
         Span::styled("Esc", Style::default().fg(Color::Yellow)),
-        Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" back  ", Style::default().fg(Color::Gray)),
         Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+        Span::styled(" quit", Style::default().fg(Color::Gray)),
     ]);
     let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(hints_para, chunks[3]);
@@ -1456,7 +1452,7 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
         ]),
         Line::from(Span::styled(
             format!("   {} projects selected", selected_projects.len()),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )),
     ];
     let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
@@ -1490,11 +1486,11 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
             Span::styled(project.name(), Style::default().fg(Color::White)),
             Span::styled(
                 format!(" ({} commits)", project.commit_count()),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]));
         project_lines.push(Line::from(vec![
-            Span::styled("      → ", Style::default().fg(Color::DarkGray)),
+            Span::styled("      → ", Style::default().fg(Color::Gray)),
             Span::styled(bump_text, Style::default().fg(bump_color)),
         ]));
     }
@@ -1502,14 +1498,14 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
     if selected_projects.len() > 10 {
         project_lines.push(Line::from(Span::styled(
             format!("   ... and {} more", selected_projects.len() - 10),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )));
     }
 
     let project_block = Paragraph::new(project_lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(Color::Gray))
             .title(Span::styled(" Summary ", Style::default().fg(Color::White))),
     );
     f.render_widget(project_block, content_chunks[0]);
@@ -1532,26 +1528,23 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
             Span::styled("   ✏️  ", Style::default().fg(Color::Yellow)),
             Span::styled(
                 format!("{}", ecosystem.version_file()),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]));
     }
     file_lines.push(Line::from(vec![
         Span::styled("   📝 ", Style::default().fg(Color::Cyan)),
-        Span::styled("CHANGELOG.md", Style::default().fg(Color::DarkGray)),
+        Span::styled("CHANGELOG.md", Style::default().fg(Color::Gray)),
     ]));
     file_lines.push(Line::from(vec![
         Span::styled("   📋 ", Style::default().fg(Color::Magenta)),
-        Span::styled(
-            "belaf/releases/*.json",
-            Style::default().fg(Color::DarkGray),
-        ),
+        Span::styled("belaf/releases/*.json", Style::default().fg(Color::Gray)),
     ]));
 
     let file_block = Paragraph::new(file_lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(Color::Gray))
             .title(Span::styled(
                 " Will Execute ",
                 Style::default().fg(Color::White),
@@ -1561,13 +1554,13 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
 
     let hints = Line::from(vec![
         Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::styled(" confirm  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" confirm  ", Style::default().fg(Color::Gray)),
         Span::styled("Esc", Style::default().fg(Color::Yellow)),
-        Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" back  ", Style::default().fg(Color::Gray)),
         Span::styled("?", Style::default().fg(Color::Yellow)),
-        Span::styled(" help  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" help  ", Style::default().fg(Color::Gray)),
         Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+        Span::styled(" quit", Style::default().fg(Color::Gray)),
     ]);
     let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(hints_para, chunks[2]);

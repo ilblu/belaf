@@ -67,6 +67,7 @@ struct WizardState {
     available_presets: Vec<String>,
     preset_toggle: TogglePanel,
     config_exists: bool,
+    exit_countdown: Option<u8>,
 }
 
 impl WizardState {
@@ -98,6 +99,7 @@ impl WizardState {
             available_presets,
             preset_toggle: TogglePanel::default(),
             config_exists: false,
+            exit_countdown: None,
         }
     }
 
@@ -201,7 +203,31 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
 
+    if state.step == WizardStep::Complete {
+        print_terminal_summary(&state);
+    }
+
     result
+}
+
+fn print_terminal_summary(state: &WizardState) {
+    use owo_colors::OwoColorize;
+
+    println!();
+    if state.config_exists {
+        println!("{} {}", "✅".green(), "Repository reconfigured successfully!".green().bold());
+    } else {
+        println!("{} {}", "✅".green(), "Repository initialized successfully!".green().bold());
+    }
+    println!();
+    println!("{}", "Created:".white().bold());
+    println!("  {} belaf/config.toml", "•".cyan());
+    println!();
+    println!("{}", "Next steps:".white().bold());
+    println!("  {}. Run {} to see project versions", "1".cyan(), "belaf status".cyan());
+    println!("  {}. Run {} when ready to release", "2".cyan(), "belaf prepare".cyan());
+    println!("  {}. Edit {} to customize", "3".cyan(), "belaf/config.toml".yellow());
+    println!();
 }
 
 fn run_wizard_loop(
@@ -347,6 +373,15 @@ fn run_wizard_loop(
                         Ok(msg) => {
                             state.success_message = Some(msg);
                             state.step = WizardStep::Complete;
+                            terminal.draw(|frame| render(frame, state))?;
+
+                            for remaining in (1..=3).rev() {
+                                state.exit_countdown = Some(remaining);
+                                terminal.draw(|frame| render(frame, state))?;
+                                std::thread::sleep(std::time::Duration::from_secs(1));
+                            }
+
+                            return Ok(0);
                         }
                         Err(e) => {
                             state.error_message = Some(format!("Error: {}", e));
@@ -356,10 +391,6 @@ fn run_wizard_loop(
                 }
                 (KeyCode::Char('n') | KeyCode::Esc, _, WizardStep::Confirmation) => {
                     state.step = WizardStep::UpstreamConfig;
-                }
-
-                (KeyCode::Enter | KeyCode::Char('q'), _, WizardStep::Complete) => {
-                    return Ok(0);
                 }
 
                 _ => {}
@@ -560,7 +591,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
             )),
             Line::from(Span::styled(
                 "         Release Management",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             )),
         ];
         let logo_para = Paragraph::new(logo).alignment(ratatui::layout::Alignment::Center);
@@ -597,7 +628,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
             Line::from(""),
             Line::from(vec![
                 Span::styled("📦 ", Style::default()),
-                Span::styled("Detected: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Detected: ", Style::default().fg(Color::Gray)),
                 Span::styled(
                     project_text,
                     Style::default()
@@ -610,21 +641,21 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
         frame.render_widget(info_para, chunks[3]);
 
         let action_text = vec![Line::from(vec![
-            Span::styled("Press ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Press ", Style::default().fg(Color::Gray)),
             Span::styled(
                 "ENTER",
                 Style::default()
                     .fg(Color::Red)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" to reconfigure  •  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" to reconfigure  •  ", Style::default().fg(Color::Gray)),
             Span::styled(
                 "Q",
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" to quit", Style::default().fg(Color::DarkGray)),
+            Span::styled(" to quit", Style::default().fg(Color::Gray)),
         ])];
         let action_para =
             Paragraph::new(action_text).alignment(ratatui::layout::Alignment::Center);
@@ -667,7 +698,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
             )),
             Line::from(Span::styled(
                 "         Release Management",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             )),
         ];
         let logo_para = Paragraph::new(logo).alignment(ratatui::layout::Alignment::Center);
@@ -677,7 +708,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
             Line::from(""),
             Line::from(vec![
                 Span::styled("📦 ", Style::default()),
-                Span::styled("Detected: ", Style::default().fg(Color::DarkGray)),
+                Span::styled("Detected: ", Style::default().fg(Color::Gray)),
                 Span::styled(
                     project_text,
                     Style::default()
@@ -713,40 +744,40 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
             Span::styled("  → ", Style::default().fg(Color::Cyan)),
             Span::styled(
                 "Changelog preset selection",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]));
         info_lines.push(Line::from(vec![
             Span::styled("  → ", Style::default().fg(Color::Cyan)),
             Span::styled(
                 "Project configuration",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]));
         info_lines.push(Line::from(vec![
             Span::styled("  → ", Style::default().fg(Color::Cyan)),
-            Span::styled("Repository setup", Style::default().fg(Color::DarkGray)),
+            Span::styled("Repository setup", Style::default().fg(Color::Gray)),
         ]));
 
         let info_para = Paragraph::new(info_lines).alignment(ratatui::layout::Alignment::Center);
         frame.render_widget(info_para, chunks[1]);
 
         let action_text = vec![Line::from(vec![
-            Span::styled("Press ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Press ", Style::default().fg(Color::Gray)),
             Span::styled(
                 "ENTER",
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" to start  •  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" to start  •  ", Style::default().fg(Color::Gray)),
             Span::styled(
                 "Q",
                 Style::default()
                     .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" to quit", Style::default().fg(Color::DarkGray)),
+            Span::styled(" to quit", Style::default().fg(Color::Gray)),
         ])];
         let action_para =
             Paragraph::new(action_text).alignment(ratatui::layout::Alignment::Center);
@@ -831,7 +862,7 @@ fn render_preset_selection(frame: &mut Frame, area: Rect, state: &mut WizardStat
                 ]),
                 Line::from(Span::styled(
                     format!("    {}", description),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Gray),
                 )),
             ];
             let style = if is_selected {
@@ -846,7 +877,7 @@ fn render_preset_selection(frame: &mut Frame, area: Rect, state: &mut WizardStat
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(Color::Gray))
             .title(Span::styled(" Presets ", Style::default().fg(Color::White))),
     );
 
@@ -878,7 +909,7 @@ fn render_preset_selection(frame: &mut Frame, area: Rect, state: &mut WizardStat
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_style(Style::default().fg(Color::Gray))
                     .title(Span::styled(
                         " TOML Source ",
                         Style::default().fg(Color::Magenta),
@@ -896,7 +927,7 @@ fn render_preset_selection(frame: &mut Frame, area: Rect, state: &mut WizardStat
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::DarkGray))
+                    .border_style(Style::default().fg(Color::Gray))
                     .title(Span::styled(
                         " Changelog Preview ",
                         Style::default().fg(Color::Cyan),
@@ -909,13 +940,13 @@ fn render_preset_selection(frame: &mut Frame, area: Rect, state: &mut WizardStat
 
     let hints = Line::from(vec![
         Span::styled("↑↓", Style::default().fg(Color::Cyan)),
-        Span::styled(" select  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" select  ", Style::default().fg(Color::Gray)),
         Span::styled("m", Style::default().fg(Color::Cyan)),
-        Span::styled(" toggle view  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" toggle view  ", Style::default().fg(Color::Gray)),
         Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::styled(" continue  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" continue  ", Style::default().fg(Color::Gray)),
         Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+        Span::styled(" quit", Style::default().fg(Color::Gray)),
     ]);
     let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(hints_para, outer_chunks[2]);
@@ -1024,7 +1055,7 @@ fn render_project_selection(frame: &mut Frame, area: Rect, state: &WizardState) 
             ),
         ]),
         Line::from(vec![
-            Span::styled("   Selected: ", Style::default().fg(Color::DarkGray)),
+            Span::styled("   Selected: ", Style::default().fg(Color::Gray)),
             Span::styled(
                 format!("{}", selected_count),
                 Style::default()
@@ -1037,7 +1068,7 @@ fn render_project_selection(frame: &mut Frame, area: Rect, state: &WizardState) 
             ),
             Span::styled(
                 format!(" / {}", total_count),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]),
     ];
@@ -1070,7 +1101,7 @@ fn render_project_selection(frame: &mut Frame, area: Rect, state: &WizardState) 
                 ),
                 Span::styled(
                     format!(" @ {}", proj.version),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(Color::Gray),
                 ),
                 Span::styled(
                     format!("  ({})", proj.prefix),
@@ -1089,7 +1120,7 @@ fn render_project_selection(frame: &mut Frame, area: Rect, state: &WizardState) 
     let list = List::new(items).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(Color::Gray))
             .title(Span::styled(
                 " Projects ",
                 Style::default().fg(Color::White),
@@ -1100,17 +1131,17 @@ fn render_project_selection(frame: &mut Frame, area: Rect, state: &WizardState) 
 
     let hints = Line::from(vec![
         Span::styled("↑↓", Style::default().fg(Color::Cyan)),
-        Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" navigate  ", Style::default().fg(Color::Gray)),
         Span::styled("Space", Style::default().fg(Color::Cyan)),
-        Span::styled(" toggle  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" toggle  ", Style::default().fg(Color::Gray)),
         Span::styled("a", Style::default().fg(Color::Green)),
-        Span::styled(" all  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" all  ", Style::default().fg(Color::Gray)),
         Span::styled("n", Style::default().fg(Color::Yellow)),
-        Span::styled(" none  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" none  ", Style::default().fg(Color::Gray)),
         Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::styled(" continue  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" continue  ", Style::default().fg(Color::Gray)),
         Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+        Span::styled(" quit", Style::default().fg(Color::Gray)),
     ]);
     let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(hints_para, chunks[2]);
@@ -1175,7 +1206,7 @@ fn render_upstream_config(frame: &mut Frame, area: Rect, state: &WizardState) {
         ]),
         Line::from(Span::styled(
             "   Used for changelog links and release references",
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )),
     ];
     let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
@@ -1186,7 +1217,7 @@ fn render_upstream_config(frame: &mut Frame, area: Rect, state: &WizardState) {
     let input_border_color = if state.upstream_input_active {
         Color::Yellow
     } else {
-        Color::DarkGray
+        Color::Gray
     };
 
     let url_display = if state.upstream_url.is_empty() {
@@ -1246,22 +1277,22 @@ fn render_upstream_config(frame: &mut Frame, area: Rect, state: &WizardState) {
     let hints = if state.upstream_input_active {
         Line::from(vec![
             Span::styled("Type", Style::default().fg(Color::Yellow)),
-            Span::styled(" to enter URL  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" to enter URL  ", Style::default().fg(Color::Gray)),
             Span::styled("Backspace", Style::default().fg(Color::Yellow)),
-            Span::styled(" delete  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" delete  ", Style::default().fg(Color::Gray)),
             Span::styled("Tab/Esc", Style::default().fg(Color::Cyan)),
-            Span::styled(" finish editing", Style::default().fg(Color::DarkGray)),
+            Span::styled(" finish editing", Style::default().fg(Color::Gray)),
         ])
     } else {
         Line::from(vec![
             Span::styled("Tab", Style::default().fg(Color::Cyan)),
-            Span::styled(" edit URL  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" edit URL  ", Style::default().fg(Color::Gray)),
             Span::styled("Enter", Style::default().fg(Color::Green)),
-            Span::styled(" continue  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" continue  ", Style::default().fg(Color::Gray)),
             Span::styled("Backspace", Style::default().fg(Color::Yellow)),
-            Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(" back  ", Style::default().fg(Color::Gray)),
             Span::styled("q", Style::default().fg(Color::Red)),
-            Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+            Span::styled(" quit", Style::default().fg(Color::Gray)),
         ])
     };
     let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
@@ -1319,7 +1350,7 @@ fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
         ]),
         Line::from(Span::styled(
             format!("   {}", state.upstream_url),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )),
         Line::from(""),
         Line::from(vec![
@@ -1337,7 +1368,7 @@ fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
             Span::styled(proj.name.clone(), Style::default().fg(Color::White)),
             Span::styled(
                 format!(" @ {}", proj.version),
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]));
     }
@@ -1345,14 +1376,14 @@ fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
     if selected.len() > 8 {
         summary_lines.push(Line::from(Span::styled(
             format!("   ... and {} more", selected.len() - 8),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(Color::Gray),
         )));
     }
 
     let summary_block = Paragraph::new(summary_lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(Color::Gray))
             .title(Span::styled(
                 " Summary ",
                 Style::default().fg(Color::White),
@@ -1370,28 +1401,28 @@ fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
             Span::styled("   📄 ", Style::default().fg(Color::Cyan)),
             Span::styled(
                 "Create belaf/config.toml",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]),
         Line::from(vec![
             Span::styled("   📄 ", Style::default().fg(Color::Cyan)),
             Span::styled(
                 "Create belaf/bootstrap.toml",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]),
         Line::from(vec![
             Span::styled("   ✏️  ", Style::default().fg(Color::Yellow)),
             Span::styled(
                 "Update project version files",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]),
         Line::from(vec![
             Span::styled("   🏷️  ", Style::default().fg(Color::Green)),
             Span::styled(
                 "Create baseline Git tags",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]),
     ];
@@ -1399,7 +1430,7 @@ fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
     let action_block = Paragraph::new(action_lines).block(
         Block::default()
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::DarkGray))
+            .border_style(Style::default().fg(Color::Gray))
             .title(Span::styled(
                 " Will Execute ",
                 Style::default().fg(Color::White),
@@ -1409,11 +1440,11 @@ fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
 
     let hints = Line::from(vec![
         Span::styled("Enter/y", Style::default().fg(Color::Green)),
-        Span::styled(" confirm  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" confirm  ", Style::default().fg(Color::Gray)),
         Span::styled("Backspace/n", Style::default().fg(Color::Yellow)),
-        Span::styled(" go back  ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" go back  ", Style::default().fg(Color::Gray)),
         Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+        Span::styled(" quit", Style::default().fg(Color::Gray)),
     ]);
     let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(hints_para, chunks[2]);
@@ -1473,31 +1504,31 @@ fn render_processing(frame: &mut Frame, area: Rect) {
 
     let subtitle = Line::from(Span::styled(
         "Setting up your release configuration",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(Color::Gray),
     ));
     let subtitle_para = Paragraph::new(subtitle).alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(subtitle_para, chunks[2]);
 
     let steps_lines = vec![
         Line::from(vec![
-            Span::styled("   📄 ", Style::default().fg(Color::DarkGray)),
+            Span::styled("   📄 ", Style::default().fg(Color::Gray)),
             Span::styled(
                 "Creating configuration files...",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]),
         Line::from(vec![
-            Span::styled("   ✏️  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("   ✏️  ", Style::default().fg(Color::Gray)),
             Span::styled(
                 "Updating version files...",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]),
         Line::from(vec![
-            Span::styled("   🏷️  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("   🏷️  ", Style::default().fg(Color::Gray)),
             Span::styled(
                 "Creating Git tags...",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(Color::Gray),
             ),
         ]),
     ];
@@ -1513,7 +1544,7 @@ fn render_complete(frame: &mut Frame, area: Rect, state: &WizardState) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Green))
         .title(Span::styled(
-            " ✓ Complete ",
+            " 🎉 Complete ",
             Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
@@ -1525,7 +1556,7 @@ fn render_complete(frame: &mut Frame, area: Rect, state: &WizardState) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Percentage(30),
+            Constraint::Percentage(25),
             Constraint::Length(3),
             Constraint::Length(2),
             Constraint::Length(8),
@@ -1534,14 +1565,10 @@ fn render_complete(frame: &mut Frame, area: Rect, state: &WizardState) {
         ])
         .split(inner_area);
 
-    let checkmark = vec![
-        Line::from(Span::styled(
-            "✓",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )),
-    ];
+    let checkmark = vec![Line::from(Span::styled(
+        "✅",
+        Style::default().add_modifier(Modifier::BOLD),
+    ))];
     let checkmark_para = Paragraph::new(checkmark)
         .alignment(ratatui::layout::Alignment::Center)
         .style(Style::default());
@@ -1563,7 +1590,7 @@ fn render_complete(frame: &mut Frame, area: Rect, state: &WizardState) {
 
     let subtitle = Line::from(Span::styled(
         "Your release management is ready to go",
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(Color::Gray),
     ));
     let subtitle_para = Paragraph::new(subtitle).alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(subtitle_para, chunks[2]);
@@ -1579,44 +1606,40 @@ fn render_complete(frame: &mut Frame, area: Rect, state: &WizardState) {
         Line::from(""),
         Line::from(vec![
             Span::styled("  1. ", Style::default().fg(Color::Cyan)),
-            Span::styled("Run ", Style::default().fg(Color::DarkGray)),
-            Span::styled("belaf status", Style::default().fg(Color::White)),
-            Span::styled(" to see project versions", Style::default().fg(Color::DarkGray)),
+            Span::styled("Run ", Style::default().fg(Color::Gray)),
+            Span::styled("belaf status", Style::default().fg(Color::Cyan)),
+            Span::styled(" to see project versions", Style::default().fg(Color::Gray)),
         ]),
         Line::from(vec![
             Span::styled("  2. ", Style::default().fg(Color::Cyan)),
-            Span::styled("Run ", Style::default().fg(Color::DarkGray)),
-            Span::styled("belaf prepare", Style::default().fg(Color::White)),
-            Span::styled(" when ready to release", Style::default().fg(Color::DarkGray)),
+            Span::styled("Run ", Style::default().fg(Color::Gray)),
+            Span::styled("belaf prepare", Style::default().fg(Color::Cyan)),
+            Span::styled(" when ready to release", Style::default().fg(Color::Gray)),
         ]),
         Line::from(vec![
             Span::styled("  3. ", Style::default().fg(Color::Cyan)),
-            Span::styled("Edit ", Style::default().fg(Color::DarkGray)),
-            Span::styled("belaf/config.toml", Style::default().fg(Color::White)),
-            Span::styled(" to customize", Style::default().fg(Color::DarkGray)),
+            Span::styled("Edit ", Style::default().fg(Color::Gray)),
+            Span::styled("belaf/config.toml", Style::default().fg(Color::Yellow)),
+            Span::styled(" to customize", Style::default().fg(Color::Gray)),
         ]),
     ];
     let next_steps_para =
         Paragraph::new(next_steps).alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(next_steps_para, chunks[3]);
 
-    let hints = Line::from(vec![
-        Span::styled("Press ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            "Enter",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" or ", Style::default().fg(Color::DarkGray)),
-        Span::styled(
-            "q",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(" to exit", Style::default().fg(Color::DarkGray)),
-    ]);
+    let hints = if let Some(countdown) = state.exit_countdown {
+        Line::from(vec![
+            Span::styled(
+                format!("Closing in {}...", countdown),
+                Style::default().fg(Color::Gray),
+            ),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("✨ ", Style::default().fg(Color::Green)),
+            Span::styled("Setup complete!", Style::default().fg(Color::Gray)),
+        ])
+    };
     let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(hints_para, chunks[5]);
 }
