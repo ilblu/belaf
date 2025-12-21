@@ -48,28 +48,6 @@ enum WizardStep {
     Confirmation,
 }
 
-impl WizardStep {
-    fn step_number(&self, total_projects: usize) -> String {
-        match self {
-            Self::ProjectSelection => "Step 1".to_string(),
-            Self::ProjectConfig { project_index } => {
-                format!("Step {} of {}", project_index + 2, total_projects + 2)
-            }
-            Self::Confirmation => format!("Step {}", total_projects + 2),
-        }
-    }
-
-    fn title(&self, project_name: Option<&str>) -> String {
-        match self {
-            Self::ProjectSelection => "Select Projects".to_string(),
-            Self::ProjectConfig { .. } => {
-                format!("Configure: {}", project_name.unwrap_or("Unknown"))
-            }
-            Self::Confirmation => "Confirm Changes".to_string(),
-        }
-    }
-}
-
 struct ProjectItem {
     candidate: ProjectCandidate,
     selected: bool,
@@ -713,65 +691,11 @@ fn run_app(
 }
 
 fn ui(f: &mut Frame, state: &mut WizardState) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(3),
-        ])
-        .split(f.area());
-
-    render_header(f, chunks[0], state);
-    render_step(f, chunks[1], state);
-    render_footer(f, chunks[2], state);
+    render_step(f, f.area(), state);
 
     if state.show_help {
         render_help_popup(f, state);
     }
-}
-
-fn render_header(f: &mut Frame, area: Rect, state: &WizardState) {
-    let project_name = state.get_current_project().map(|p| p.name());
-    let step_number = state.step.step_number(state.selected_count());
-    let title = format!(
-        "Release Preparation Wizard - {} - {}",
-        step_number,
-        state.step.title(project_name)
-    );
-    let header = Paragraph::new(title)
-        .style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(header, area);
-}
-
-fn render_footer(f: &mut Frame, area: Rect, state: &WizardState) {
-    let help_text = if state.is_loading() {
-        "⏳ Generating changelog with AI... | Esc: Cancel"
-    } else {
-        match &state.step {
-            WizardStep::ProjectSelection => {
-                "↑/↓: Navigate | Space: Toggle | A: Toggle All | Enter: Next | Q: Quit | ?: Help"
-            }
-            WizardStep::ProjectConfig { .. } => {
-                if state.show_changelog {
-                    "M: Toggle View | Tab: Back to Bump | Enter: Next | Esc: Back | Q: Quit"
-                } else {
-                    "↑/↓: Navigate | Tab: Preview Changelog | Enter: Next | Esc: Back | Q: Quit | ?: Help"
-                }
-            }
-            WizardStep::Confirmation => "Enter: Confirm | Esc: Back | Q: Quit | ?: Help",
-        }
-    };
-
-    let footer = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::Gray))
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(footer, area);
 }
 
 fn render_step(f: &mut Frame, area: Rect, state: &mut WizardState) {
@@ -791,31 +715,109 @@ fn render_step(f: &mut Frame, area: Rect, state: &mut WizardState) {
 }
 
 fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) {
+    let selected_count = state.projects.iter().filter(|p| p.selected).count();
+    let total_count = state.projects.len();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            " Step 1: Project Selection ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
+
+    let header_lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("🚀 ", Style::default()),
+            Span::styled(
+                "Select projects to prepare for release",
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("   Selected: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("{}", selected_count),
+                Style::default()
+                    .fg(if selected_count > 0 {
+                        Color::Green
+                    } else {
+                        Color::Yellow
+                    })
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" / {}", total_count),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+    ];
+    let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(header, chunks[0]);
+
     let items: Vec<ListItem> = state
         .projects
         .iter()
-        .map(|project| {
-            let checkbox = if project.selected { "[✓]" } else { "[ ]" };
-            let suggestion = match project.suggested_bump() {
-                BumpRecommendation::Major => " (suggests: MAJOR)",
-                BumpRecommendation::Minor => " (suggests: MINOR)",
-                BumpRecommendation::Patch => " (suggests: PATCH)",
-                BumpRecommendation::None => "",
+        .enumerate()
+        .map(|(idx, project)| {
+            let is_current = state.project_list_state.selected() == Some(idx);
+            let checkbox = if project.selected { "✅" } else { "⬜" };
+            let (suggestion_text, suggestion_color) = match project.suggested_bump() {
+                BumpRecommendation::Major => ("MAJOR", Color::Red),
+                BumpRecommendation::Minor => ("MINOR", Color::Yellow),
+                BumpRecommendation::Patch => ("PATCH", Color::Green),
+                BumpRecommendation::None => ("", Color::DarkGray),
             };
 
-            let content = format!(
-                "{} {} ({} commits){}",
-                checkbox,
-                project.name(),
-                project.commit_count(),
-                suggestion
-            );
+            let lines = vec![Line::from(vec![
+                Span::styled(format!(" {} ", checkbox), Style::default()),
+                Span::styled(
+                    project.name(),
+                    if is_current {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else if project.selected {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::White)
+                    },
+                ),
+                Span::styled(
+                    format!(" ({} commits)", project.commit_count()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                if !suggestion_text.is_empty() {
+                    Span::styled(
+                        format!("  → {}", suggestion_text),
+                        Style::default().fg(suggestion_color),
+                    )
+                } else {
+                    Span::raw("")
+                },
+            ])];
 
-            ListItem::new(content).style(if project.selected {
-                Style::default().fg(Color::Green)
+            let style = if is_current {
+                Style::default().bg(Color::Rgb(40, 40, 50))
             } else {
                 Style::default()
-            })
+            };
+            ListItem::new(lines).style(style)
         })
         .collect();
 
@@ -823,16 +825,29 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title("Select projects to prepare for release"),
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(Span::styled(" Projects ", Style::default().fg(Color::White))),
         )
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("► ");
+        .highlight_symbol("");
 
-    f.render_stateful_widget(list, area, &mut state.project_list_state);
+    f.render_stateful_widget(list, chunks[1], &mut state.project_list_state);
+
+    let hints = Line::from(vec![
+        Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+        Span::styled(" navigate  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Space", Style::default().fg(Color::Cyan)),
+        Span::styled(" toggle  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("a", Style::default().fg(Color::Green)),
+        Span::styled(" all  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter", Style::default().fg(Color::Green)),
+        Span::styled(" continue  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("?", Style::default().fg(Color::Yellow)),
+        Span::styled(" help  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("q", Style::default().fg(Color::Red)),
+        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+    ]);
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(hints_para, chunks[2]);
 }
 
 fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardState) {
@@ -854,41 +869,119 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
         .copied()
         .unwrap_or(BumpChoice::Auto);
 
-    let chunks = Layout::default()
+    let current_project_idx = match &state.step {
+        WizardStep::ProjectConfig { project_index } => *project_index + 1,
+        _ => 1,
+    };
+    let total_projects = state.selected_count();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            format!(
+                " Step 2: Configure Release ({}/{}) ",
+                current_project_idx, total_projects
+            ),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
+    let outer_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
+
+    let header_lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("📦 ", Style::default()),
+            Span::styled(
+                project_name.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  v{}", current_version),
+                Style::default().fg(Color::DarkGray),
+            ),
+            Span::styled(
+                format!("  ({} commits)", commits.len()),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+    ];
+    let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(header, outer_chunks[0]);
+
+    let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(area);
+        .split(outer_chunks[1]);
 
     let items: Vec<ListItem> = strategies
         .iter()
-        .map(|strategy| {
+        .enumerate()
+        .map(|(idx, strategy)| {
+            let is_selected = idx == selected_index;
             let next_ver = match strategy {
                 BumpChoice::Auto => calculate_next_version(&current_version, suggested_bump),
                 BumpChoice::Major => calculate_major_version(&current_version),
                 BumpChoice::Minor => calculate_minor_version(&current_version),
                 BumpChoice::Patch => calculate_patch_version(&current_version),
             };
-            let content = format!("  {}  →  {}", strategy.as_str(), next_ver);
-            ListItem::new(content)
+            let (icon, color) = match strategy {
+                BumpChoice::Auto => ("🔄", Color::Cyan),
+                BumpChoice::Major => ("🔴", Color::Red),
+                BumpChoice::Minor => ("🟡", Color::Yellow),
+                BumpChoice::Patch => ("🟢", Color::Green),
+            };
+            let lines = vec![Line::from(vec![
+                Span::styled(format!(" {} ", icon), Style::default()),
+                Span::styled(
+                    strategy.as_str(),
+                    if is_selected {
+                        Style::default().fg(color).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    },
+                ),
+                Span::styled(
+                    format!("  →  {}", next_ver),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])];
+            let style = if is_selected {
+                Style::default().bg(Color::Rgb(40, 40, 50))
+            } else {
+                Style::default()
+            };
+            ListItem::new(lines).style(style)
         })
         .collect();
 
-    let left_title = if state.is_loading() {
-        format!("{} ({}) [Processing...]", project_name, current_version)
-    } else {
-        format!("{} ({})", project_name, current_version)
-    };
-
     let list = List::new(items)
-        .block(Block::default().borders(Borders::ALL).title(left_title))
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(Span::styled(
+                    " Version Bump ",
+                    Style::default().fg(Color::White),
+                )),
         )
-        .highlight_symbol(if state.is_loading() { "⏳" } else { "► " });
+        .highlight_symbol("");
 
-    f.render_stateful_widget(list, chunks[0], &mut state.bump_list_state);
+    f.render_stateful_widget(list, main_chunks[0], &mut state.bump_list_state);
 
     if state.is_loading() {
         let loading_content = build_loading_panel(state, &commits);
@@ -896,10 +989,14 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("🤖 Generating Changelog..."),
+                    .border_style(Style::default().fg(Color::Yellow))
+                    .title(Span::styled(
+                        " 🤖 Generating Changelog... ",
+                        Style::default().fg(Color::Yellow),
+                    )),
             )
             .wrap(Wrap { trim: true });
-        f.render_widget(loading_panel, chunks[1]);
+        f.render_widget(loading_panel, main_chunks[1]);
     } else {
         let detail_content = build_detail_panel(
             &selected_strategy,
@@ -912,12 +1009,43 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title(format!("Details: {}", selected_strategy.as_str())),
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(Span::styled(
+                        format!(" {} Details ", selected_strategy.as_str()),
+                        Style::default().fg(Color::White),
+                    )),
             )
             .wrap(Wrap { trim: true });
 
-        f.render_widget(detail_panel, chunks[1]);
+        f.render_widget(detail_panel, main_chunks[1]);
     }
+
+    let hints = if state.is_loading() {
+        Line::from(vec![
+            Span::styled("⏳ ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "Generating changelog...  ",
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+            Span::styled(" select  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Tab", Style::default().fg(Color::Cyan)),
+            Span::styled(" preview changelog  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Enter", Style::default().fg(Color::Green)),
+            Span::styled(" next  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("Esc", Style::default().fg(Color::Yellow)),
+            Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
+            Span::styled("q", Style::default().fg(Color::Red)),
+            Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+        ])
+    };
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(hints_para, outer_chunks[2]);
 }
 
 fn build_loading_panel(state: &WizardState, commits: &[Commit]) -> Text<'static> {
@@ -1182,13 +1310,56 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
         changelog_content.push_str(&current_project.existing_changelog);
     }
 
+    let current_project_idx = match &state.step {
+        WizardStep::ProjectConfig { project_index } => *project_index + 1,
+        _ => 1,
+    };
+    let total_projects = state.selected_count();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            format!(
+                " Step 2: Changelog Preview ({}/{}) ",
+                current_project_idx, total_projects
+            ),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
-        .split(area);
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
 
-    let toggle_area = chunks[0];
-    let content_area = chunks[1];
+    let header_lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("📝 ", Style::default()),
+            Span::styled(
+                current_project.name(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {} → {}", current_version, new_version),
+                Style::default().fg(Color::Green),
+            ),
+        ]),
+    ];
+    let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(header, chunks[0]);
 
     let title = format!(
         "{} ({} → {})",
@@ -1196,8 +1367,7 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
         current_version,
         new_version
     );
-
-    state.changelog_toggle.render(f, toggle_area, &title);
+    state.changelog_toggle.render(f, chunks[1], &title);
 
     if state.changelog_toggle.is_right() {
         let raw_text = Text::from(changelog_content.clone());
@@ -1205,69 +1375,152 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Markdown Source")
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(Span::styled(
+                        " Markdown Source ",
+                        Style::default().fg(Color::Magenta),
+                    ))
                     .padding(Padding::horizontal(1)),
             )
             .wrap(Wrap { trim: false })
             .style(Style::default().fg(Color::Rgb(180, 180, 180)));
-        f.render_widget(paragraph, content_area);
+        f.render_widget(paragraph, chunks[2]);
     } else {
         let markdown_text = markdown::render_markdown(&changelog_content);
         let paragraph = Paragraph::new(markdown_text)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .title("Rendered Preview")
+                    .border_style(Style::default().fg(Color::DarkGray))
+                    .title(Span::styled(
+                        " Rendered Preview ",
+                        Style::default().fg(Color::Cyan),
+                    ))
                     .padding(Padding::horizontal(1)),
             )
             .wrap(Wrap { trim: false });
-        f.render_widget(paragraph, content_area);
+        f.render_widget(paragraph, chunks[2]);
     }
+
+    let hints = Line::from(vec![
+        Span::styled("m", Style::default().fg(Color::Cyan)),
+        Span::styled(" toggle view  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Tab", Style::default().fg(Color::Cyan)),
+        Span::styled(" back to bump  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter", Style::default().fg(Color::Green)),
+        Span::styled(" next  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Esc", Style::default().fg(Color::Yellow)),
+        Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("q", Style::default().fg(Color::Red)),
+        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+    ]);
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(hints_para, chunks[3]);
 }
 
 fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
     let selected_projects = state.selected_projects();
 
-    let mut confirmation_lines = vec![
-        Line::from(Span::styled(
-            "Ready to prepare release!",
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            " Step 3: Confirmation ",
             Style::default()
-                .fg(Color::Green)
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        )),
+        ));
+
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
+
+    let header_lines = vec![
         Line::from(""),
+        Line::from(vec![
+            Span::styled("🚀 ", Style::default()),
+            Span::styled(
+                "Ready to prepare release!",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
         Line::from(Span::styled(
-            format!("Selected projects: {}", selected_projects.len()),
-            Style::default().fg(Color::Cyan),
+            format!("   {} projects selected", selected_projects.len()),
+            Style::default().fg(Color::DarkGray),
         )),
+    ];
+    let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(header, chunks[0]);
+
+    let content_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .margin(1)
+        .split(chunks[1]);
+
+    let mut project_lines = vec![
+        Line::from(vec![
+            Span::styled("📦 ", Style::default()),
+            Span::styled("Projects", Style::default().fg(Color::White)),
+        ]),
         Line::from(""),
     ];
 
-    for project in &selected_projects {
+    for project in selected_projects.iter().take(10) {
         let bump_text = project.effective_bump_str();
+        let bump_color = match bump_text {
+            "MAJOR" => Color::Red,
+            "MINOR" => Color::Yellow,
+            "PATCH" => Color::Green,
+            _ => Color::Cyan,
+        };
 
-        confirmation_lines.push(Line::from(vec![
-            Span::styled("  • ", Style::default().fg(Color::Gray)),
+        project_lines.push(Line::from(vec![
+            Span::styled("   ✅ ", Style::default().fg(Color::Green)),
             Span::styled(project.name(), Style::default().fg(Color::White)),
             Span::styled(
-                format!(" ({} commits) → ", project.commit_count()),
-                Style::default().fg(Color::Gray),
+                format!(" ({} commits)", project.commit_count()),
+                Style::default().fg(Color::DarkGray),
             ),
-            Span::styled(
-                bump_text,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
+        ]));
+        project_lines.push(Line::from(vec![
+            Span::styled("      → ", Style::default().fg(Color::DarkGray)),
+            Span::styled(bump_text, Style::default().fg(bump_color)),
         ]));
     }
 
-    confirmation_lines.push(Line::from(""));
-    confirmation_lines.push(Line::from(""));
-    confirmation_lines.push(Line::from(Span::styled(
-        "Files that will be modified:",
-        Style::default().fg(Color::Magenta),
-    )));
+    if selected_projects.len() > 10 {
+        project_lines.push(Line::from(Span::styled(
+            format!("   ... and {} more", selected_projects.len() - 10),
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+
+    let project_block = Paragraph::new(project_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(" Summary ", Style::default().fg(Color::White))),
+    );
+    f.render_widget(project_block, content_chunks[0]);
+
+    let mut file_lines = vec![
+        Line::from(vec![
+            Span::styled("📄 ", Style::default()),
+            Span::styled("Files to Modify", Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+    ];
 
     let mut ecosystems: std::collections::HashSet<EcosystemType> = std::collections::HashSet::new();
     for project in &selected_projects {
@@ -1275,33 +1528,49 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
     }
 
     for ecosystem in &ecosystems {
-        confirmation_lines.push(Line::from(format!(
-            "  • {} (version bump)",
-            ecosystem.version_file()
-        )));
+        file_lines.push(Line::from(vec![
+            Span::styled("   ✏️  ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("{}", ecosystem.version_file()),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
     }
-    confirmation_lines.push(Line::from("  • CHANGELOG.md (new entries)"));
-    confirmation_lines.push(Line::from("  • belaf/releases/*.json (release manifest)"));
+    file_lines.push(Line::from(vec![
+        Span::styled("   📝 ", Style::default().fg(Color::Cyan)),
+        Span::styled("CHANGELOG.md", Style::default().fg(Color::DarkGray)),
+    ]));
+    file_lines.push(Line::from(vec![
+        Span::styled("   📋 ", Style::default().fg(Color::Magenta)),
+        Span::styled(
+            "belaf/releases/*.json",
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
 
-    confirmation_lines.push(Line::from(""));
-    confirmation_lines.push(Line::from(""));
-    confirmation_lines.push(Line::from(Span::styled(
-        "Press Enter to confirm and apply changes",
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-    )));
-    confirmation_lines.push(Line::from(Span::styled(
-        "Press Esc to go back",
-        Style::default().fg(Color::Gray),
-    )));
+    let file_block = Paragraph::new(file_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::DarkGray))
+            .title(Span::styled(
+                " Will Execute ",
+                Style::default().fg(Color::White),
+            )),
+    );
+    f.render_widget(file_block, content_chunks[1]);
 
-    let text = Text::from(confirmation_lines);
-    let paragraph = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title("Confirmation"))
-        .wrap(Wrap { trim: true });
-
-    f.render_widget(paragraph, area);
+    let hints = Line::from(vec![
+        Span::styled("Enter", Style::default().fg(Color::Green)),
+        Span::styled(" confirm  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Esc", Style::default().fg(Color::Yellow)),
+        Span::styled(" back  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("?", Style::default().fg(Color::Yellow)),
+        Span::styled(" help  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("q", Style::default().fg(Color::Red)),
+        Span::styled(" quit", Style::default().fg(Color::DarkGray)),
+    ]);
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(hints_para, chunks[2]);
 }
 
 fn render_help_popup(f: &mut Frame, state: &WizardState) {
