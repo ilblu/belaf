@@ -2358,3 +2358,40 @@ scope_matching = "smart"
         "With path_first strategy, commit should be attributed to 'web' based on file path, got: {stdout}"
     );
 }
+
+#[test]
+fn test_changelog_sha_links_format() {
+    let repo = TestRepo::new();
+    setup_basic_cargo_project(&repo);
+
+    let _ = repo.run_belaf_command(&["init", "--force"]);
+
+    repo.write_file("src/feature.rs", "pub fn feature() {}");
+    repo.commit("feat: add new feature");
+
+    let output = repo.run_belaf_command(&["changelog", "--preview"]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    assert!(
+        output.status.success(),
+        "Command failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let sha_link_pattern =
+        regex::Regex::new(r"\(\[([a-f0-9]{7})\]\(/commit/([a-f0-9]{40})\)\)").unwrap();
+
+    assert!(
+        sha_link_pattern.is_match(&stdout),
+        "Expected changelog to contain SHA links in format ([short_sha](/commit/full_sha)), got: {stdout}"
+    );
+
+    if let Some(captures) = sha_link_pattern.captures(&stdout) {
+        let short_sha = captures.get(1).unwrap().as_str();
+        let full_sha = captures.get(2).unwrap().as_str();
+        assert!(
+            full_sha.starts_with(short_sha),
+            "Short SHA ({short_sha}) should be prefix of full SHA ({full_sha})"
+        );
+    }
+}

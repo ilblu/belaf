@@ -176,7 +176,7 @@ impl CommitAnalysis {
     }
 }
 
-pub fn analyze_commits(commits: &[Commit<'static>]) -> Result<CommitAnalysis> {
+pub fn analyze_commits(commits: &[Commit]) -> Result<CommitAnalysis> {
     let mut analysis = CommitAnalysis {
         recommendation: BumpRecommendation::None,
         total_commits: commits.len(),
@@ -218,7 +218,7 @@ pub fn analyze_commits(commits: &[Commit<'static>]) -> Result<CommitAnalysis> {
 }
 
 pub fn analyze_commit_messages(messages: &[String]) -> Result<CommitAnalysis> {
-    let commits: Vec<Commit<'static>> = messages
+    let commits: Vec<Commit> = messages
         .iter()
         .map(|msg| Commit {
             message: msg.clone(),

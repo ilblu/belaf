@@ -6,6 +6,8 @@ use secrecy::SecretString;
 use serde::Serialize;
 
 use super::commit::Commit;
+
+const SHORT_SHA_LENGTH: usize = 7;
 use super::config::{ChangelogConfig, GitConfig};
 use super::error::{Error, Result};
 use super::github::GitHubClient;
@@ -21,8 +23,8 @@ pub struct RemoteConfig {
 }
 
 #[derive(Debug)]
-pub struct Changelog<'a> {
-    pub releases: Vec<Release<'a>>,
+pub struct Changelog {
+    pub releases: Vec<Release>,
     pub git_config: GitConfig,
     pub changelog_config: ChangelogConfig,
     pub bump_config: BumpConfig,
@@ -34,9 +36,9 @@ pub struct Changelog<'a> {
     github_token: Option<SecretString>,
 }
 
-impl<'a> Changelog<'a> {
+impl Changelog {
     pub fn new(
-        releases: Vec<Release<'a>>,
+        releases: Vec<Release>,
         git_config: GitConfig,
         changelog_config: ChangelogConfig,
         bump_config: BumpConfig,
@@ -105,11 +107,11 @@ impl<'a> Changelog<'a> {
         Ok(())
     }
 
-    fn process_commit(commit: &Commit<'a>, git_config: &GitConfig) -> Option<Commit<'a>> {
+    fn process_commit(commit: &Commit, git_config: &GitConfig) -> Option<Commit> {
         match commit.process(git_config) {
             Ok(commit) => Some(commit),
             Err(e) => {
-                let short_id = commit.id.chars().take(7).collect::<String>();
+                let short_id = commit.id.chars().take(SHORT_SHA_LENGTH).collect::<String>();
                 let summary = commit.message.lines().next().unwrap_or_default().trim();
                 match &e {
                     Error::ParseError(_) | Error::FieldError(_) => {
@@ -124,7 +126,7 @@ impl<'a> Changelog<'a> {
         }
     }
 
-    fn process_commit_list(commits: &mut Vec<Commit<'a>>, git_config: &GitConfig) -> Result<()> {
+    fn process_commit_list(commits: &mut Vec<Commit>, git_config: &GitConfig) -> Result<()> {
         *commits = commits
             .iter()
             .filter_map(|commit| Self::process_commit(commit, git_config))
@@ -156,7 +158,7 @@ impl<'a> Changelog<'a> {
                 for commit in commits.iter().filter(|c| c.conv.is_none()) {
                     log::error!(
                         "Commit {} is not conventional:\n{}",
-                        &commit.id[..7.min(commit.id.len())],
+                        &commit.id[..SHORT_SHA_LENGTH.min(commit.id.len())],
                         commit
                             .message
                             .lines()
@@ -178,7 +180,7 @@ impl<'a> Changelog<'a> {
                 for commit in commits.iter().filter(|c| c.group.is_none()) {
                     log::error!(
                         "Commit {} was not matched by any commit parser:\n{}",
-                        &commit.id[..7.min(commit.id.len())],
+                        &commit.id[..SHORT_SHA_LENGTH.min(commit.id.len())],
                         commit
                             .message
                             .lines()
@@ -238,9 +240,7 @@ impl<'a> Changelog<'a> {
         log::debug!("Processing {} release(s)", self.releases.len());
         let skip_regex = self.git_config.skip_tags.as_ref();
         let mut skipped_tags = Vec::new();
-        self.releases = self
-            .releases
-            .clone()
+        self.releases = std::mem::take(&mut self.releases)
             .into_iter()
             .rev()
             .filter(|release| {

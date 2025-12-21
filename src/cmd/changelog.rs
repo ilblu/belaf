@@ -64,7 +64,7 @@ pub fn run(
             continue;
         }
 
-        let commits: Vec<Commit<'static>> = history
+        let commits: Vec<Commit> = history
             .commits()
             .into_iter()
             .filter_map(|cid| {

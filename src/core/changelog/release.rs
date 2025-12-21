@@ -14,26 +14,26 @@ use crate::core::bump::BumpConfig;
 
 #[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all(serialize = "camelCase"))]
-pub struct Release<'a> {
+pub struct Release {
     pub version: Option<String>,
     pub message: Option<String>,
     #[serde(deserialize_with = "commits_to_conventional_commits")]
-    pub commits: Vec<Commit<'a>>,
+    pub commits: Vec<Commit>,
     #[serde(rename = "commit_id")]
     pub commit_id: Option<String>,
     pub timestamp: Option<i64>,
-    pub previous: Option<Box<Release<'a>>>,
+    pub previous: Option<Box<Release>>,
     pub repository: Option<String>,
     #[serde(rename = "commit_range")]
     pub commit_range: Option<Range>,
     #[serde(rename = "submodule_commits")]
-    pub submodule_commits: HashMap<String, Vec<Commit<'a>>>,
+    pub submodule_commits: HashMap<String, Vec<Commit>>,
     pub statistics: Option<Statistics>,
     pub extra: Option<Value>,
     pub github: RemoteReleaseMetadata,
 }
 
-impl Release<'_> {
+impl Release {
     pub fn with_statistics(mut self) -> Self {
         self.statistics = Some((&self).into());
         self
@@ -151,7 +151,7 @@ impl Release<'_> {
 
 #[derive(Serialize)]
 pub struct Releases<'a> {
-    pub releases: &'a Vec<Release<'a>>,
+    pub releases: &'a Vec<Release>,
 }
 
 impl Releases<'_> {

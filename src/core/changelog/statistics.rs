@@ -24,7 +24,7 @@ pub struct Statistics {
     pub days_passed_since_last_release: Option<i64>,
 }
 
-impl From<&Release<'_>> for Statistics {
+impl From<&Release> for Statistics {
     fn from(release: &Release) -> Self {
         let commit_count = release.commits.len();
 

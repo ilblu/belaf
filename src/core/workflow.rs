@@ -35,7 +35,7 @@ pub struct ProjectCandidate {
     pub name: String,
     pub prefix: String,
     pub current_version: String,
-    pub commits: Vec<Commit<'static>>,
+    pub commits: Vec<Commit>,
     pub commit_count: usize,
     pub suggested_bump: BumpRecommendation,
     pub ecosystem: EcosystemType,
@@ -167,7 +167,7 @@ impl<'a> PrepareContext<'a> {
                 continue;
             }
 
-            let commits: Vec<Commit<'static>> = history
+            let commits: Vec<Commit> = history
                 .commits()
                 .into_iter()
                 .filter_map(|cid| {
@@ -311,7 +311,7 @@ pub struct SelectedProject {
     pub old_version: String,
     pub new_version: String,
     pub bump_type: String,
-    pub commits: Vec<Commit<'static>>,
+    pub commits: Vec<Commit>,
     pub ecosystem: EcosystemType,
     pub cached_changelog: Option<String>,
 }
@@ -603,7 +603,7 @@ fn format_commit_message(projects: &[SelectedProject]) -> String {
 
 pub fn generate_changelog_entry(
     version: &str,
-    commits: &[Commit<'static>],
+    commits: &[Commit],
     git_config: &GitConfig,
     changelog_config: &ChangelogConfig,
     bump_config: &BumpConfig,
@@ -653,7 +653,7 @@ pub struct ChangelogGenerationParams<'a> {
     pub project_name: &'a str,
     pub prefix: &'a str,
     pub version: Option<&'a str>,
-    pub commits: &'a [Commit<'static>],
+    pub commits: &'a [Commit],
     pub git_config: &'a GitConfig,
     pub changelog_config: &'a ChangelogConfig,
     pub bump_config: &'a BumpConfig,

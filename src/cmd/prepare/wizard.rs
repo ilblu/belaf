@@ -101,7 +101,7 @@ impl ProjectItem {
         self.candidate.suggested_bump
     }
 
-    fn commits(&self) -> &[Commit<'static>] {
+    fn commits(&self) -> &[Commit] {
         &self.candidate.commits
     }
 
@@ -924,7 +924,7 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
     }
 }
 
-fn build_loading_panel(state: &WizardState, commits: &[Commit<'static>]) -> Text<'static> {
+fn build_loading_panel(state: &WizardState, commits: &[Commit]) -> Text<'static> {
     let spinner = state.loading_spinner();
     let commit_count = commits.len();
 
@@ -977,7 +977,7 @@ fn build_detail_panel(
     strategy: &BumpChoice,
     current_version: &str,
     suggested_bump: BumpRecommendation,
-    commits: &[Commit<'static>],
+    commits: &[Commit],
 ) -> Text<'static> {
     let mut lines: Vec<Line> = Vec::new();
 
@@ -1135,7 +1135,7 @@ fn build_detail_panel(
     Text::from(lines)
 }
 
-fn count_commit_types(commits: &[Commit<'static>]) -> (usize, usize, usize, usize) {
+fn count_commit_types(commits: &[Commit]) -> (usize, usize, usize, usize) {
     let mut feat = 0;
     let mut fix = 0;
     let mut breaking = 0;
