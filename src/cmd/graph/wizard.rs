@@ -205,6 +205,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<i32>
                     browser::open_browser(None)?;
                     enable_raw_mode()?;
                     stdout().execute(EnterAlternateScreen)?;
+                    terminal.clear()?;
                 }
                 KeyCode::Home => app.list_state.select(Some(0)),
                 KeyCode::End => app
@@ -217,39 +218,50 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<i32>
 }
 
 fn ui(f: &mut Frame, app: &mut App) {
+    let outer_block = Block::default()
+        .title(" 🔗 Dependency Graph ")
+        .title_alignment(Alignment::Center)
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan));
+
+    let inner_area = outer_block.inner(f.area());
+    f.render_widget(outer_block, f.area());
+
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(1),
-            Constraint::Min(10),
-            Constraint::Length(2),
-        ])
-        .split(f.area());
-
-    let title = Paragraph::new(" ◆ Dependency Graph").style(
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    );
-    f.render_widget(title, chunks[0]);
+        .constraints([Constraint::Min(0), Constraint::Length(2)])
+        .split(inner_area);
 
     let main_chunks = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[1]);
+        .split(chunks[0]);
 
     render_packages_panel(f, app, main_chunks[0]);
     render_details_panel(f, app, main_chunks[1]);
 
-    let help_text = " ↑↓/jk: Navigate │ g: Browser Graph │ h: Help │ q: Quit";
-    let help = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::DarkGray))
-        .block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-    f.render_widget(help, chunks[2]);
+    let position_text = format!(
+        "{}/{}",
+        app.selected_idx() + 1,
+        app.projects.len()
+    );
+
+    let hints = Line::from(vec![
+        Span::styled(" ↑↓/jk", Style::default().fg(Color::Cyan)),
+        Span::styled(" Navigate  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("g", Style::default().fg(Color::Green)),
+        Span::styled(" Browser  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("h", Style::default().fg(Color::Yellow)),
+        Span::styled(" Help  ", Style::default().fg(Color::DarkGray)),
+        Span::styled("q", Style::default().fg(Color::Red)),
+        Span::styled(" Quit", Style::default().fg(Color::DarkGray)),
+        Span::raw("  │  "),
+        Span::styled("📦 Package ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        Span::styled(format!("[{}]", position_text), Style::default().fg(Color::White)),
+    ]);
+
+    let hints_widget = Paragraph::new(hints).alignment(Alignment::Center);
+    f.render_widget(hints_widget, chunks[1]);
 
     if app.show_help {
         render_help_popup(f);
@@ -331,7 +343,7 @@ fn render_help_popup(f: &mut Frame) {
 
 fn render_packages_panel(f: &mut Frame, app: &mut App, area: Rect) {
     let block = Block::default()
-        .title(format!(" Packages ({}) ", app.projects.len()))
+        .title(format!(" 📦 Packages ({}) ", app.projects.len()))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
 
@@ -340,38 +352,56 @@ fn render_packages_panel(f: &mut Frame, app: &mut App, area: Rect) {
         .iter()
         .enumerate()
         .map(|(idx, p)| {
-            let symbol = if p.deps.is_empty() { "○" } else { "●" };
-            let deps_count = if p.deps.is_empty() {
-                String::new()
+            let is_selected = app.list_state.selected() == Some(idx);
+            let is_root = p.deps.is_empty();
+
+            let marker = if is_selected { "▶ " } else { "  " };
+            let symbol = if is_root { "◆" } else { "○" };
+
+            let deps_info = if p.deps.is_empty() {
+                " (root)".to_string()
             } else {
-                format!(" [{}]", p.deps.len())
+                format!(" → {}", p.deps.len())
             };
 
-            let is_selected = app.list_state.selected() == Some(idx);
-            let marker = if is_selected { "▶" } else { " " };
-
-            let line = format!(
-                "{} {} {}  {}{}",
-                marker, symbol, p.name, p.version, deps_count
-            );
-
-            let style = if is_selected {
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD)
-            } else if p.deps.is_empty() {
+            let name_style = if is_selected {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            } else if is_root {
                 Style::default().fg(Color::Green)
             } else {
-                Style::default().fg(Color::White)
+                Style::default().fg(Color::Gray)
             };
 
-            ListItem::new(line).style(style)
+            let version_style = if is_selected {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            let deps_style = if is_root {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::Yellow)
+            };
+
+            let symbol_style = if is_root {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            ListItem::new(Line::from(vec![
+                Span::raw(marker),
+                Span::styled(symbol, symbol_style),
+                Span::raw(" "),
+                Span::styled(&p.name, name_style),
+                Span::styled(format!(" {}", p.version), version_style),
+                Span::styled(deps_info, deps_style),
+            ]))
         })
         .collect();
 
-    let list = List::new(items)
-        .block(block)
-        .highlight_style(Style::default());
+    let list = List::new(items).block(block);
 
     f.render_stateful_widget(list, area, &mut app.list_state);
 
@@ -399,85 +429,93 @@ fn render_packages_panel(f: &mut Frame, app: &mut App, area: Rect) {
 fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
     let selected = app.selected_project();
     let title = selected
-        .map(|p| format!(" {} ", p.name))
-        .unwrap_or_else(|| " Details ".to_string());
+        .map(|p| format!(" 📋 {} ", p.name))
+        .unwrap_or_else(|| " 📋 Details ".to_string());
 
     let block = Block::default()
         .title(title)
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .border_style(Style::default().fg(Color::Magenta));
 
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let Some(proj) = selected else {
-        let no_selection =
-            Paragraph::new("No project selected").style(Style::default().fg(Color::DarkGray));
+        let no_selection = Paragraph::new(Line::from(vec![
+            Span::styled("  ⚠ ", Style::default().fg(Color::Yellow)),
+            Span::styled("No project selected", Style::default().fg(Color::DarkGray)),
+        ]));
         f.render_widget(no_selection, inner);
         return;
     };
 
     let release_pos = app.release_position(&proj.name).unwrap_or(0);
     let total = app.release_order.len();
+    let is_root = proj.deps.is_empty();
 
     let mut lines = vec![
         Line::from(vec![
-            Span::styled("Version: ", Style::default().fg(Color::DarkGray)),
-            Span::styled(&proj.version, Style::default().fg(Color::White)),
+            Span::styled(" 🏷️  Version: ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&proj.version, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+        ]),
+        Line::from(vec![
+            Span::styled(" 🎯 Release:  ", Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                format!("#{} of {}", release_pos, total),
+                Style::default().fg(Color::Yellow),
+            ),
+            if is_root {
+                Span::styled(" (root package)", Style::default().fg(Color::Green))
+            } else {
+                Span::raw("")
+            },
         ]),
         Line::from(""),
-        Line::from(vec![Span::styled(
-            format!("Dependencies ({})", proj.deps.len()),
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        )]),
+        Line::from(vec![
+            Span::styled(" ⬇️  ", Style::default()),
+            Span::styled(
+                format!("Dependencies ({})", proj.deps.len()),
+                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+            ),
+        ]),
     ];
 
     if proj.deps.is_empty() {
         lines.push(Line::from(Span::styled(
-            "  (none)",
+            "     ✨ No dependencies",
             Style::default().fg(Color::DarkGray),
         )));
     } else {
         for dep in &proj.deps {
-            lines.push(Line::from(Span::styled(
-                format!("  → {}", dep),
-                Style::default().fg(Color::Green),
-            )));
-        }
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(vec![Span::styled(
-        format!("Dependents ({})", proj.dependents.len()),
-        Style::default()
-            .fg(Color::Cyan)
-            .add_modifier(Modifier::BOLD),
-    )]));
-
-    if proj.dependents.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "  (none)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        for dep in &proj.dependents {
-            lines.push(Line::from(Span::styled(
-                format!("  ← {}", dep),
-                Style::default().fg(Color::Cyan),
-            )));
+            lines.push(Line::from(vec![
+                Span::styled("     → ", Style::default().fg(Color::Green)),
+                Span::styled(dep, Style::default().fg(Color::White)),
+            ]));
         }
     }
 
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("Release Order: ", Style::default().fg(Color::DarkGray)),
+        Span::styled(" ⬆️  ", Style::default()),
         Span::styled(
-            format!("#{} of {}", release_pos, total),
-            Style::default().fg(Color::Yellow),
+            format!("Dependents ({})", proj.dependents.len()),
+            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
         ),
     ]));
+
+    if proj.dependents.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "     ✨ No dependents",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for dep in &proj.dependents {
+            lines.push(Line::from(vec![
+                Span::styled("     ← ", Style::default().fg(Color::Magenta)),
+                Span::styled(dep, Style::default().fg(Color::White)),
+            ]));
+        }
+    }
 
     let text = Text::from(lines);
     let paragraph = Paragraph::new(text);
