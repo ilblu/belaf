@@ -1,6 +1,5 @@
 use ratatui::{
     layout::Rect,
-    style::Style,
     widgets::{Block, Row, Table as RatatuiTable},
     Frame,
 };
@@ -10,7 +9,6 @@ pub(crate) struct Table<'a> {
     header: Option<Row<'a>>,
     widths: &'a [ratatui::layout::Constraint],
     block: Option<Block<'a>>,
-    highlight_style: Option<Style>,
 }
 
 impl<'a> Table<'a> {
@@ -20,7 +18,6 @@ impl<'a> Table<'a> {
             header: None,
             widths,
             block: None,
-            highlight_style: None,
         }
     }
 
@@ -34,11 +31,6 @@ impl<'a> Table<'a> {
         self
     }
 
-    pub fn highlight_style(mut self, style: Style) -> Self {
-        self.highlight_style = Some(style);
-        self
-    }
-
     pub fn render(&self, frame: &mut Frame, area: Rect) {
         let mut table = RatatuiTable::new(self.rows.clone(), self.widths);
 
@@ -48,10 +40,6 @@ impl<'a> Table<'a> {
 
         if let Some(block) = self.block.clone() {
             table = table.block(block);
-        }
-
-        if let Some(style) = self.highlight_style {
-            table = table.row_highlight_style(style);
         }
 
         frame.render_widget(table, area);
