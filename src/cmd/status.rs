@@ -21,7 +21,6 @@ use crate::cli::ReleaseOutputFormat;
 use crate::core::ui::{
     components::{status_bar::StatusBar, table::Table},
     theme::AppColors,
-    utils::is_interactive_terminal,
 };
 use crate::core::{graph::GraphQueryBuilder, session::AppSession};
 
@@ -534,7 +533,9 @@ fn run_tui(sess: &AppSession, idents: &[usize]) -> Result<()> {
     Ok(())
 }
 
-pub fn run(format: Option<ReleaseOutputFormat>, no_tui: bool) -> Result<i32> {
+pub fn run(format: Option<ReleaseOutputFormat>, ci: bool) -> Result<i32> {
+    use crate::core::ui::utils::should_use_tui;
+
     info!(
         "checking release status with belaf version {}",
         env!("CARGO_PKG_VERSION")
@@ -553,16 +554,20 @@ pub fn run(format: Option<ReleaseOutputFormat>, no_tui: bool) -> Result<i32> {
 
     let histories = sess.analyze_histories()?;
 
-    let format = format.unwrap_or(ReleaseOutputFormat::Table);
-    let use_tui =
-        matches!(format, ReleaseOutputFormat::Table) && is_interactive_terminal() && !no_tui;
+    let use_tui = should_use_tui(ci, &format);
+
+    let output_format = if ci {
+        ReleaseOutputFormat::Json
+    } else {
+        format.unwrap_or(ReleaseOutputFormat::Text)
+    };
 
     if use_tui {
         run_tui(&sess, &idents)?;
         return Ok(0);
     }
 
-    match format {
+    match output_format {
         ReleaseOutputFormat::Json => {
             use serde_json::json;
 

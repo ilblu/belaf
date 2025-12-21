@@ -88,14 +88,14 @@ pub async fn execute(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::Init(args) => {
-            let exit_code = cmd::init::run(args.force, args.upstream, args.no_tui)?;
+            let exit_code = cmd::init::run(args.force, args.upstream, args.ci, args.preset)?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }
             Ok(())
         }
         Commands::Status(args) => {
-            let exit_code = cmd::status::run(args.format, args.no_tui)?;
+            let exit_code = cmd::status::run(args.format, args.ci)?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }
@@ -109,7 +109,7 @@ pub async fn execute(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::Graph(args) => {
-            let exit_code = cmd::graph::run(args.format, args.no_tui, args.web, args.out)?;
+            let exit_code = cmd::graph::run(args.format, args.ci, args.web, args.out)?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }
@@ -122,6 +122,7 @@ pub async fn execute(cli: Cli) -> Result<()> {
                 args.project,
                 args.output,
                 args.unreleased,
+                args.ci,
             )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);

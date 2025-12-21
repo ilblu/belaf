@@ -46,20 +46,36 @@ pub struct BootstrapCommand {
         help = "The name of the Git upstream remote"
     )]
     upstream_name: Option<String>,
+
+    #[arg(long = "preset", help = "Use a preset configuration template")]
+    preset: Option<String>,
 }
 
 mod wizard;
 
-pub fn run(force: bool, upstream: Option<String>, no_tui: bool) -> Result<i32> {
+pub fn run(force: bool, upstream: Option<String>, ci: bool, preset: Option<String>) -> Result<i32> {
+    use crate::core::embed::EmbeddedPresets;
     use crate::core::ui::utils::is_interactive_terminal;
 
-    if !no_tui && is_interactive_terminal() {
-        return wizard::run(force, upstream);
+    if let Some(ref preset_name) = preset {
+        let valid_presets = EmbeddedPresets::list_presets();
+        if !valid_presets.contains(&preset_name.to_string()) {
+            bail!(
+                "Unknown preset '{}'. Valid presets: {}",
+                preset_name,
+                valid_presets.join(", ")
+            );
+        }
+    }
+
+    if !ci && is_interactive_terminal() {
+        return wizard::run(force, upstream, preset);
     }
 
     let cmd = BootstrapCommand {
         force,
         upstream_name: upstream,
+        preset,
     };
     cmd.execute()
 }
@@ -99,10 +115,23 @@ impl BootstrapCommand {
         }
 
         {
-            let embedded_config = atry!(
-                crate::core::embed::EmbeddedConfig::get_config_string();
-                ["could not load embedded default configuration"]
-            );
+            let embedded_config = match &self.preset {
+                Some(preset_name) => {
+                    info!("using preset configuration: {}", preset_name);
+                    atry!(
+                        crate::core::embed::EmbeddedPresets::get_preset_string(preset_name);
+                        ["could not load preset configuration '{}'. Available presets: {}",
+                         preset_name,
+                         crate::core::embed::EmbeddedPresets::list_presets().join(", ")]
+                    )
+                }
+                None => {
+                    atry!(
+                        crate::core::embed::EmbeddedConfig::get_config_string();
+                        ["could not load embedded default configuration"]
+                    )
+                }
+            };
             let cfg_text = embedded_config.replace(
                 "upstream_urls = []",
                 &format!("upstream_urls = [\"{}\"]", upstream_url),

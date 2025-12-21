@@ -29,16 +29,29 @@ fn print_no_changes_message() {
 }
 
 pub fn run(ci: bool, project_overrides: Option<Vec<String>>) -> Result<i32> {
+    use crate::core::ui::utils::is_interactive_terminal;
+    use anyhow::bail;
+
     info!(
         "preparing release with belaf version {}",
         env!("CARGO_PKG_VERSION")
     );
 
     if ci {
-        run_ci_mode(project_overrides)
-    } else {
-        run_interactive_mode(project_overrides)
+        return run_ci_mode(project_overrides);
     }
+
+    if !is_interactive_terminal() {
+        bail!(
+            "Error: No interactive terminal detected.\n\n\
+            prepare requires either:\n\
+            • Interactive terminal (TTY) for the release wizard\n\
+            • --ci flag for full automation (bump, changelog, push, PR)\n\n\
+            Hint: belaf prepare --ci"
+        );
+    }
+
+    run_interactive_mode(project_overrides)
 }
 
 fn run_ci_mode(project_overrides: Option<Vec<String>>) -> Result<i32> {

@@ -15,17 +15,17 @@ mod browser;
 
 pub fn run(
     format: Option<GraphOutputFormat>,
-    no_tui: bool,
+    ci: bool,
     web: bool,
     out: Option<String>,
 ) -> Result<i32> {
-    use crate::core::ui::utils::is_interactive_terminal;
+    use crate::core::ui::utils::should_use_tui;
 
     if web || out.is_some() {
         return browser::open_browser(out.as_deref());
     }
 
-    if !no_tui && is_interactive_terminal() {
+    if should_use_tui(ci, &format) {
         return wizard::run();
     }
 
@@ -47,9 +47,13 @@ pub fn run(
         return Ok(0);
     }
 
-    let format = format.unwrap_or(GraphOutputFormat::Ascii);
+    let output_format = if ci {
+        GraphOutputFormat::Json
+    } else {
+        format.unwrap_or(GraphOutputFormat::Ascii)
+    };
 
-    match format {
+    match output_format {
         GraphOutputFormat::Ascii => render_ascii(&sess, &idents),
         GraphOutputFormat::Dot => render_dot(&sess, &idents),
         GraphOutputFormat::Json => render_json(&sess, &idents)?,

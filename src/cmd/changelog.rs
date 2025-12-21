@@ -20,11 +20,14 @@ pub fn run(
     project_filter: Option<String>,
     output_path: Option<String>,
     unreleased: bool,
+    ci: bool,
 ) -> Result<i32> {
-    info!(
-        "generating changelog with belaf version {}",
-        env!("CARGO_PKG_VERSION")
-    );
+    if !ci {
+        info!(
+            "generating changelog with belaf version {}",
+            env!("CARGO_PKG_VERSION")
+        );
+    }
 
     let sess =
         AppSession::initialize_default().context("could not initialize app and project graph")?;
@@ -33,7 +36,9 @@ pub fn run(
     let idents = sess.graph().query(q).context("could not query projects")?;
 
     if idents.is_empty() {
-        println!("{} No projects found in repository.", "ℹ".cyan().bold());
+        if !ci {
+            println!("{} No projects found in repository.", "ℹ".cyan().bold());
+        }
         return Ok(0);
     }
 
@@ -63,10 +68,12 @@ pub fn run(
         let n_commits = history.n_commits();
 
         if n_commits == 0 {
-            info!(
-                "{}: no changes since last release, skipping",
-                proj.user_facing_name
-            );
+            if !ci {
+                info!(
+                    "{}: no changes since last release, skipping",
+                    proj.user_facing_name
+                );
+            }
             continue;
         }
 
@@ -130,10 +137,12 @@ pub fn run(
         let result = generate_and_write_project_changelog(&params)?;
 
         if !result.has_user_changes {
-            info!(
-                "{}: no user-facing changes, skipping",
-                proj.user_facing_name
-            );
+            if !ci {
+                info!(
+                    "{}: no user-facing changes, skipping",
+                    proj.user_facing_name
+                );
+            }
             continue;
         }
 
@@ -147,7 +156,7 @@ pub fn run(
             );
         } else if stdout {
             print!("{}", result.content);
-        } else {
+        } else if !ci {
             let version_info = match new_version.as_deref() {
                 Some(nv) => format!("{} → {}", current_version.dimmed(), nv.green()),
                 None => format!("{} [unreleased]", current_version.dimmed()),
@@ -172,27 +181,29 @@ pub fn run(
         processed_count += 1;
     }
 
-    if processed_count == 0 {
-        if project_filter.is_some() {
+    if !ci {
+        if processed_count == 0 {
+            if project_filter.is_some() {
+                println!(
+                    "{} Project '{}' not found or has no changes.",
+                    "ℹ".cyan().bold(),
+                    project_filter.unwrap()
+                );
+            } else {
+                println!(
+                    "{} No projects with unreleased changes found.",
+                    "ℹ".cyan().bold()
+                );
+            }
+        } else if !preview && !stdout {
+            println!();
             println!(
-                "{} Project '{}' not found or has no changes.",
-                "ℹ".cyan().bold(),
-                project_filter.unwrap()
-            );
-        } else {
-            println!(
-                "{} No projects with unreleased changes found.",
-                "ℹ".cyan().bold()
+                "{} Generated changelog for {} project{}.",
+                "✓".green().bold(),
+                processed_count,
+                if processed_count == 1 { "" } else { "s" }
             );
         }
-    } else if !preview && !stdout {
-        println!();
-        println!(
-            "{} Generated changelog for {} project{}.",
-            "✓".green().bold(),
-            processed_count,
-            if processed_count == 1 { "" } else { "s" }
-        );
     }
 
     Ok(0)

@@ -2,8 +2,12 @@ use std::io::IsTerminal;
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 
-pub(crate) fn is_interactive_terminal() -> bool {
+pub fn is_interactive_terminal() -> bool {
     std::io::stdout().is_terminal() && std::io::stdin().is_terminal()
+}
+
+pub fn should_use_tui<T>(ci_mode: bool, format: &Option<T>) -> bool {
+    !ci_mode && format.is_none() && is_interactive_terminal()
 }
 
 pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {

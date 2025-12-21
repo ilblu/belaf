@@ -39,6 +39,7 @@ struct DetectedProject {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WizardStep {
     Welcome,
+    PresetSelection,
     ProjectSelection,
     UpstreamConfig,
     Confirmation,
@@ -56,10 +57,23 @@ struct WizardState {
     success_message: Option<String>,
     force: bool,
     dirty_warning: Option<String>,
+    preset: Option<String>,
+    preset_from_cli: bool,
+    selected_preset_idx: usize,
+    available_presets: Vec<String>,
 }
 
 impl WizardState {
-    fn new(force: bool) -> Self {
+    fn new(force: bool, preset: Option<String>) -> Self {
+        use crate::core::embed::EmbeddedPresets;
+
+        let preset_from_cli = preset.is_some();
+        let available_presets = EmbeddedPresets::list_presets();
+        let selected_preset_idx = preset
+            .as_ref()
+            .and_then(|p| available_presets.iter().position(|x| x == p))
+            .unwrap_or(0);
+
         Self {
             step: WizardStep::Welcome,
             projects: Vec::new(),
@@ -70,7 +84,18 @@ impl WizardState {
             success_message: None,
             force,
             dirty_warning: None,
+            preset,
+            preset_from_cli,
+            selected_preset_idx,
+            available_presets,
         }
+    }
+
+    fn selected_preset_name(&self) -> &str {
+        self.available_presets
+            .get(self.selected_preset_idx)
+            .map(|s| s.as_str())
+            .unwrap_or("default")
     }
 
     fn selected_projects(&self) -> Vec<&DetectedProject> {
@@ -96,8 +121,8 @@ impl WizardState {
     }
 }
 
-pub fn run(force: bool, upstream: Option<String>) -> Result<i32> {
-    let mut state = WizardState::new(force);
+pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Result<i32> {
+    let mut state = WizardState::new(force, preset);
 
     let repo = atry!(
         Repository::open_from_env();
@@ -178,9 +203,36 @@ fn run_wizard_loop(
 
                 (KeyCode::Enter, _, WizardStep::Welcome) => {
                     if state.error_message.is_none() || state.force {
-                        state.step = WizardStep::ProjectSelection;
+                        state.step = if state.preset_from_cli {
+                            WizardStep::ProjectSelection
+                        } else {
+                            WizardStep::PresetSelection
+                        };
                         state.error_message = None;
                     }
+                }
+
+                (KeyCode::Down | KeyCode::Char('j'), _, WizardStep::PresetSelection) => {
+                    if !state.available_presets.is_empty() {
+                        state.selected_preset_idx =
+                            (state.selected_preset_idx + 1) % state.available_presets.len();
+                    }
+                }
+                (KeyCode::Up | KeyCode::Char('k'), _, WizardStep::PresetSelection) => {
+                    if !state.available_presets.is_empty() {
+                        state.selected_preset_idx = if state.selected_preset_idx == 0 {
+                            state.available_presets.len() - 1
+                        } else {
+                            state.selected_preset_idx - 1
+                        };
+                    }
+                }
+                (KeyCode::Enter, _, WizardStep::PresetSelection) => {
+                    state.preset = Some(state.selected_preset_name().to_string());
+                    state.step = WizardStep::ProjectSelection;
+                }
+                (KeyCode::Esc, _, WizardStep::PresetSelection) => {
+                    state.step = WizardStep::Welcome;
                 }
 
                 (KeyCode::Down | KeyCode::Char('j'), _, WizardStep::ProjectSelection) => {
@@ -217,7 +269,11 @@ fn run_wizard_loop(
                     }
                 }
                 (KeyCode::Esc, _, WizardStep::ProjectSelection) => {
-                    state.step = WizardStep::Welcome;
+                    state.step = if state.preset_from_cli {
+                        WizardStep::Welcome
+                    } else {
+                        WizardStep::PresetSelection
+                    };
                 }
 
                 (KeyCode::Char(c), _, WizardStep::UpstreamConfig)
@@ -275,8 +331,14 @@ fn run_wizard_loop(
 }
 
 fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
-    let embedded_config = crate::core::embed::EmbeddedConfig::get_config_string()?;
-    let cfg_text = embedded_config.replace(
+    use crate::core::embed::{EmbeddedConfig, EmbeddedPresets};
+
+    let base_config = match state.preset.as_deref() {
+        Some(preset_name) => EmbeddedPresets::get_preset_string(preset_name)?,
+        None => EmbeddedConfig::get_config_string()?,
+    };
+
+    let cfg_text = base_config.replace(
         "upstream_urls = []",
         &format!("upstream_urls = [\"{}\"]", state.upstream_url),
     );
@@ -372,6 +434,7 @@ fn render(frame: &mut Frame, state: &WizardState) {
 
     match state.step {
         WizardStep::Welcome => render_welcome(frame, chunks[1], state),
+        WizardStep::PresetSelection => render_preset_selection(frame, chunks[1], state),
         WizardStep::ProjectSelection => render_project_selection(frame, chunks[1], state),
         WizardStep::UpstreamConfig => render_upstream_config(frame, chunks[1], state),
         WizardStep::Confirmation => render_confirmation(frame, chunks[1], state),
@@ -385,9 +448,10 @@ fn render(frame: &mut Frame, state: &WizardState) {
 fn render_header(frame: &mut Frame, area: Rect, state: &WizardState) {
     let step_text = match state.step {
         WizardStep::Welcome => "Welcome",
-        WizardStep::ProjectSelection => "Step 1/3: Project Selection",
-        WizardStep::UpstreamConfig => "Step 2/3: Upstream Configuration",
-        WizardStep::Confirmation => "Step 3/3: Confirmation",
+        WizardStep::PresetSelection => "Step 1/4: Changelog Preset",
+        WizardStep::ProjectSelection => "Step 2/4: Project Selection",
+        WizardStep::UpstreamConfig => "Step 3/4: Upstream Configuration",
+        WizardStep::Confirmation => "Step 4/4: Confirmation",
         WizardStep::Processing => "Processing...",
         WizardStep::Complete => "Complete!",
     };
@@ -441,6 +505,69 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
         Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Welcome "));
 
     frame.render_widget(para, area);
+}
+
+fn render_preset_selection(frame: &mut Frame, area: Rect, state: &WizardState) {
+    use crate::core::embed::EmbeddedPresets;
+
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(area);
+
+    let items: Vec<ListItem> = state
+        .available_presets
+        .iter()
+        .enumerate()
+        .map(|(idx, name)| {
+            let description = match name.as_str() {
+                "default" => "Standard Conventional Commits format",
+                "keepachangelog" => "Keep a Changelog specification",
+                "flat" => "What's Changed - no grouping",
+                "minimal" => "Version + Date + Commits only",
+                _ => "Custom preset",
+            };
+            let text = format!("{}\n  {}", name, description);
+            let style = if idx == state.selected_preset_idx {
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+            ListItem::new(text).style(style)
+        })
+        .collect();
+
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(" Select Changelog Preset "),
+    );
+
+    frame.render_widget(list, chunks[0]);
+
+    let preview_content = EmbeddedPresets::get_preset_string(state.selected_preset_name())
+        .map(|content| {
+            let lines: Vec<&str> = content.lines().take(30).collect();
+            if content.lines().count() > 30 {
+                format!("{}\n\n... (truncated)", lines.join("\n"))
+            } else {
+                lines.join("\n")
+            }
+        })
+        .unwrap_or_else(|_| "Preview not available".to_string());
+
+    let preview = Paragraph::new(preview_content)
+        .style(Style::default().fg(Color::DarkGray))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .title(" Preview (cliff.toml) "),
+        );
+
+    frame.render_widget(preview, chunks[1]);
 }
 
 fn render_project_selection(frame: &mut Frame, area: Rect, state: &WizardState) {
@@ -596,6 +723,7 @@ fn render_complete(frame: &mut Frame, area: Rect, state: &WizardState) {
 fn render_footer(frame: &mut Frame, area: Rect, state: &WizardState) {
     let help_text = match state.step {
         WizardStep::Welcome => "ENTER: Continue  q: Quit",
+        WizardStep::PresetSelection => "↑/↓: Navigate  ENTER: Select  ESC: Back",
         WizardStep::ProjectSelection => {
             "↑/↓: Navigate  SPACE: Toggle  a: All  n: None  ENTER: Next  ESC: Back"
         }
