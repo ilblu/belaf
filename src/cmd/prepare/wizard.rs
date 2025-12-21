@@ -1179,15 +1179,7 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
         .as_deref()
         .unwrap_or("Loading changelog...");
 
-    let mut changelog_content = format!(
-        "# Changelog\n\n\
-        All notable changes to {} will be documented in this file.\n\n\
-        The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\n\
-        and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n",
-        current_project.name()
-    );
-
-    changelog_content.push_str(new_entry);
+    let mut changelog_content = String::from(new_entry);
 
     if !current_project.existing_changelog.is_empty() {
         changelog_content.push_str("\n\n");
