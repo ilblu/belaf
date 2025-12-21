@@ -11,7 +11,7 @@ use super::config::{CommitParser, GitConfig, LinkParser, TextProcessor};
 use super::contributor::RemoteContributor;
 use super::error::{Error, Result};
 
-static SHA1_REGEX: Lazy<Regex> = lazy_regex!(r#"^\b([a-f0-9]{40})\b (.*)$"#);
+static SHA1_REGEX: Lazy<Regex> = lazy_regex!(r#"^([a-f0-9]{40}) (.*)$"#);
 
 #[derive(Debug, Clone, Eq, PartialEq, Deserialize, Serialize)]
 #[serde(rename_all(serialize = "camelCase"))]

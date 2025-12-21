@@ -26,10 +26,17 @@ impl Template {
         }
         let mut tera = Tera::default();
         if let Err(e) = tera.add_raw_template(name, &content) {
+            let content_snippet = content.lines().take(3).collect::<Vec<_>>().join("\n");
             return if let Some(error_source) = e.source() {
-                Err(Error::TemplateRenderError(error_source.to_string()))
+                Err(Error::TemplateParseError(format!(
+                    "Template '{}' failed to parse: {}\nContent snippet:\n{}",
+                    name, error_source, content_snippet
+                )))
             } else {
-                Err(Error::TemplateError(e))
+                Err(Error::TemplateParseError(format!(
+                    "Template '{}' failed to parse: {}\nContent snippet:\n{}",
+                    name, e, content_snippet
+                )))
             };
         }
 
@@ -227,14 +234,20 @@ impl Template {
                 if let Some(source1) = e.source() {
                     if let Some(source2) = source1.source() {
                         Err(Error::TemplateRenderError(format!(
-                            "{}: {}",
-                            source1, source2
+                            "Template '{}' render failed: {}: {}",
+                            self.name, source1, source2
                         )))
                     } else {
-                        Err(Error::TemplateRenderError(source1.to_string()))
+                        Err(Error::TemplateRenderError(format!(
+                            "Template '{}' render failed: {}",
+                            self.name, source1
+                        )))
                     }
                 } else {
-                    Err(Error::TemplateError(e))
+                    Err(Error::TemplateRenderError(format!(
+                        "Template '{}' render failed: {}",
+                        self.name, e
+                    )))
                 }
             }
         }
