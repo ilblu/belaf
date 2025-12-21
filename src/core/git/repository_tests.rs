@@ -363,7 +363,7 @@ fn test_change_list_add_duplicate_paths() {
 fn test_repo_history_n_commits() {
     let history = RepoHistory {
         commits: vec![CommitId(git2::Oid::zero()), CommitId(git2::Oid::zero())],
-        release_tag: None,
+        boundary: None,
     };
     assert_eq!(history.n_commits(), 2);
 }
@@ -372,22 +372,23 @@ fn test_repo_history_n_commits() {
 fn test_repo_history_n_commits_empty() {
     let history = RepoHistory {
         commits: vec![],
-        release_tag: None,
+        boundary: None,
     };
     assert_eq!(history.n_commits(), 0);
 }
 
 #[test]
-fn test_repo_history_release_tag_some() {
+fn test_repo_history_with_release_tag() {
     let history = RepoHistory {
         commits: vec![],
-        release_tag: Some(ReleaseTagInfo {
+        boundary: Some(HistoryBoundary::ReleaseTag {
             commit: CommitId(git2::Oid::zero()),
             tag_name: "test-v1.0.0".to_string(),
             version: semver::Version::new(1, 0, 0),
         }),
     };
-    assert!(history.release_tag().is_some());
+    assert!(history.has_release_tag());
+    assert!(history.boundary_commit().is_some());
     assert_eq!(
         history.release_version().unwrap(),
         &semver::Version::new(1, 0, 0)
@@ -395,12 +396,26 @@ fn test_repo_history_release_tag_some() {
 }
 
 #[test]
-fn test_repo_history_release_tag_none() {
+fn test_repo_history_with_baseline() {
     let history = RepoHistory {
         commits: vec![],
-        release_tag: None,
+        boundary: Some(HistoryBoundary::Baseline {
+            commit: CommitId(git2::Oid::zero()),
+        }),
     };
-    assert!(history.release_tag().is_none());
+    assert!(!history.has_release_tag());
+    assert!(history.boundary_commit().is_some());
+    assert!(history.release_version().is_none());
+}
+
+#[test]
+fn test_repo_history_no_boundary() {
+    let history = RepoHistory {
+        commits: vec![],
+        boundary: None,
+    };
+    assert!(!history.has_release_tag());
+    assert!(history.boundary_commit().is_none());
     assert!(history.release_version().is_none());
 }
 
@@ -422,14 +437,19 @@ fn test_commit_id_equality() {
 }
 
 #[test]
-fn test_release_tag_info() {
-    let tag_info = ReleaseTagInfo {
+fn test_history_boundary_release_tag() {
+    let boundary = HistoryBoundary::ReleaseTag {
         commit: CommitId(git2::Oid::zero()),
         tag_name: "my-package-v1.2.3".to_string(),
         version: semver::Version::new(1, 2, 3),
     };
-    assert_eq!(tag_info.tag_name, "my-package-v1.2.3");
-    assert_eq!(tag_info.version, semver::Version::new(1, 2, 3));
+    match boundary {
+        HistoryBoundary::ReleaseTag { tag_name, version, .. } => {
+            assert_eq!(tag_name, "my-package-v1.2.3");
+            assert_eq!(version, semver::Version::new(1, 2, 3));
+        }
+        _ => panic!("Expected ReleaseTag variant"),
+    }
 }
 
 #[test]

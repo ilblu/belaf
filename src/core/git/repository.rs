@@ -694,7 +694,7 @@ impl Repository {
         let mut histories = vec![
             RepoHistory {
                 commits: Vec::new(),
-                release_tag: None,
+                boundary: None,
             };
             projects.len()
         ];
@@ -711,7 +711,7 @@ impl Repository {
                     "found release tag for {}: {} (v{})",
                     proj.user_facing_name, tag_name, version
                 );
-                histories[i].release_tag = Some(ReleaseTagInfo {
+                histories[i].boundary = Some(HistoryBoundary::ReleaseTag {
                     commit: CommitId(tag_oid),
                     tag_name,
                     version,
@@ -721,10 +721,8 @@ impl Repository {
                     "no release tag for {}, using baseline tag belaf-baseline",
                     proj.user_facing_name
                 );
-                histories[i].release_tag = Some(ReleaseTagInfo {
+                histories[i].boundary = Some(HistoryBoundary::Baseline {
                     commit: CommitId(baseline_oid),
-                    tag_name: "belaf-baseline".to_string(),
-                    version: semver::Version::new(0, 0, 0),
                 });
             } else {
                 warn!(
@@ -756,8 +754,8 @@ impl Repository {
             let mut walk = self.repo.revwalk()?;
             walk.push_head()?;
 
-            if let Some(tag_info) = &histories[proj_idx].release_tag {
-                walk.hide(tag_info.commit.0)?;
+            if let Some(boundary_commit) = histories[proj_idx].boundary_commit() {
+                walk.hide(boundary_commit.0)?;
             }
 
             // Walk through the history, finding relevant commits. The full
@@ -1098,37 +1096,49 @@ impl ChangeList {
 }
 
 #[derive(Clone, Debug)]
-pub struct ReleaseTagInfo {
-    pub commit: CommitId,
-    pub tag_name: String,
-    pub version: semver::Version,
+pub enum HistoryBoundary {
+    ReleaseTag {
+        commit: CommitId,
+        tag_name: String,
+        version: semver::Version,
+    },
+    Baseline {
+        commit: CommitId,
+    },
 }
 
 #[derive(Clone, Debug)]
 pub struct RepoHistory {
     commits: Vec<CommitId>,
-    release_tag: Option<ReleaseTagInfo>,
+    boundary: Option<HistoryBoundary>,
 }
 
 impl RepoHistory {
-    pub fn release_tag(&self) -> Option<&ReleaseTagInfo> {
-        self.release_tag.as_ref()
-    }
-
-    pub fn release_commit(&self) -> Option<CommitId> {
-        self.release_tag.as_ref().map(|t| t.commit)
+    pub fn boundary_commit(&self) -> Option<CommitId> {
+        match &self.boundary {
+            Some(HistoryBoundary::ReleaseTag { commit, .. }) => Some(*commit),
+            Some(HistoryBoundary::Baseline { commit }) => Some(*commit),
+            None => None,
+        }
     }
 
     pub fn release_version(&self) -> Option<&semver::Version> {
-        self.release_tag.as_ref().map(|t| &t.version)
+        match &self.boundary {
+            Some(HistoryBoundary::ReleaseTag { version, .. }) => Some(version),
+            _ => None,
+        }
+    }
+
+    pub fn has_release_tag(&self) -> bool {
+        matches!(&self.boundary, Some(HistoryBoundary::ReleaseTag { .. }))
     }
 
     pub fn release_info(&self, repo: &Repository) -> Result<ReleaseCommitInfo> {
         let mut info = repo.get_bootstrap_release_info();
 
-        if let Some(tag) = &self.release_tag {
+        if let Some(HistoryBoundary::ReleaseTag { version, .. }) = &self.boundary {
             for proj_info in &mut info.projects {
-                if proj_info.version == tag.version.to_string() {
+                if proj_info.version == version.to_string() {
                     proj_info.age = 0;
                 }
             }

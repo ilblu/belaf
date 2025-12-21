@@ -66,6 +66,12 @@ pub enum Commands {
         long_about = "Display the project dependency graph.\n\nInteractive TUI mode (default):\n  • Navigate through projects with arrow keys\n  • View dependency details\n  • Visual dependency tree\n\nBrowser mode (--web):\n  • Interactive Cytoscape.js graph\n  • Multiple layouts (Hierarchy, Force, Circle)\n  • Search, zoom, export PNG\n\nNon-interactive mode (--no-tui):\n  • ASCII art graph\n  • DOT format for Graphviz\n  • JSON for programmatic use"
     )]
     Graph(GraphArgs),
+
+    #[command(
+        about = "Generate changelog from commits",
+        long_about = "Generate changelog entries based on conventional commits.\n\nThis command generates changelogs without the full release workflow.\nUseful for previewing changes or generating changelogs as a separate step.\n\nModes:\n  • Default: Write changelog files to disk\n  • Preview (--preview): Show changelog without writing files\n  • Stdout (--stdout): Output to stdout instead of files\n\nExamples:\n  belaf changelog                    # Generate all changelogs\n  belaf changelog --preview          # Preview without writing\n  belaf changelog --project mylib    # Only for specific project\n  belaf changelog --stdout           # Output to terminal"
+    )]
+    Changelog(ChangelogArgs),
 }
 
 #[derive(Subcommand)]
@@ -143,6 +149,41 @@ pub struct GraphArgs {
 
     #[arg(long, short, help = "Save HTML graph to file (implies --web)")]
     pub out: Option<String>,
+}
+
+#[derive(Args)]
+pub struct ChangelogArgs {
+    #[arg(
+        long,
+        help = "Preview changelog without writing files"
+    )]
+    pub preview: bool,
+
+    #[arg(
+        long,
+        help = "Output changelog to stdout instead of files"
+    )]
+    pub stdout: bool,
+
+    #[arg(
+        short,
+        long,
+        help = "Generate changelog only for specific project"
+    )]
+    pub project: Option<String>,
+
+    #[arg(
+        short,
+        long,
+        help = "Custom output file path (overrides config)"
+    )]
+    pub output: Option<String>,
+
+    #[arg(
+        long,
+        help = "Include unreleased changes (no version tag)"
+    )]
+    pub unreleased: bool,
 }
 
 #[derive(Clone, ValueEnum)]

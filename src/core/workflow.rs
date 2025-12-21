@@ -17,14 +17,270 @@ use std::collections::HashMap;
 use tracing::info;
 
 use crate::core::{
-    bump::BumpConfig,
+    bump::{self, BumpConfig, BumpRecommendation},
     changelog::{Changelog, ChangelogConfig, Commit, GitConfig, Release},
+    config::syntax::{BumpConfiguration, ChangelogConfiguration},
     ecosystem::types::EcosystemType,
     git::repository::{ChangeList, RepoPathBuf, Repository},
     github::{client::GitHubInformation, pr},
+    graph::GraphQueryBuilder,
     manifest::{ProjectRelease, ReleaseManifest, MANIFEST_DIR},
+    project::ProjectId,
     session::AppSession,
 };
+
+#[derive(Debug, Clone)]
+pub struct ProjectCandidate {
+    pub ident: ProjectId,
+    pub name: String,
+    pub prefix: String,
+    pub current_version: String,
+    pub commits: Vec<Commit<'static>>,
+    pub commit_count: usize,
+    pub suggested_bump: BumpRecommendation,
+    pub ecosystem: EcosystemType,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BumpChoice {
+    Auto,
+    Major,
+    Minor,
+    Patch,
+}
+
+impl BumpChoice {
+    pub fn resolve(&self, suggested: BumpRecommendation) -> &'static str {
+        match self {
+            Self::Auto => suggested.as_str(),
+            Self::Major => "major",
+            Self::Minor => "minor",
+            Self::Patch => "patch",
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Major => "major",
+            Self::Minor => "minor",
+            Self::Patch => "patch",
+        }
+    }
+
+    pub fn all() -> Vec<Self> {
+        vec![Self::Auto, Self::Major, Self::Minor, Self::Patch]
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ProjectSelection {
+    pub candidate: ProjectCandidate,
+    pub bump_choice: BumpChoice,
+    pub cached_changelog: Option<String>,
+}
+
+pub struct PrepareContext<'a> {
+    pub sess: &'a mut AppSession,
+    pub base_branch: String,
+    pub release_branch: String,
+    pub candidates: Vec<ProjectCandidate>,
+    pub allow_dirty: bool,
+    pub changelog_config: ChangelogConfiguration,
+    pub bump_config: BumpConfiguration,
+}
+
+impl<'a> PrepareContext<'a> {
+    pub fn initialize(sess: &'a mut AppSession, allow_dirty: bool) -> Result<Self> {
+        if !allow_dirty {
+            if let Some(dirty) = sess
+                .repo
+                .check_if_dirty(&[])
+                .context("failed to check repository for modified files")?
+            {
+                return Err(anyhow::anyhow!(
+                    "requires a clean working directory. Found uncommitted changes: {}",
+                    dirty.escaped()
+                ));
+            }
+        } else if let Some(dirty) = sess
+            .repo
+            .check_if_dirty(&[])
+            .context("failed to check repository for modified files")?
+        {
+            info!(
+                "preparing release with uncommitted changes in the repository (e.g.: `{}`)",
+                dirty.escaped()
+            );
+        }
+
+        let (base_branch, release_branch) = create_release_branch(sess)?;
+        let changelog_config = sess.changelog_config.clone();
+        let bump_config = sess.bump_config.clone();
+
+        Ok(Self {
+            sess,
+            base_branch,
+            release_branch,
+            candidates: Vec::new(),
+            allow_dirty,
+            changelog_config,
+            bump_config,
+        })
+    }
+
+    pub fn resolve_workdir(&self, path: &crate::core::git::repository::RepoPath) -> std::path::PathBuf {
+        self.sess.repo.resolve_workdir(path)
+    }
+
+    pub fn discover_projects(&mut self) -> Result<()> {
+        let q = GraphQueryBuilder::default();
+        let idents = self.sess.graph().query(q).context("could not select projects")?;
+
+        if idents.is_empty() {
+            info!("no projects found in repository");
+            return Ok(());
+        }
+
+        let histories = self
+            .sess
+            .analyze_histories()
+            .context("failed to analyze project histories")?;
+
+        for ident in &idents {
+            let proj = self.sess.graph().lookup(*ident);
+            let history = histories.lookup(*ident);
+            let n_commits = history.n_commits();
+
+            if n_commits == 0 {
+                info!(
+                    "{}: no changes since last release, skipping",
+                    proj.user_facing_name
+                );
+                continue;
+            }
+
+            let commits: Vec<Commit<'static>> = history
+                .commits()
+                .into_iter()
+                .filter_map(|cid| {
+                    self.sess
+                        .repo
+                        .get_commit_summary(*cid)
+                        .ok()
+                        .map(|msg| Commit {
+                            id: cid.to_string(),
+                            message: msg,
+                            ..Default::default()
+                        })
+                })
+                .collect();
+
+            let current_version = proj.version.to_string();
+
+            let analysis = bump::analyze_commits(&commits)
+                .with_context(|| format!("failed to analyze commit messages for {}", proj.user_facing_name))?;
+
+            let bump_config = BumpConfig::from_user_config(&self.bump_config);
+            let suggested_bump = analysis.recommendation.apply_config(&bump_config, Some(&current_version));
+
+            info!("{}: {}", proj.user_facing_name, analysis.summary());
+
+            let qnames = proj.qualified_names();
+            let ecosystem = qnames
+                .get(1)
+                .and_then(|s| EcosystemType::from_qname(s))
+                .unwrap_or(EcosystemType::Cargo);
+
+            self.candidates.push(ProjectCandidate {
+                ident: *ident,
+                name: proj.user_facing_name.clone(),
+                prefix: proj.prefix().escaped(),
+                current_version,
+                commits,
+                commit_count: n_commits,
+                suggested_bump,
+                ecosystem,
+            });
+        }
+
+        Ok(())
+    }
+
+    pub fn has_candidates(&self) -> bool {
+        !self.candidates.is_empty()
+    }
+
+    pub fn cleanup(self) {
+        cleanup_release_branch(self.sess, &self.base_branch, &self.release_branch);
+    }
+
+    pub fn finalize(self, selections: Vec<ProjectSelection>) -> Result<String> {
+        if selections.is_empty() {
+            return Err(anyhow::anyhow!("no projects selected for release"));
+        }
+
+        let mut prepared: Vec<SelectedProject> = Vec::new();
+
+        for selection in &selections {
+            let proj = self.sess.graph().lookup(selection.candidate.ident);
+
+            let bump_scheme_text = selection.bump_choice.resolve(selection.candidate.suggested_bump);
+
+            if bump_scheme_text == "no bump" {
+                info!("{}: no version bump needed", proj.user_facing_name);
+                continue;
+            }
+
+            let bump_scheme = proj
+                .version
+                .parse_bump_scheme(bump_scheme_text)
+                .with_context(|| {
+                    format!(
+                        "invalid bump scheme \"{}\" for project {}",
+                        bump_scheme_text, proj.user_facing_name
+                    )
+                })?;
+
+            let old_version = selection.candidate.current_version.clone();
+
+            let proj_mut = self.sess.graph_mut().lookup_mut(selection.candidate.ident);
+
+            bump_scheme.apply(&mut proj_mut.version).with_context(|| {
+                format!("failed to apply version bump to {}", proj_mut.user_facing_name)
+            })?;
+
+            let new_version = proj_mut.version.to_string();
+
+            info!(
+                "{}: {} -> {} ({} commit{})",
+                proj_mut.user_facing_name,
+                old_version,
+                new_version,
+                selection.candidate.commit_count,
+                if selection.candidate.commit_count == 1 { "" } else { "s" }
+            );
+
+            prepared.push(SelectedProject {
+                name: proj_mut.user_facing_name.clone(),
+                prefix: selection.candidate.prefix.clone(),
+                old_version,
+                new_version,
+                bump_type: bump_scheme_text.to_string(),
+                commits: selection.candidate.commits.clone(),
+                ecosystem: selection.candidate.ecosystem,
+                cached_changelog: selection.cached_changelog.clone(),
+            });
+        }
+
+        if prepared.is_empty() {
+            return Err(anyhow::anyhow!("no projects needed version bumps"));
+        }
+
+        let pipeline = ReleasePipeline::new(self.sess, self.base_branch, self.release_branch)?;
+        pipeline.execute(prepared)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct SelectedProject {
@@ -106,134 +362,33 @@ impl<'a> ReleasePipeline<'a> {
         let bump_config = BumpConfig::from_user_config(&self.sess.bump_config);
 
         for project in projects {
-            let changelog_entry = self.generate_project_changelog(
-                project,
-                &git_config,
-                &changelog_config,
-                &bump_config,
-            )?;
+            let params = ChangelogGenerationParams {
+                repo: &self.sess.repo,
+                project_name: &project.name,
+                prefix: &project.prefix,
+                version: Some(&project.new_version),
+                commits: &project.commits,
+                git_config: &git_config,
+                changelog_config: &changelog_config,
+                bump_config: &bump_config,
+                write_to_file: true,
+                custom_output_path: None,
+            };
+            let result = generate_and_write_project_changelog(&params)?;
 
-            if changelog_entry.is_empty() {
+            changelog_contents.insert(project.name.clone(), result.content);
+
+            if let Some(path) = result.path {
+                changelog_paths.push(path);
+            } else if !result.has_user_changes {
                 info!(
                     "{}: no user-facing changes, skipping changelog file update",
                     project.name
                 );
-                let now = time::OffsetDateTime::now_utc();
-                changelog_contents.insert(
-                    project.name.clone(),
-                    format!(
-                        "## [{}] - {}\n\nInternal changes only (no user-facing changes).\n",
-                        project.new_version,
-                        now.date()
-                    ),
-                );
-                continue;
             }
-
-            changelog_contents.insert(project.name.clone(), changelog_entry.clone());
-
-            let changelog_rel_path = if project.prefix.is_empty() {
-                "CHANGELOG.md".to_string()
-            } else {
-                let prefix = project.prefix.trim_end_matches('/');
-                format!("{}/CHANGELOG.md", prefix)
-            };
-
-            let changelog_repo_path = RepoPathBuf::new(changelog_rel_path.as_bytes());
-            let changelog_full_path = self.sess.repo.resolve_workdir(changelog_repo_path.as_ref());
-
-            let existing_content =
-                std::fs::read_to_string(&changelog_full_path).unwrap_or_default();
-
-            let now = time::OffsetDateTime::now_utc();
-            let release = Release {
-                version: Some(project.new_version.clone()),
-                commits: project.commits.clone(),
-                timestamp: Some(now.unix_timestamp()),
-                ..Default::default()
-            };
-
-            let mut changelog = Changelog::new(
-                vec![release],
-                git_config.clone(),
-                changelog_config.clone(),
-                bump_config.clone(),
-            )?;
-            changelog.process_commits()?;
-
-            let mut output = Vec::new();
-            changelog.prepend(existing_content, &mut output)?;
-
-            let final_content =
-                String::from_utf8(output).context("changelog contains invalid UTF-8")?;
-
-            if let Some(parent) = changelog_full_path.parent() {
-                std::fs::create_dir_all(parent).with_context(|| {
-                    format!(
-                        "failed to create directory for {}",
-                        changelog_full_path.display()
-                    )
-                })?;
-            }
-
-            std::fs::write(&changelog_full_path, &final_content).with_context(|| {
-                format!(
-                    "failed to write changelog to {}",
-                    changelog_full_path.display()
-                )
-            })?;
-
-            changelog_paths.push(changelog_repo_path);
-            info!(
-                "{}: wrote changelog to {}",
-                project.name, changelog_rel_path
-            );
         }
 
         Ok((changelog_paths, changelog_contents))
-    }
-
-    fn generate_project_changelog(
-        &self,
-        project: &SelectedProject,
-        git_config: &GitConfig,
-        changelog_config: &ChangelogConfig,
-        bump_config: &BumpConfig,
-    ) -> Result<String> {
-        if project.commits.is_empty() {
-            return Ok(String::new());
-        }
-
-        let now = time::OffsetDateTime::now_utc();
-        let release = Release {
-            version: Some(project.new_version.clone()),
-            commits: project.commits.clone(),
-            timestamp: Some(now.unix_timestamp()),
-            ..Default::default()
-        };
-
-        let mut changelog = Changelog::new(
-            vec![release],
-            git_config.clone(),
-            changelog_config.clone(),
-            bump_config.clone(),
-        )?;
-        changelog.process_commits()?;
-
-        let processed_commits = changelog
-            .releases
-            .first()
-            .map(|r| r.commits.len())
-            .unwrap_or(0);
-
-        if processed_commits == 0 {
-            return Ok(String::new());
-        }
-
-        let mut output = Vec::new();
-        changelog.generate(&mut output)?;
-
-        String::from_utf8(output).context("changelog contains invalid UTF-8")
     }
 
     fn print_modified_files(&self, changes: &ChangeList, changelog_paths: &[RepoPathBuf]) {
@@ -462,4 +617,151 @@ pub fn generate_changelog_entry(
     changelog.generate(&mut output)?;
 
     String::from_utf8(output).context("changelog contains invalid UTF-8")
+}
+
+#[derive(Debug)]
+pub struct ChangelogResult {
+    pub content: String,
+    pub path: Option<RepoPathBuf>,
+    pub has_user_changes: bool,
+}
+
+pub struct ChangelogGenerationParams<'a> {
+    pub repo: &'a Repository,
+    pub project_name: &'a str,
+    pub prefix: &'a str,
+    pub version: Option<&'a str>,
+    pub commits: &'a [Commit<'static>],
+    pub git_config: &'a GitConfig,
+    pub changelog_config: &'a ChangelogConfig,
+    pub bump_config: &'a BumpConfig,
+    pub write_to_file: bool,
+    pub custom_output_path: Option<&'a str>,
+}
+
+pub fn generate_and_write_project_changelog(params: &ChangelogGenerationParams) -> Result<ChangelogResult> {
+    let repo = params.repo;
+    let project_name = params.project_name;
+    let prefix = params.prefix;
+    let version = params.version;
+    let commits = params.commits;
+    let git_config = params.git_config;
+    let changelog_config = params.changelog_config;
+    let bump_config = params.bump_config;
+    let write_to_file = params.write_to_file;
+    let custom_output_path = params.custom_output_path;
+    if commits.is_empty() {
+        let now = time::OffsetDateTime::now_utc();
+        let version_str = version.unwrap_or("Unreleased");
+        let content = format!(
+            "## [{}] - {}\n\nNo user-facing changes in this release.\n(Internal: docs, chore, ci, test, style)\n",
+            version_str,
+            now.date()
+        );
+        return Ok(ChangelogResult {
+            content,
+            path: None,
+            has_user_changes: false,
+        });
+    }
+
+    let now = time::OffsetDateTime::now_utc();
+    let release = Release {
+        version: version.map(String::from),
+        commits: commits.to_vec(),
+        timestamp: Some(now.unix_timestamp()),
+        ..Default::default()
+    };
+
+    let mut changelog = Changelog::new(
+        vec![release],
+        git_config.clone(),
+        changelog_config.clone(),
+        bump_config.clone(),
+    )?;
+    changelog.process_commits()?;
+
+    let processed_commits = changelog
+        .releases
+        .first()
+        .map(|r| r.commits.len())
+        .unwrap_or(0);
+
+    if processed_commits == 0 {
+        let now = time::OffsetDateTime::now_utc();
+        let version_str = version.unwrap_or("Unreleased");
+        let content = format!(
+            "## [{}] - {}\n\nNo user-facing changes in this release.\n(Internal: docs, chore, ci, test, style)\n",
+            version_str,
+            now.date()
+        );
+        return Ok(ChangelogResult {
+            content,
+            path: None,
+            has_user_changes: false,
+        });
+    }
+
+    let mut output = Vec::new();
+    changelog.generate(&mut output)?;
+    let generated_content = String::from_utf8(output).context("changelog contains invalid UTF-8")?;
+
+    if !write_to_file {
+        return Ok(ChangelogResult {
+            content: generated_content,
+            path: None,
+            has_user_changes: true,
+        });
+    }
+
+    let default_output = changelog_config
+        .output
+        .as_ref()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|| "CHANGELOG.md".to_string());
+
+    let changelog_rel_path = if let Some(path) = custom_output_path {
+        path.to_string()
+    } else if prefix.is_empty() {
+        default_output
+    } else {
+        let prefix = prefix.trim_end_matches('/');
+        format!("{}/{}", prefix, default_output)
+    };
+
+    let changelog_repo_path = RepoPathBuf::new(changelog_rel_path.as_bytes());
+    let changelog_full_path = repo.resolve_workdir(changelog_repo_path.as_ref());
+
+    let existing_content = std::fs::read_to_string(&changelog_full_path).unwrap_or_default();
+
+    let mut prepend_output = Vec::new();
+    changelog.prepend(existing_content, &mut prepend_output)?;
+    let final_content = String::from_utf8(prepend_output).context("changelog contains invalid UTF-8")?;
+
+    if let Some(parent) = changelog_full_path.parent() {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create directory for {}",
+                changelog_full_path.display()
+            )
+        })?;
+    }
+
+    std::fs::write(&changelog_full_path, &final_content).with_context(|| {
+        format!(
+            "failed to write changelog to {}",
+            changelog_full_path.display()
+        )
+    })?;
+
+    info!(
+        "{}: wrote changelog to {}",
+        project_name, changelog_rel_path
+    );
+
+    Ok(ChangelogResult {
+        content: generated_content,
+        path: Some(changelog_repo_path),
+        has_user_changes: true,
+    })
 }

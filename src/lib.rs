@@ -3,6 +3,7 @@ pub mod error;
 
 pub mod cmd {
     pub mod auth;
+    pub mod changelog;
     pub mod completions;
     pub mod graph;
     pub mod init;
@@ -109,6 +110,19 @@ pub async fn execute(cli: Cli) -> Result<()> {
         }
         Commands::Graph(args) => {
             let exit_code = cmd::graph::run(args.format, args.no_tui, args.web, args.out)?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
+        Commands::Changelog(args) => {
+            let exit_code = cmd::changelog::run(
+                args.preview,
+                args.stdout,
+                args.project,
+                args.output,
+                args.unreleased,
+            )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }

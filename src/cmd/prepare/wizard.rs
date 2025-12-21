@@ -24,22 +24,16 @@ use tracing::info;
 
 use std::path::Path;
 
-use crate::{
-    atry,
-    core::{
-        bump::{self, BumpConfig, BumpRecommendation},
-        changelog::{ChangelogConfig, Commit, GitConfig},
-        config::syntax::{BumpConfiguration, ChangelogConfiguration},
-        ecosystem::types::EcosystemType,
-        git::repository::RepoPathBuf,
-        graph::GraphQueryBuilder,
-        project::ProjectId,
-        session::AppSession,
-        ui::markdown,
-        workflow::{
-            cleanup_release_branch, create_release_branch, generate_changelog_entry,
-            ReleasePipeline, SelectedProject,
-        },
+use crate::core::{
+    bump::{BumpConfig, BumpRecommendation},
+    changelog::{ChangelogConfig, Commit, GitConfig},
+    config::syntax::{BumpConfiguration, ChangelogConfiguration},
+    ecosystem::types::EcosystemType,
+    git::repository::RepoPathBuf,
+    session::AppSession,
+    ui::markdown,
+    workflow::{
+        generate_changelog_entry, BumpChoice, PrepareContext, ProjectCandidate, ProjectSelection,
     },
 };
 
@@ -73,40 +67,54 @@ impl WizardStep {
 }
 
 struct ProjectItem {
-    ident: ProjectId,
-    name: String,
-    prefix: String,
-    current_version: String,
+    candidate: ProjectCandidate,
     selected: bool,
-    commit_count: usize,
-    suggested_bump: BumpRecommendation,
-    chosen_bump: Option<BumpStrategy>,
-    commits: Vec<Commit<'static>>,
-    project_type: EcosystemType,
+    chosen_bump: Option<BumpChoice>,
     cached_changelog: Option<String>,
     existing_changelog: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BumpStrategy {
-    Auto,
-    Major,
-    Minor,
-    Patch,
-}
-
-impl BumpStrategy {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Major => "major",
-            Self::Minor => "minor",
-            Self::Patch => "patch",
+impl ProjectItem {
+    fn from_candidate(candidate: ProjectCandidate, existing_changelog: String) -> Self {
+        Self {
+            candidate,
+            selected: true,
+            chosen_bump: None,
+            cached_changelog: None,
+            existing_changelog,
         }
     }
 
-    fn all() -> Vec<Self> {
-        vec![Self::Auto, Self::Major, Self::Minor, Self::Patch]
+    fn name(&self) -> &str {
+        &self.candidate.name
+    }
+
+    fn current_version(&self) -> &str {
+        &self.candidate.current_version
+    }
+
+    fn commit_count(&self) -> usize {
+        self.candidate.commit_count
+    }
+
+    fn suggested_bump(&self) -> BumpRecommendation {
+        self.candidate.suggested_bump
+    }
+
+    fn commits(&self) -> &[Commit<'static>] {
+        &self.candidate.commits
+    }
+
+    fn project_type(&self) -> EcosystemType {
+        self.candidate.ecosystem
+    }
+
+    fn effective_bump(&self) -> BumpChoice {
+        self.chosen_bump.unwrap_or(BumpChoice::Auto)
+    }
+
+    fn effective_bump_str(&self) -> &'static str {
+        self.effective_bump().resolve(self.candidate.suggested_bump)
     }
 }
 
@@ -241,16 +249,16 @@ impl WizardState {
             return;
         }
 
-        let commits = project.commits.clone();
-        let current_version = project.current_version.clone();
-        let chosen_bump = project.chosen_bump.unwrap_or(BumpStrategy::Auto);
-        let suggested_bump = project.suggested_bump;
+        let commits = project.commits().to_vec();
+        let current_version = project.current_version().to_string();
+        let chosen_bump = project.chosen_bump.unwrap_or(BumpChoice::Auto);
+        let suggested_bump = project.suggested_bump();
 
         let new_version = match chosen_bump {
-            BumpStrategy::Auto => calculate_next_version(&current_version, suggested_bump),
-            BumpStrategy::Major => calculate_major_version(&current_version),
-            BumpStrategy::Minor => calculate_minor_version(&current_version),
-            BumpStrategy::Patch => calculate_patch_version(&current_version),
+            BumpChoice::Auto => calculate_next_version(&current_version, suggested_bump),
+            BumpChoice::Major => calculate_major_version(&current_version),
+            BumpChoice::Minor => calculate_minor_version(&current_version),
+            BumpChoice::Patch => calculate_patch_version(&current_version),
         };
 
         let (tx, rx) = mpsc::channel();
@@ -353,7 +361,7 @@ impl WizardState {
                 if !self.show_changelog {
                     if let Some(selected) = self.bump_list_state.selected() {
                         if let Some(project) = self.get_current_project_mut() {
-                            project.chosen_bump = Some(BumpStrategy::all()[selected]);
+                            project.chosen_bump = Some(BumpChoice::all()[selected]);
                         }
                     }
                     self.loading_changelog = true;
@@ -454,7 +462,7 @@ impl WizardState {
                 if !self.show_changelog {
                     if let Some(project) = self.get_current_project() {
                         if let Some(chosen) = project.chosen_bump {
-                            let idx = BumpStrategy::all()
+                            let idx = BumpChoice::all()
                                 .iter()
                                 .position(|s| *s == chosen)
                                 .unwrap_or(0);
@@ -474,7 +482,7 @@ impl WizardState {
             }
             KeyCode::Down if !self.show_changelog => {
                 if let Some(selected) = self.bump_list_state.selected() {
-                    let strategies = BumpStrategy::all();
+                    let strategies = BumpChoice::all();
                     if selected < strategies.len() - 1 {
                         self.bump_list_state.select(Some(selected + 1));
                     }
@@ -502,242 +510,97 @@ pub fn run_with_overrides(project_overrides: Option<Vec<String>>) -> Result<i32>
     let mut sess =
         AppSession::initialize_default().context("could not initialize app and project graph")?;
 
-    if let Some(dirty) = sess
-        .repo
-        .check_if_dirty(&[])
-        .context("failed to check repository for modified files")?
-    {
-        info!(
-            "preparing release with uncommitted changes in the repository (e.g.: `{}`)",
-            dirty.escaped()
-        );
-    }
+    let mut ctx = PrepareContext::initialize(&mut sess, true)?;
+    ctx.discover_projects()?;
 
-    let (base_branch, release_branch) = create_release_branch(&mut sess)?;
-
-    let q = GraphQueryBuilder::default();
-    let idents = sess.graph().query(q).context("could not select projects")?;
-
-    if idents.is_empty() {
-        info!("no projects found in repository");
-        cleanup_release_branch(&mut sess, &base_branch, &release_branch);
+    if !ctx.has_candidates() {
+        ctx.cleanup();
+        print_no_changes_message();
         return Ok(0);
     }
 
-    let histories = sess
-        .analyze_histories()
-        .context("failed to analyze project histories")?;
+    let projects: Vec<ProjectItem> = ctx
+        .candidates
+        .iter()
+        .map(|candidate| {
+            let prefix = &candidate.prefix;
+            let changelog_rel_path = if prefix.is_empty() {
+                "CHANGELOG.md".to_string()
+            } else {
+                format!("{}/CHANGELOG.md", prefix)
+            };
+            let changelog_repo_path = RepoPathBuf::new(changelog_rel_path.as_bytes());
+            let changelog_path = ctx.resolve_workdir(changelog_repo_path.as_ref());
+            let existing_changelog = parse_existing_changelog(&changelog_path).unwrap_or_default();
+            ProjectItem::from_candidate(candidate.clone(), existing_changelog)
+        })
+        .collect();
 
-    let mut projects = Vec::new();
-    for ident in &idents {
-        let proj = sess.graph().lookup(*ident);
-        let history = histories.lookup(*ident);
-        let n_commits = history.n_commits();
-
-        if n_commits == 0 {
-            continue;
-        }
-
-        let commits: Vec<Commit<'static>> = history
-            .commits()
-            .into_iter()
-            .filter_map(|cid| {
-                sess.repo
-                    .get_commit_summary(*cid)
-                    .ok()
-                    .map(|msg| Commit {
-                        id: cid.to_string(),
-                        message: msg,
-                        ..Default::default()
-                    })
-            })
-            .collect();
-
-        let analysis = bump::analyze_commits(&commits)
-            .context("failed to analyze commit messages")?;
-
-        let qnames = proj.qualified_names();
-        let project_type = qnames
-            .get(1)
-            .and_then(|s| EcosystemType::from_qname(s))
-            .unwrap_or(EcosystemType::Cargo);
-
-        let current_version = history
-            .release_version()
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| proj.version.to_string());
-
-        let prefix_str = proj.prefix().escaped();
-        let changelog_rel_path = if prefix_str.is_empty() {
-            "CHANGELOG.md".to_string()
-        } else {
-            format!("{}/CHANGELOG.md", prefix_str)
-        };
-        let changelog_repo_path = RepoPathBuf::new(changelog_rel_path.as_bytes());
-        let changelog_path = sess.repo.resolve_workdir(changelog_repo_path.as_ref());
-        let existing_changelog = parse_existing_changelog(&changelog_path).unwrap_or_default();
-
-        projects.push(ProjectItem {
-            ident: *ident,
-            name: proj.user_facing_name.clone(),
-            prefix: prefix_str,
-            current_version,
-            selected: true,
-            commit_count: n_commits,
-            suggested_bump: analysis.recommendation,
-            chosen_bump: None,
-            commits,
-            project_type,
-            cached_changelog: None,
-            existing_changelog,
-        });
-    }
-
-    if projects.is_empty() {
-        cleanup_release_branch(&mut sess, &base_branch, &release_branch);
-        println!();
-        println!(
-            "{} No projects with unreleased changes found.",
-            "ℹ".cyan().bold()
-        );
-        println!();
-        println!(
-            "  {} All projects are up-to-date with their latest release tags.",
-            "→".dimmed()
-        );
-        println!(
-            "  {} Make commits with conventional format (feat:, fix:, etc.) to trigger a release.",
-            "→".dimmed()
-        );
-        println!();
-        return Ok(0);
-    }
-
+    let mut projects = projects;
     if let Some(ref overrides) = project_overrides {
         apply_project_overrides_to_items(&mut projects, overrides)?;
     }
 
     let wizard_result = run_wizard_ui(
         projects,
-        sess.changelog_config.clone(),
-        sess.bump_config.clone(),
+        ctx.changelog_config.clone(),
+        ctx.bump_config.clone(),
     )?;
 
-    let selected_projects = match wizard_result {
-        Some(projects) => projects,
+    let selected_items = match wizard_result {
+        Some(items) => items,
         None => {
             info!("release preparation cancelled by user");
-            cleanup_release_branch(&mut sess, &base_branch, &release_branch);
+            ctx.cleanup();
             return Ok(1);
         }
     };
 
-    info!(
-        "applying version bumps to {} project(s)",
-        selected_projects.len()
-    );
-
-    let mut prepared: Vec<SelectedProject> = Vec::new();
-
-    for project_item in &selected_projects {
-        let proj = sess.graph().lookup(project_item.ident);
-        let history = histories.lookup(project_item.ident);
-
-        let bump_strategy = project_item.chosen_bump.unwrap_or(BumpStrategy::Auto);
-
-        let bump_scheme_text = match bump_strategy {
-            BumpStrategy::Auto => project_item.suggested_bump.as_str(),
-            BumpStrategy::Major => "major",
-            BumpStrategy::Minor => "minor",
-            BumpStrategy::Patch => "patch",
-        };
-
-        if bump_scheme_text == "no bump" {
-            info!("{}: no version bump needed", proj.user_facing_name);
-            continue;
-        }
-
-        let bump_scheme = proj
-            .version
-            .parse_bump_scheme(bump_scheme_text)
-            .with_context(|| {
-                format!(
-                    "invalid bump scheme \"{}\" for project {}",
-                    bump_scheme_text, proj.user_facing_name
-                )
-            })?;
-
-        let old_version = history
-            .release_version()
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| proj.version.to_string());
-
-        let proj_mut = sess.graph_mut().lookup_mut(project_item.ident);
-
-        atry!(
-            bump_scheme.apply(&mut proj_mut.version);
-            ["failed to apply version bump to {}", proj_mut.user_facing_name]
-        );
-
-        let new_version = proj_mut.version.to_string();
-
-        info!(
-            "{}: {} -> {} ({} commit{})",
-            proj_mut.user_facing_name,
-            old_version,
-            new_version,
-            project_item.commit_count,
-            if project_item.commit_count == 1 {
-                ""
-            } else {
-                "s"
-            }
-        );
-
-        prepared.push(SelectedProject {
-            name: proj_mut.user_facing_name.clone(),
-            prefix: project_item.prefix.clone(),
-            old_version,
-            new_version,
-            bump_type: bump_scheme_text.to_string(),
-            commits: project_item.commits.clone(),
-            ecosystem: project_item.project_type,
-            cached_changelog: project_item.cached_changelog.clone(),
-        });
-    }
-
-    if prepared.is_empty() {
+    if selected_items.is_empty() {
+        ctx.cleanup();
         println!();
-        println!("{} No projects needed version bumps.", "ℹ".cyan().bold());
-        println!();
-        println!(
-            "  {} All selected projects had 'no bump' recommendations.",
-            "→".dimmed()
-        );
+        println!("{} No projects selected.", "ℹ".cyan().bold());
         println!();
         return Ok(0);
     }
 
-    let pipeline = ReleasePipeline::new(&mut sess, base_branch, release_branch)?;
-    let pr_url = pipeline.execute(prepared.clone())?;
+    let selections: Vec<ProjectSelection> = selected_items
+        .into_iter()
+        .map(|item| ProjectSelection {
+            candidate: item.candidate,
+            bump_choice: item.chosen_bump.unwrap_or(BumpChoice::Auto),
+            cached_changelog: item.cached_changelog,
+        })
+        .collect();
+
+    let pr_url = ctx.finalize(selections)?;
 
     println!();
     println!("{} Release preparation complete!", "✓".green().bold());
-    println!();
-    for project in &prepared {
-        println!(
-            "  {} {} → {}",
-            "•".cyan(),
-            project.name,
-            project.new_version.green()
-        );
-    }
     println!();
     println!("  {} Pull request created:", "→".cyan());
     println!("    {}", pr_url.cyan().underline());
     println!();
 
     Ok(0)
+}
+
+fn print_no_changes_message() {
+    println!();
+    println!(
+        "{} No projects with unreleased changes found.",
+        "ℹ".cyan().bold()
+    );
+    println!();
+    println!(
+        "  {} All projects are up-to-date with their latest release tags.",
+        "→".dimmed()
+    );
+    println!(
+        "  {} Make commits with conventional format (feat:, fix:, etc.) to trigger a release.",
+        "→".dimmed()
+    );
+    println!();
 }
 
 fn run_wizard_ui(
@@ -873,7 +736,7 @@ fn ui(f: &mut Frame, state: &mut WizardState) {
 }
 
 fn render_header(f: &mut Frame, area: Rect, state: &WizardState) {
-    let project_name = state.get_current_project().map(|p| p.name.as_str());
+    let project_name = state.get_current_project().map(|p| p.name());
     let step_number = state.step.step_number(state.selected_count());
     let title = format!(
         "Release Preparation Wizard - {} - {}",
@@ -937,7 +800,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
         .iter()
         .map(|project| {
             let checkbox = if project.selected { "[✓]" } else { "[ ]" };
-            let suggestion = match project.suggested_bump {
+            let suggestion = match project.suggested_bump() {
                 BumpRecommendation::Major => " (suggests: MAJOR)",
                 BumpRecommendation::Minor => " (suggests: MINOR)",
                 BumpRecommendation::Patch => " (suggests: PATCH)",
@@ -946,7 +809,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
 
             let content = format!(
                 "{} {} ({} commits){}",
-                checkbox, project.name, project.commit_count, suggestion
+                checkbox, project.name(), project.commit_count(), suggestion
             );
 
             ListItem::new(content).style(if project.selected {
@@ -974,23 +837,23 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
 }
 
 fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardState) {
-    let strategies = BumpStrategy::all();
+    let strategies = BumpChoice::all();
 
     let project = match state.get_current_project() {
         Some(p) => p,
         None => return,
     };
 
-    let project_name = project.name.clone();
-    let current_version = project.current_version.clone();
-    let suggested_bump = project.suggested_bump;
-    let commits = project.commits.clone();
+    let project_name = project.name().to_string();
+    let current_version = project.current_version().to_string();
+    let suggested_bump = project.suggested_bump();
+    let commits = project.commits().to_vec();
 
     let selected_index = state.bump_list_state.selected().unwrap_or(0);
     let selected_strategy = strategies
         .get(selected_index)
         .copied()
-        .unwrap_or(BumpStrategy::Auto);
+        .unwrap_or(BumpChoice::Auto);
 
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
@@ -1001,10 +864,10 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
         .iter()
         .map(|strategy| {
             let next_ver = match strategy {
-                BumpStrategy::Auto => calculate_next_version(&current_version, suggested_bump),
-                BumpStrategy::Major => calculate_major_version(&current_version),
-                BumpStrategy::Minor => calculate_minor_version(&current_version),
-                BumpStrategy::Patch => calculate_patch_version(&current_version),
+                BumpChoice::Auto => calculate_next_version(&current_version, suggested_bump),
+                BumpChoice::Major => calculate_major_version(&current_version),
+                BumpChoice::Minor => calculate_minor_version(&current_version),
+                BumpChoice::Patch => calculate_patch_version(&current_version),
             };
             let content = format!("  {}  →  {}", strategy.as_str(), next_ver);
             ListItem::new(content)
@@ -1108,7 +971,7 @@ fn build_loading_panel(state: &WizardState, commits: &[Commit<'static>]) -> Text
 }
 
 fn build_detail_panel(
-    strategy: &BumpStrategy,
+    strategy: &BumpChoice,
     current_version: &str,
     suggested_bump: BumpRecommendation,
     commits: &[Commit<'static>],
@@ -1116,10 +979,10 @@ fn build_detail_panel(
     let mut lines: Vec<Line> = Vec::new();
 
     let next_version = match strategy {
-        BumpStrategy::Auto => calculate_next_version(current_version, suggested_bump),
-        BumpStrategy::Major => calculate_major_version(current_version),
-        BumpStrategy::Minor => calculate_minor_version(current_version),
-        BumpStrategy::Patch => calculate_patch_version(current_version),
+        BumpChoice::Auto => calculate_next_version(current_version, suggested_bump),
+        BumpChoice::Major => calculate_major_version(current_version),
+        BumpChoice::Minor => calculate_minor_version(current_version),
+        BumpChoice::Patch => calculate_patch_version(current_version),
     };
 
     lines.push(Line::from(vec![
@@ -1139,7 +1002,7 @@ fn build_detail_panel(
     lines.push(Line::from(""));
 
     match strategy {
-        BumpStrategy::Auto => {
+        BumpChoice::Auto => {
             let bump_name = match suggested_bump {
                 BumpRecommendation::Major => "MAJOR (breaking changes)",
                 BumpRecommendation::Minor => "MINOR (new features)",
@@ -1151,7 +1014,7 @@ fn build_detail_panel(
                 Span::styled(bump_name.to_string(), Style::default().fg(Color::Cyan)),
             ]));
         }
-        BumpStrategy::Major => {
+        BumpChoice::Major => {
             lines.push(Line::from(Span::styled(
                 "⚠ Breaking Change Release",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
@@ -1161,7 +1024,7 @@ fn build_detail_panel(
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        BumpStrategy::Minor => {
+        BumpChoice::Minor => {
             lines.push(Line::from(Span::styled(
                 "✓ Feature Release",
                 Style::default().fg(Color::Green),
@@ -1171,7 +1034,7 @@ fn build_detail_panel(
                 Style::default().fg(Color::DarkGray),
             )));
         }
-        BumpStrategy::Patch => {
+        BumpChoice::Patch => {
             lines.push(Line::from(Span::styled(
                 "✓ Patch Release",
                 Style::default().fg(Color::Blue),
@@ -1298,15 +1161,14 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
         None => return,
     };
 
-    let chosen_bump = current_project.chosen_bump.unwrap_or(BumpStrategy::Auto);
+    let chosen_bump = current_project.chosen_bump.unwrap_or(BumpChoice::Auto);
+    let current_version = current_project.current_version();
+    let suggested_bump = current_project.suggested_bump();
     let new_version = match chosen_bump {
-        BumpStrategy::Auto => calculate_next_version(
-            &current_project.current_version,
-            current_project.suggested_bump,
-        ),
-        BumpStrategy::Major => calculate_major_version(&current_project.current_version),
-        BumpStrategy::Minor => calculate_minor_version(&current_project.current_version),
-        BumpStrategy::Patch => calculate_patch_version(&current_project.current_version),
+        BumpChoice::Auto => calculate_next_version(current_version, suggested_bump),
+        BumpChoice::Major => calculate_major_version(current_version),
+        BumpChoice::Minor => calculate_minor_version(current_version),
+        BumpChoice::Patch => calculate_patch_version(current_version),
     };
 
     let new_entry = current_project
@@ -1319,7 +1181,7 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
         All notable changes to {} will be documented in this file.\n\n\
         The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),\n\
         and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).\n\n",
-        current_project.name
+        current_project.name()
     );
 
     changelog_content.push_str(new_entry);
@@ -1368,7 +1230,7 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
 
     let title = format!(
         "{} ({} → {})",
-        current_project.name, current_project.current_version, new_version
+        current_project.name(), current_version, new_version
     );
 
     let toggle_widget = Paragraph::new(toggle_line)
@@ -1424,19 +1286,13 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
     ];
 
     for project in &selected_projects {
-        let chosen_bump = project.chosen_bump.unwrap_or(BumpStrategy::Auto);
-        let bump_text = match chosen_bump {
-            BumpStrategy::Auto => project.suggested_bump.as_str(),
-            BumpStrategy::Major => "major",
-            BumpStrategy::Minor => "minor",
-            BumpStrategy::Patch => "patch",
-        };
+        let bump_text = project.effective_bump_str();
 
         confirmation_lines.push(Line::from(vec![
             Span::styled("  • ", Style::default().fg(Color::Gray)),
-            Span::styled(&project.name, Style::default().fg(Color::White)),
+            Span::styled(project.name(), Style::default().fg(Color::White)),
             Span::styled(
-                format!(" ({} commits) → ", project.commit_count),
+                format!(" ({} commits) → ", project.commit_count()),
                 Style::default().fg(Color::Gray),
             ),
             Span::styled(
@@ -1457,7 +1313,7 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
 
     let mut ecosystems: std::collections::HashSet<EcosystemType> = std::collections::HashSet::new();
     for project in &selected_projects {
-        ecosystems.insert(project.project_type);
+        ecosystems.insert(project.project_type());
     }
 
     for ecosystem in &ecosystems {
@@ -1604,7 +1460,7 @@ fn apply_project_overrides_to_items(
     projects: &mut [ProjectItem],
     overrides: &[String],
 ) -> Result<()> {
-    let project_names: Vec<String> = projects.iter().map(|p| p.name.clone()).collect();
+    let project_names: Vec<String> = projects.iter().map(|p| p.name().to_string()).collect();
 
     for override_str in overrides {
         let parts: Vec<&str> = override_str.splitn(2, ':').collect();
@@ -1635,11 +1491,11 @@ fn apply_project_overrides_to_items(
             ));
         }
 
-        if let Some(project) = projects.iter_mut().find(|p| p.name == project_name) {
+        if let Some(project) = projects.iter_mut().find(|p| p.name() == project_name) {
             let chosen = match bump_type {
-                "major" => BumpStrategy::Major,
-                "minor" => BumpStrategy::Minor,
-                "patch" => BumpStrategy::Patch,
+                "major" => BumpChoice::Major,
+                "minor" => BumpChoice::Minor,
+                "patch" => BumpChoice::Patch,
                 _ => unreachable!(),
             };
             info!(
