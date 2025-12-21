@@ -47,8 +47,6 @@ enum WizardStep {
     ProjectSelection,
     UpstreamConfig,
     Confirmation,
-    Processing,
-    Complete,
 }
 
 struct WizardState {
@@ -58,7 +56,6 @@ struct WizardState {
     upstream_url: String,
     upstream_input_active: bool,
     error_message: Option<String>,
-    success_message: Option<String>,
     force: bool,
     dirty_warning: Option<String>,
     preset: Option<String>,
@@ -67,7 +64,7 @@ struct WizardState {
     available_presets: Vec<String>,
     preset_toggle: TogglePanel,
     config_exists: bool,
-    exit_countdown: Option<u8>,
+    confirmed: bool,
 }
 
 impl WizardState {
@@ -90,7 +87,6 @@ impl WizardState {
             upstream_url: String::new(),
             upstream_input_active: false,
             error_message: None,
-            success_message: None,
             force,
             dirty_warning: None,
             preset,
@@ -99,7 +95,7 @@ impl WizardState {
             available_presets,
             preset_toggle: TogglePanel::default(),
             config_exists: false,
-            exit_countdown: None,
+            confirmed: false,
         }
     }
 
@@ -198,16 +194,38 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let result = run_wizard_loop(&mut terminal, &mut state, &repo);
+    let result = run_wizard_loop(&mut terminal, &mut state);
 
     disable_raw_mode()?;
     execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
 
-    if state.step == WizardStep::Complete {
-        print_terminal_summary(&state);
+    if state.confirmed {
+        return execute_bootstrap_with_output(&state, &repo);
     }
 
     result
+}
+
+fn execute_bootstrap_with_output(state: &WizardState, repo: &Repository) -> Result<i32> {
+    use owo_colors::OwoColorize;
+
+    println!();
+    println!("{} {}", "⏳".yellow(), "Initializing belaf...".yellow().bold());
+    println!("   {} Creating configuration files...", "•".dimmed());
+    println!("   {} Updating version files...", "•".dimmed());
+    println!("   {} Creating Git tags...", "•".dimmed());
+    println!();
+
+    match execute_bootstrap(state, repo) {
+        Ok(_) => {
+            print_terminal_summary(state);
+            Ok(0)
+        }
+        Err(e) => {
+            println!("{} {}", "✗".red(), format!("Error: {}", e).red());
+            Ok(1)
+        }
+    }
 }
 
 fn hyperlink(text: &str, path: &std::path::Path) -> String {
@@ -253,7 +271,6 @@ fn print_terminal_summary(state: &WizardState) {
 fn run_wizard_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut WizardState,
-    repo: &Repository,
 ) -> Result<i32> {
     loop {
         terminal.draw(|frame| render(frame, state))?;
@@ -386,28 +403,8 @@ fn run_wizard_loop(
                 }
 
                 (KeyCode::Enter | KeyCode::Char('y'), _, WizardStep::Confirmation) => {
-                    state.step = WizardStep::Processing;
-                    terminal.draw(|frame| render(frame, state))?;
-
-                    match execute_bootstrap(state, repo) {
-                        Ok(msg) => {
-                            state.success_message = Some(msg);
-                            state.step = WizardStep::Complete;
-                            terminal.draw(|frame| render(frame, state))?;
-
-                            for remaining in (1..=3).rev() {
-                                state.exit_countdown = Some(remaining);
-                                terminal.draw(|frame| render(frame, state))?;
-                                std::thread::sleep(std::time::Duration::from_secs(1));
-                            }
-
-                            return Ok(0);
-                        }
-                        Err(e) => {
-                            state.error_message = Some(format!("Error: {}", e));
-                            state.step = WizardStep::Confirmation;
-                        }
-                    }
+                    state.confirmed = true;
+                    return Ok(0);
                 }
                 (KeyCode::Char('n') | KeyCode::Esc, _, WizardStep::Confirmation) => {
                     state.step = WizardStep::UpstreamConfig;
@@ -522,8 +519,6 @@ fn render(frame: &mut Frame, state: &mut WizardState) {
         WizardStep::ProjectSelection => render_project_selection(frame, area, state),
         WizardStep::UpstreamConfig => render_upstream_config(frame, area, state),
         WizardStep::Confirmation => render_confirmation(frame, area, state),
-        WizardStep::Processing => render_processing(frame, area),
-        WizardStep::Complete => render_complete(frame, area, state),
     }
 }
 
@@ -1470,197 +1465,4 @@ fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
     frame.render_widget(hints_para, chunks[2]);
 }
 
-fn render_processing(frame: &mut Frame, area: Rect) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(Span::styled(
-            " Processing ",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ));
-
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(35),
-            Constraint::Length(3),
-            Constraint::Length(2),
-            Constraint::Length(6),
-            Constraint::Min(0),
-        ])
-        .split(inner_area);
-
-    let spinner_frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let frame_idx =
-        (std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis()
-            / 100) as usize
-            % spinner_frames.len();
-
-    let spinner_line = Line::from(vec![
-        Span::styled(
-            spinner_frames[frame_idx],
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            "  Initializing...",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]);
-
-    let spinner_para = Paragraph::new(spinner_line).alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(spinner_para, chunks[1]);
-
-    let subtitle = Line::from(Span::styled(
-        "Setting up your release configuration",
-        Style::default().fg(Color::Gray),
-    ));
-    let subtitle_para = Paragraph::new(subtitle).alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(subtitle_para, chunks[2]);
-
-    let steps_lines = vec![
-        Line::from(vec![
-            Span::styled("   📄 ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                "Creating configuration files...",
-                Style::default().fg(Color::Gray),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("   ✏️  ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                "Updating version files...",
-                Style::default().fg(Color::Gray),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("   🏷️  ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                "Creating Git tags...",
-                Style::default().fg(Color::Gray),
-            ),
-        ]),
-    ];
-
-    let steps_para = Paragraph::new(steps_lines).alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(steps_para, chunks[3]);
-}
-
-fn render_complete(frame: &mut Frame, area: Rect, state: &WizardState) {
-    let is_reconfigure = state.config_exists;
-
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Green))
-        .title(Span::styled(
-            " 🎉 Complete ",
-            Style::default()
-                .fg(Color::Green)
-                .add_modifier(Modifier::BOLD),
-        ));
-
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage(25),
-            Constraint::Length(3),
-            Constraint::Length(2),
-            Constraint::Length(8),
-            Constraint::Min(0),
-            Constraint::Length(2),
-        ])
-        .split(inner_area);
-
-    let checkmark = vec![Line::from(Span::styled(
-        "✅",
-        Style::default().add_modifier(Modifier::BOLD),
-    ))];
-    let checkmark_para = Paragraph::new(checkmark)
-        .alignment(ratatui::layout::Alignment::Center)
-        .style(Style::default());
-    frame.render_widget(checkmark_para, chunks[0]);
-
-    let title = if is_reconfigure {
-        "Repository Reconfigured!"
-    } else {
-        "Repository Initialized!"
-    };
-    let title_line = Line::from(Span::styled(
-        title,
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-    ));
-    let title_para = Paragraph::new(title_line).alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(title_para, chunks[1]);
-
-    let subtitle = Line::from(Span::styled(
-        "Your release management is ready to go",
-        Style::default().fg(Color::Gray),
-    ));
-    let subtitle_para = Paragraph::new(subtitle).alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(subtitle_para, chunks[2]);
-
-    let next_steps = vec![
-        Line::from(""),
-        Line::from(Span::styled(
-            "Next Steps:",
-            Style::default()
-                .fg(Color::White)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("  1. ", Style::default().fg(Color::Cyan)),
-            Span::styled("Run ", Style::default().fg(Color::Gray)),
-            Span::styled("belaf status", Style::default().fg(Color::Cyan)),
-            Span::styled(" to see project versions", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  2. ", Style::default().fg(Color::Cyan)),
-            Span::styled("Run ", Style::default().fg(Color::Gray)),
-            Span::styled("belaf prepare", Style::default().fg(Color::Cyan)),
-            Span::styled(" when ready to release", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled("  3. ", Style::default().fg(Color::Cyan)),
-            Span::styled("Edit ", Style::default().fg(Color::Gray)),
-            Span::styled("belaf/config.toml", Style::default().fg(Color::Yellow)),
-            Span::styled(" to customize", Style::default().fg(Color::Gray)),
-        ]),
-    ];
-    let next_steps_para =
-        Paragraph::new(next_steps).alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(next_steps_para, chunks[3]);
-
-    let hints = if let Some(countdown) = state.exit_countdown {
-        Line::from(vec![
-            Span::styled(
-                format!("Closing in {}...", countdown),
-                Style::default().fg(Color::Gray),
-            ),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled("✨ ", Style::default().fg(Color::Green)),
-            Span::styled("Setup complete!", Style::default().fg(Color::Gray)),
-        ])
-    };
-    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
-    frame.render_widget(hints_para, chunks[5]);
-}
 
