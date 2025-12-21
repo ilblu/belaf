@@ -136,18 +136,20 @@ impl ProjectRelease {
         changelog: String,
         prefix: String,
     ) -> Self {
-        let tag_name = if prefix.is_empty() {
+        let prefix_trimmed = prefix.trim_end_matches('/');
+
+        let tag_name = if prefix_trimmed.is_empty() {
             format!("v{new_version}")
         } else {
-            format!("{prefix}/v{new_version}")
+            format!("{prefix_trimmed}/v{new_version}")
         };
 
         let previous_tag = if previous_version.is_empty() {
             None
-        } else if prefix.is_empty() {
+        } else if prefix_trimmed.is_empty() {
             Some(format!("v{previous_version}"))
         } else {
-            Some(format!("{prefix}/v{previous_version}"))
+            Some(format!("{prefix_trimmed}/v{previous_version}"))
         };
 
         let is_prerelease = Self::detect_prerelease(&new_version);
