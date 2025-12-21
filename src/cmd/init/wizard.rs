@@ -210,8 +210,20 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
     result
 }
 
+fn hyperlink(text: &str, path: &std::path::Path) -> String {
+    format!(
+        "\x1b]8;;file://{}\x1b\\{}\x1b]8;;\x1b\\",
+        path.display(),
+        text
+    )
+}
+
 fn print_terminal_summary(state: &WizardState) {
     use owo_colors::OwoColorize;
+
+    let config_path = std::env::current_dir()
+        .map(|p| p.join("belaf/config.toml"))
+        .ok();
 
     println!();
     if state.config_exists {
@@ -221,12 +233,20 @@ fn print_terminal_summary(state: &WizardState) {
     }
     println!();
     println!("{}", "Created:".white().bold());
-    println!("  {} belaf/config.toml", "•".cyan());
+    if let Some(ref path) = config_path {
+        println!("  {} {}", "•".cyan(), hyperlink(&"belaf/config.toml".yellow().to_string(), path));
+    } else {
+        println!("  {} {}", "•".cyan(), "belaf/config.toml".yellow());
+    }
     println!();
     println!("{}", "Next steps:".white().bold());
     println!("  {}. Run {} to see project versions", "1".cyan(), "belaf status".cyan());
     println!("  {}. Run {} when ready to release", "2".cyan(), "belaf prepare".cyan());
-    println!("  {}. Edit {} to customize", "3".cyan(), "belaf/config.toml".yellow());
+    if let Some(ref path) = config_path {
+        println!("  {}. Edit {} to customize", "3".cyan(), hyperlink(&"belaf/config.toml".yellow().to_string(), path));
+    } else {
+        println!("  {}. Edit {} to customize", "3".cyan(), "belaf/config.toml".yellow());
+    }
     println!();
 }
 
