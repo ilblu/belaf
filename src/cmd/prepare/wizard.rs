@@ -543,10 +543,25 @@ pub fn run_with_overrides(project_overrides: Option<Vec<String>>) -> Result<i32>
         })
         .collect();
 
-    let pr_url = ctx.finalize(selections)?;
+    println!();
+    let mut spinner = spinoff::Spinner::new(
+        spinoff::spinners::Dots,
+        "Creating release...",
+        spinoff::Color::Yellow,
+    );
+
+    let pr_url = match ctx.finalize(selections) {
+        Ok(url) => {
+            spinner.success("Release preparation complete!");
+            url
+        }
+        Err(e) => {
+            spinner.fail("Release preparation failed!");
+            return Err(e);
+        }
+    };
 
     println!();
-    println!("{} Release preparation complete!", "✓".green().bold());
     println!();
     println!("  {} Pull request created:", "→".cyan());
     println!("    {}", pr_url.cyan().underline());
