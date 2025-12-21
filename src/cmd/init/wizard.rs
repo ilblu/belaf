@@ -207,22 +207,21 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
 }
 
 fn execute_bootstrap_with_output(state: &WizardState, repo: &Repository) -> Result<i32> {
-    use owo_colors::OwoColorize;
-
     println!();
-    println!("{} {}", "⏳".yellow(), "Initializing belaf...".yellow().bold());
-    println!("   {} Creating configuration files...", "•".dimmed());
-    println!("   {} Updating version files...", "•".dimmed());
-    println!("   {} Creating Git tags...", "•".dimmed());
-    println!();
+    let mut spinner = spinoff::Spinner::new(
+        spinoff::spinners::Dots,
+        "Initializing belaf...",
+        spinoff::Color::Yellow,
+    );
 
     match execute_bootstrap(state, repo) {
         Ok(_) => {
+            spinner.success("Initialization complete!");
             print_terminal_summary(state);
             Ok(0)
         }
         Err(e) => {
-            println!("{} {}", "✗".red(), format!("Error: {}", e).red());
+            spinner.fail(&format!("Error: {}", e));
             Ok(1)
         }
     }
