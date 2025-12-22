@@ -1,3 +1,11 @@
+## [1.1.4](https://github.com/ilblu/belaf/compare/v1.1.3...v1.1.4) (2025-12-22)
+
+
+### Bug Fixes
+
+* **cli:** unify version output for 'belaf version' and 'belaf --version' ([2c2bf7e](https://github.com/ilblu/belaf/commit/2c2bf7edae86db451eb2aa93f4e0d584554955ec))
+* **manifest:** validate previous_tag exists before setting compare_url ([770fb39](https://github.com/ilblu/belaf/commit/770fb39e2860b21283da1d3d0600c3be6a503481))
+
 ## [1.1.3](https://github.com/ilblu/belaf/compare/v1.1.2...v1.1.3) (2025-12-22)
 
 ## [1.1.2](https://github.com/ilblu/belaf/compare/v1.1.1...v1.1.2) (2025-12-19)
