@@ -71,7 +71,8 @@ async fn main() -> Result<()> {
                     }
                     DashboardAction::Changelog => {
                         belaf::core::root::pre_execute();
-                        let exit_code = belaf::cmd::changelog::run(false, false, None, None, false, false)?;
+                        let exit_code =
+                            belaf::cmd::changelog::run(false, false, None, None, false, false)?;
                         if exit_code != 0 {
                             std::process::exit(exit_code);
                         }

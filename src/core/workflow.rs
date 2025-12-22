@@ -13,7 +13,6 @@
 //! a PR review process before being finalized by a GitHub App.
 
 use anyhow::{Context, Result};
-use secrecy::SecretString;
 use std::collections::HashMap;
 use tracing::{debug, info};
 
@@ -774,15 +773,11 @@ pub fn extract_github_remote(repo: &Repository) -> Option<GitHubRemoteInfo> {
     })
 }
 
-pub fn load_github_token() -> Option<SecretString> {
-    crate::core::env::require_var("GITHUB_TOKEN")
+pub fn load_github_token() -> Option<crate::core::api::StoredToken> {
+    crate::core::auth::token::load_token()
         .ok()
-        .map(SecretString::from)
-        .or_else(|| {
-            crate::core::auth::token::load_token()
-                .ok()
-                .map(SecretString::from)
-        })
+        .flatten()
+        .filter(|t| !t.is_expired())
 }
 
 #[derive(Debug)]
@@ -806,7 +801,7 @@ pub struct ChangelogGenerationParams<'a> {
     pub custom_output_path: Option<&'a str>,
     pub github_owner: Option<&'a str>,
     pub github_repo: Option<&'a str>,
-    pub github_token: Option<secrecy::SecretString>,
+    pub github_token: Option<crate::core::api::StoredToken>,
 }
 
 pub fn generate_and_write_project_changelog(

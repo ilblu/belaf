@@ -1,28 +1,40 @@
+use crate::core::api::StoredToken;
 use crate::error::{CliError, Result};
 use keyring::Entry;
 
 const SERVICE_NAME: &str = "belaf";
-const TOKEN_KEY: &str = "github-token";
+const TOKEN_KEY: &str = "api-token";
 
-pub fn save_token(token: &str) -> Result<()> {
+pub fn save_token(token: &StoredToken) -> Result<()> {
     let entry = Entry::new(SERVICE_NAME, TOKEN_KEY)
         .map_err(|e| CliError::TokenStorage(format!("Failed to create keyring entry: {}", e)))?;
 
+    let json = serde_json::to_string(token)
+        .map_err(|e| CliError::TokenStorage(format!("Failed to serialize token: {}", e)))?;
+
     entry
-        .set_password(token)
+        .set_password(&json)
         .map_err(|e| CliError::TokenStorage(format!("Failed to save token: {}", e)))?;
 
     Ok(())
 }
 
-pub fn load_token() -> Result<String> {
+pub fn load_token() -> Result<Option<StoredToken>> {
     let entry = Entry::new(SERVICE_NAME, TOKEN_KEY)
         .map_err(|e| CliError::TokenStorage(format!("Failed to create keyring entry: {}", e)))?;
 
-    entry.get_password().map_err(|e| match e {
-        keyring::Error::NoEntry => CliError::AuthenticationRequired,
-        _ => CliError::TokenStorage(format!("Failed to load token: {}", e)),
-    })
+    match entry.get_password() {
+        Ok(json) => {
+            let token: StoredToken = serde_json::from_str(&json)
+                .map_err(|e| CliError::TokenStorage(format!("Failed to parse token: {}", e)))?;
+            Ok(Some(token))
+        }
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(CliError::TokenStorage(format!(
+            "Failed to load token: {}",
+            e
+        ))),
+    }
 }
 
 pub fn delete_token() -> Result<()> {
@@ -30,7 +42,7 @@ pub fn delete_token() -> Result<()> {
         .map_err(|e| CliError::TokenStorage(format!("Failed to create keyring entry: {}", e)))?;
 
     match entry.delete_credential() {
-        Ok(_) => Ok(()),
+        Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
         Err(e) => Err(CliError::TokenStorage(format!(
             "Failed to delete token: {}",

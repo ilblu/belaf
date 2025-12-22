@@ -950,9 +950,11 @@ impl Repository {
             if allowed_types.contains(git2::CredentialType::SSH_KEY) {
                 git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git"))
             } else if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-                let token = std::env::var("GITHUB_TOKEN")
+                let token = crate::core::auth::token::load_token()
                     .ok()
-                    .or_else(|| crate::core::auth::token::load_token().ok());
+                    .flatten()
+                    .filter(|t| !t.is_expired())
+                    .map(|t| t.access_token);
                 if let Some(token) = token {
                     git2::Cred::userpass_plaintext("x-access-token", &token)
                 } else {

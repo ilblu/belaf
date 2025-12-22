@@ -1,65 +1,31 @@
 use async_stream::stream as async_stream;
-use futures::{stream, Stream, StreamExt};
-use reqwest_middleware::ClientWithMiddleware;
-use secrecy::SecretString;
-use serde::{Deserialize, Serialize};
+use futures::Stream;
+use time::format_description::well_known::Rfc3339;
+use time::OffsetDateTime;
 
 use super::error::Result;
-use super::remote::{create_http_client, RemoteCommit, RemotePullRequest, MAX_PAGE_SIZE};
+use super::remote::{RemoteCommit, RemotePullRequest, MAX_PAGE_SIZE};
+use crate::core::api::{ApiClient, ApiCommit, ApiPullRequest, StoredToken};
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GitHubCommit {
-    pub sha: String,
-    pub author: Option<GitHubCommitAuthor>,
-    pub commit: Option<GitHubCommitDetails>,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GitHubCommitDetails {
-    pub author: GitHubCommitDetailsAuthor,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GitHubCommitDetailsAuthor {
-    pub date: String,
-}
-
-impl RemoteCommit for GitHubCommit {
+impl RemoteCommit for ApiCommit {
     fn id(&self) -> String {
         self.sha.clone()
     }
 
     fn username(&self) -> Option<String> {
-        self.author.clone().and_then(|v| v.login)
+        self.author.as_ref().and_then(|a| a.login.clone())
     }
 
     fn timestamp(&self) -> Option<i64> {
-        self.commit
-            .clone()
-            .map(|f| self.convert_to_unix_timestamp(f.author.date.as_str()))
+        self.timestamp.as_ref().map(|ts| {
+            OffsetDateTime::parse(ts, &Rfc3339)
+                .map(|dt| dt.unix_timestamp())
+                .unwrap_or(0)
+        })
     }
 }
 
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GitHubCommitAuthor {
-    pub login: Option<String>,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PullRequestLabel {
-    pub name: String,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct GitHubPullRequest {
-    pub number: i64,
-    pub title: Option<String>,
-    pub merge_commit_sha: Option<String>,
-    pub labels: Vec<PullRequestLabel>,
-}
-
-impl RemotePullRequest for GitHubPullRequest {
+impl RemotePullRequest for ApiPullRequest {
     fn number(&self) -> i64 {
         self.number
     }
@@ -69,7 +35,7 @@ impl RemotePullRequest for GitHubPullRequest {
     }
 
     fn labels(&self) -> Vec<String> {
-        self.labels.iter().map(|v| v.name.clone()).collect()
+        self.labels.clone()
     }
 
     fn merge_commit(&self) -> Option<String> {
@@ -81,51 +47,18 @@ impl RemotePullRequest for GitHubPullRequest {
 pub struct GitHubClient {
     owner: String,
     repo: String,
-    client: ClientWithMiddleware,
-    api_url: String,
+    client: ApiClient,
+    token: StoredToken,
 }
 
 impl GitHubClient {
-    pub fn new(owner: String, repo: String, token: Option<SecretString>) -> Result<Self> {
-        let client = create_http_client("application/vnd.github+json", token.as_ref())?;
-
-        let api_url = std::env::var("GITHUB_API_URL")
-            .unwrap_or_else(|_| "https://api.github.com".to_string());
-
+    pub fn new(owner: String, repo: String, token: StoredToken) -> Result<Self> {
         Ok(Self {
             owner,
             repo,
-            client,
-            api_url,
+            client: ApiClient::new(),
+            token,
         })
-    }
-
-    fn commits_url(&self, ref_name: Option<&str>, page: i32) -> String {
-        let mut url = format!(
-            "{}/repos/{}/{}/commits?per_page={}&page={}",
-            self.api_url, self.owner, self.repo, MAX_PAGE_SIZE, page
-        );
-
-        if let Some(ref_name) = ref_name {
-            url.push_str(&format!("&sha={}", ref_name));
-        }
-
-        url
-    }
-
-    fn pull_requests_url(&self, page: i32) -> String {
-        format!(
-            "{}/repos/{}/{}/pulls?per_page={}&page={}&state=closed",
-            self.api_url, self.owner, self.repo, MAX_PAGE_SIZE, page
-        )
-    }
-
-    async fn get_json<T: serde::de::DeserializeOwned>(&self, url: &str) -> Result<T> {
-        log::debug!("Sending request to: {url}");
-        let response = self.client.get(url).send().await?.error_for_status()?;
-        let text = response.text().await?;
-        log::trace!("Response: {:?}", text);
-        Ok(serde_json::from_str::<T>(&text)?)
     }
 
     pub async fn get_commits(&self, ref_name: Option<&str>) -> Result<Vec<Box<dyn RemoteCommit>>> {
@@ -143,21 +76,19 @@ impl GitHubClient {
         ref_name: Option<&str>,
     ) -> impl Stream<Item = Result<Box<dyn RemoteCommit>>> + 'a {
         let ref_name = ref_name.map(|s| s.to_string());
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+
         async_stream! {
-            let page_stream = stream::iter(0..)
-                .map(|page| {
-                    let ref_name = ref_name.clone();
-                    async move {
-                        let url = self.commits_url(ref_name.as_deref(), page);
-                        self.get_json::<Vec<GitHubCommit>>(&url).await
-                    }
-                })
-                .buffered(10);
+            let mut page = 1u32;
+            let per_page = MAX_PAGE_SIZE as u32;
 
-            let mut page_stream = Box::pin(page_stream);
+            loop {
+                let commits_result = self.client
+                    .get_commits(&self.token, &owner, &repo, ref_name.as_deref(), page, per_page)
+                    .await;
 
-            while let Some(page_result) = page_stream.next().await {
-                match page_result {
+                match commits_result {
                     Ok(commits) => {
                         if commits.is_empty() {
                             break;
@@ -166,9 +97,11 @@ impl GitHubClient {
                         for commit in commits {
                             yield Ok(Box::new(commit) as Box<dyn RemoteCommit>);
                         }
+
+                        page += 1;
                     }
                     Err(e) => {
-                        yield Err(e);
+                        yield Err(e.into());
                         break;
                     }
                 }
@@ -179,18 +112,19 @@ impl GitHubClient {
     fn get_pull_request_stream<'a>(
         &'a self,
     ) -> impl Stream<Item = Result<Box<dyn RemotePullRequest>>> + 'a {
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+
         async_stream! {
-            let page_stream = stream::iter(0..)
-                .map(|page| async move {
-                    let url = self.pull_requests_url(page);
-                    self.get_json::<Vec<GitHubPullRequest>>(&url).await
-                })
-                .buffered(5);
+            let mut page = 1u32;
+            let per_page = MAX_PAGE_SIZE as u32;
 
-            let mut page_stream = Box::pin(page_stream);
+            loop {
+                let prs_result = self.client
+                    .get_pull_requests(&self.token, &owner, &repo, page, per_page)
+                    .await;
 
-            while let Some(page_result) = page_stream.next().await {
-                match page_result {
+                match prs_result {
                     Ok(prs) => {
                         if prs.is_empty() {
                             break;
@@ -199,9 +133,11 @@ impl GitHubClient {
                         for pr in prs {
                             yield Ok(Box::new(pr) as Box<dyn RemotePullRequest>);
                         }
+
+                        page += 1;
                     }
                     Err(e) => {
-                        yield Err(e);
+                        yield Err(e.into());
                         break;
                     }
                 }

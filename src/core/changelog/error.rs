@@ -49,6 +49,9 @@ pub enum Error {
     #[error("HTTP header error: {0}")]
     HeaderError(#[from] reqwest::header::InvalidHeaderValue),
 
+    #[error("API error: {0}")]
+    ApiError(#[from] crate::core::api::ApiError),
+
     #[error("Remote not configured")]
     RemoteNotConfigured,
 

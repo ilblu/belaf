@@ -2,14 +2,10 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use secrecy::SecretString;
 use serde::Serialize;
 
 use super::commit::Commit;
 
-/// Length of abbreviated commit SHA displayed in logs and changelog entries.
-/// 7 characters is the Git default for short SHA and provides sufficient uniqueness
-/// for most repositories while remaining readable.
 const SHORT_SHA_LENGTH: usize = 7;
 use super::config::{ChangelogConfig, GitConfig};
 use super::error::{Error, Result};
@@ -17,6 +13,7 @@ use super::github::GitHubClient;
 use super::release::{Release, Releases};
 use super::remote::RemoteMetadata;
 use super::template::Template;
+use crate::core::api::StoredToken;
 use crate::core::bump::BumpConfig;
 
 #[derive(Debug, Clone, Serialize)]
@@ -36,7 +33,7 @@ pub struct Changelog {
     footer_template: Option<Template>,
     additional_context: HashMap<String, serde_json::Value>,
     remote: Option<RemoteConfig>,
-    github_token: Option<SecretString>,
+    github_token: Option<StoredToken>,
 }
 
 impl Changelog {
@@ -109,7 +106,7 @@ impl Changelog {
         self
     }
 
-    pub fn with_github_token(mut self, token: SecretString) -> Self {
+    pub fn with_github_token(mut self, token: StoredToken) -> Self {
         self.github_token = Some(token);
         self
     }
@@ -309,11 +306,11 @@ impl Changelog {
             .as_ref()
             .ok_or_else(|| Error::RemoteNotConfigured)?;
 
-        let github_client = GitHubClient::new(
-            remote.owner.clone(),
-            remote.repo.clone(),
-            self.github_token.clone(),
-        )?;
+        let token = self.github_token.clone().ok_or_else(|| {
+            Error::ChangelogError("Authentication required. Run 'belaf install' first.".to_string())
+        })?;
+
+        let github_client = GitHubClient::new(remote.owner.clone(), remote.repo.clone(), token)?;
 
         log::info!(
             "Retrieving data from GitHub ({}/{})...",
