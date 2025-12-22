@@ -483,7 +483,7 @@ impl<'a> ReleasePipeline<'a> {
             .with_statistics(statistics);
 
             if let Some(base_url) = &github_base_url {
-                release = release.with_compare_url(base_url);
+                release = release.with_compare_url(base_url, |tag| self.sess.repo.tag_exists(tag));
             }
 
             manifest.add_release(release);

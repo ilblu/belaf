@@ -634,6 +634,11 @@ impl Repository {
         }
     }
 
+    pub fn tag_exists(&self, tag_name: &str) -> bool {
+        let refs_tag = format!("refs/tags/{}", tag_name);
+        self.repo.find_reference(&refs_tag).is_ok()
+    }
+
     pub fn create_baseline_tag(&self) -> Result<()> {
         let head = self.repo.head()?;
         let target_oid = head.target().context("HEAD has no target")?;

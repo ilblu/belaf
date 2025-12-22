@@ -180,14 +180,21 @@ impl ProjectRelease {
             .any(|marker| version_lower.contains(marker))
     }
 
-    pub fn with_compare_url(mut self, base_url: &str) -> Self {
+    pub fn with_compare_url<F>(mut self, base_url: &str, tag_exists: F) -> Self
+    where
+        F: Fn(&str) -> bool,
+    {
         if let Some(prev_tag) = &self.previous_tag {
-            self.compare_url = Some(format!(
-                "{}/compare/{}...{}",
-                base_url.trim_end_matches('/'),
-                prev_tag,
-                self.tag_name
-            ));
+            if tag_exists(prev_tag) {
+                self.compare_url = Some(format!(
+                    "{}/compare/{}...{}",
+                    base_url.trim_end_matches('/'),
+                    prev_tag,
+                    self.tag_name
+                ));
+            } else {
+                self.previous_tag = None;
+            }
         }
         self
     }
@@ -301,6 +308,77 @@ mod tests {
             "packages/core".to_string(),
         );
         assert_eq!(release.tag_name, "packages/core/v2.0.0");
+    }
+
+    #[test]
+    fn test_project_release_tag_name_with_trailing_slash() {
+        let release = ProjectRelease::new(
+            "cli".to_string(),
+            "cargo".to_string(),
+            "0.1.0".to_string(),
+            "0.2.0".to_string(),
+            "minor".to_string(),
+            "Changelog".to_string(),
+            "apps/cli/".to_string(),
+        );
+        assert_eq!(release.tag_name, "apps/cli/v0.2.0");
+        assert_eq!(release.previous_tag, Some("apps/cli/v0.1.0".to_string()));
+    }
+
+    #[test]
+    fn test_compare_url_with_existing_tag() {
+        let release = ProjectRelease::new(
+            "cli".to_string(),
+            "cargo".to_string(),
+            "0.1.0".to_string(),
+            "0.2.0".to_string(),
+            "minor".to_string(),
+            "Changelog".to_string(),
+            "apps/cli".to_string(),
+        )
+        .with_compare_url("https://github.com/org/repo", |_| true);
+
+        assert_eq!(release.previous_tag, Some("apps/cli/v0.1.0".to_string()));
+        assert_eq!(
+            release.compare_url,
+            Some(
+                "https://github.com/org/repo/compare/apps/cli/v0.1.0...apps/cli/v0.2.0".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn test_compare_url_with_nonexistent_tag() {
+        let release = ProjectRelease::new(
+            "cli".to_string(),
+            "cargo".to_string(),
+            "0.1.0".to_string(),
+            "0.2.0".to_string(),
+            "minor".to_string(),
+            "Changelog".to_string(),
+            "apps/cli".to_string(),
+        )
+        .with_compare_url("https://github.com/org/repo", |_| false);
+
+        assert_eq!(release.previous_tag, None);
+        assert_eq!(release.compare_url, None);
+    }
+
+    #[test]
+    fn test_compare_url_first_release_no_previous_version() {
+        let release = ProjectRelease::new(
+            "cli".to_string(),
+            "cargo".to_string(),
+            "".to_string(),
+            "0.1.0".to_string(),
+            "minor".to_string(),
+            "Changelog".to_string(),
+            "apps/cli".to_string(),
+        )
+        .with_compare_url("https://github.com/org/repo", |_| true);
+
+        assert_eq!(release.previous_tag, None);
+        assert_eq!(release.compare_url, None);
     }
 
     #[test]
