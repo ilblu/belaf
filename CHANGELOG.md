@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/ilblu/belaf/compare/v1.1.4...v1.2.0) (2025-12-22)
+
+
+### Features
+
+* **cli:** add LazyVim-style dashboard when running without arguments ([ca159a8](https://github.com/ilblu/belaf/commit/ca159a8e14ff70e516649385367bdc253ab58fc3))
+
 ## [1.1.4](https://github.com/ilblu/belaf/compare/v1.1.3...v1.1.4) (2025-12-22)
 
 
