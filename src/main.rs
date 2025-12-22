@@ -44,8 +44,64 @@ async fn main() -> Result<()> {
             std::process::exit(1);
         }
     } else {
-        eprintln!("Error: No command provided. Use --help for usage information.");
-        std::process::exit(1);
+        match belaf::cmd::dashboard::run() {
+            Ok(action) => {
+                use belaf::cmd::dashboard::DashboardAction;
+                match action {
+                    DashboardAction::Prepare => {
+                        belaf::core::root::pre_execute();
+                        let exit_code = belaf::cmd::prepare::run(false, None)?;
+                        if exit_code != 0 {
+                            std::process::exit(exit_code);
+                        }
+                    }
+                    DashboardAction::Status => {
+                        belaf::core::root::pre_execute();
+                        let exit_code = belaf::cmd::status::run(None, false)?;
+                        if exit_code != 0 {
+                            std::process::exit(exit_code);
+                        }
+                    }
+                    DashboardAction::Graph => {
+                        belaf::core::root::pre_execute();
+                        let exit_code = belaf::cmd::graph::run(None, false, false, None)?;
+                        if exit_code != 0 {
+                            std::process::exit(exit_code);
+                        }
+                    }
+                    DashboardAction::Changelog => {
+                        belaf::core::root::pre_execute();
+                        let exit_code = belaf::cmd::changelog::run(false, false, None, None, false, false)?;
+                        if exit_code != 0 {
+                            std::process::exit(exit_code);
+                        }
+                    }
+                    DashboardAction::Init => {
+                        belaf::core::root::pre_execute();
+                        let exit_code = belaf::cmd::init::run(false, None, false, None)?;
+                        if exit_code != 0 {
+                            std::process::exit(exit_code);
+                        }
+                    }
+                    DashboardAction::Web => {
+                        let url = std::env::var("BELAF_WEB_URL")
+                            .unwrap_or_else(|_| "https://belaf.dev/dashboard".to_string());
+                        if let Err(e) = open::that(&url) {
+                            eprintln!("Failed to open browser: {}", e);
+                            std::process::exit(1);
+                        }
+                    }
+                    DashboardAction::Help => {
+                        belaf::cli::Cli::parse_from(["belaf", "--help"]);
+                    }
+                    DashboardAction::Quit | DashboardAction::None => {}
+                }
+            }
+            Err(e) => {
+                print_error(&e);
+                std::process::exit(1);
+            }
+        }
     }
 
     Ok(())

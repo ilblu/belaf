@@ -5,6 +5,7 @@ pub mod cmd {
     pub mod auth;
     pub mod changelog;
     pub mod completions;
+    pub mod dashboard;
     pub mod graph;
     pub mod init;
     pub mod prepare;

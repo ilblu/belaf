@@ -607,31 +607,31 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
 
         let logo = vec![
             Line::from(Span::styled(
-                "   ██████╗██╗     ██╗██╗  ██╗██████╗ ",
+                "██████╗ ███████╗██╗      █████╗ ███████╗",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "  ██╔════╝██║     ██║██║ ██╔╝██╔══██╗",
+                "██╔══██╗██╔════╝██║     ██╔══██╗██╔════╝",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "  ██║     ██║     ██║█████╔╝ ██║  ██║",
+                "██████╔╝█████╗  ██║     ███████║█████╗  ",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "  ██║     ██║     ██║██╔═██╗ ██║  ██║",
+                "██╔══██╗██╔══╝  ██║     ██╔══██║██╔══╝  ",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "  ╚██████╗███████╗██║██║  ██╗██████╔╝",
+                "██████╔╝███████╗███████╗██║  ██║██║     ",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "   ╚═════╝╚══════╝╚═╝╚═╝  ╚═╝╚═════╝ ",
+                "╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝     ",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "         Release Management",
+                "           Release Management",
                 Style::default().fg(Color::Gray),
             )),
         ];
@@ -709,31 +709,31 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
 
         let logo = vec![
             Line::from(Span::styled(
-                "   ██████╗██╗     ██╗██╗  ██╗██████╗ ",
+                "██████╗ ███████╗██╗      █████╗ ███████╗",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "  ██╔════╝██║     ██║██║ ██╔╝██╔══██╗",
+                "██╔══██╗██╔════╝██║     ██╔══██╗██╔════╝",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "  ██║     ██║     ██║█████╔╝ ██║  ██║",
+                "██████╔╝█████╗  ██║     ███████║█████╗  ",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "  ██║     ██║     ██║██╔═██╗ ██║  ██║",
+                "██╔══██╗██╔══╝  ██║     ██╔══██║██╔══╝  ",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "  ╚██████╗███████╗██║██║  ██╗██████╔╝",
+                "██████╔╝███████╗███████╗██║  ██║██║     ",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "   ╚═════╝╚══════╝╚═╝╚═╝  ╚═╝╚═════╝ ",
+                "╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝     ",
                 Style::default().fg(logo_color),
             )),
             Line::from(Span::styled(
-                "         Release Management",
+                "           Release Management",
                 Style::default().fg(Color::Gray),
             )),
         ];
