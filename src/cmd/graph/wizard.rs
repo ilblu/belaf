@@ -257,11 +257,7 @@ fn ui(f: &mut Frame, app: &mut App) {
     render_packages_panel(f, app, main_chunks[0]);
     render_details_panel(f, app, main_chunks[1]);
 
-    let position_text = format!(
-        "{}/{}",
-        app.selected_idx() + 1,
-        app.projects.len()
-    );
+    let position_text = format!("{}/{}", app.selected_idx() + 1, app.projects.len());
 
     let hints = Line::from(vec![
         Span::styled(" ↑↓/jk", Style::default().fg(Color::Cyan)),
@@ -273,8 +269,16 @@ fn ui(f: &mut Frame, app: &mut App) {
         Span::styled("q", Style::default().fg(Color::Red)),
         Span::styled(" Quit", Style::default().fg(Color::Gray)),
         Span::raw("  │  "),
-        Span::styled("📦 Package ", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
-        Span::styled(format!("[{}]", position_text), Style::default().fg(Color::White)),
+        Span::styled(
+            "📦 Package ",
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("[{}]", position_text),
+            Style::default().fg(Color::White),
+        ),
     ]);
 
     let hints_widget = Paragraph::new(hints).alignment(Alignment::Center);
@@ -382,7 +386,9 @@ fn render_packages_panel(f: &mut Frame, app: &mut App, area: Rect) {
             };
 
             let name_style = if is_selected {
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD)
             } else if is_root {
                 Style::default().fg(Color::Green)
             } else {
@@ -473,7 +479,12 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
     let mut lines = vec![
         Line::from(vec![
             Span::styled(" 🏷️  Version: ", Style::default().fg(Color::Gray)),
-            Span::styled(&proj.version, Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                &proj.version,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
         ]),
         Line::from(vec![
             Span::styled(" 🎯 Release:  ", Style::default().fg(Color::Gray)),
@@ -492,7 +503,9 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
             Span::styled(" ⬇️  ", Style::default()),
             Span::styled(
                 format!("Dependencies ({})", proj.deps.len()),
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
     ];
@@ -516,7 +529,9 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
         Span::styled(" ⬆️  ", Style::default()),
         Span::styled(
             format!("Dependents ({})", proj.dependents.len()),
-            Style::default().fg(Color::Magenta).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
         ),
     ]));
 

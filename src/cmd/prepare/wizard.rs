@@ -1572,7 +1572,7 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
         file_lines.push(Line::from(vec![
             Span::styled("   ✏️  ", Style::default().fg(Color::Yellow)),
             Span::styled(
-                format!("{}", ecosystem.version_file()),
+                ecosystem.version_file().to_string(),
                 Style::default().fg(Color::Gray),
             ),
         ]));

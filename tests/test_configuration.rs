@@ -2452,12 +2452,14 @@ fn test_changelog_sha_links_format() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let sha_link_pattern =
-        regex::Regex::new(r"\(\[([a-f0-9]{7})\]\(/commit/([a-f0-9]{40})\)\)").unwrap();
+    let sha_link_pattern = regex::Regex::new(
+        r"\(\[([a-f0-9]{7})\]\(https://github\.com/test/repo/commit/([a-f0-9]{40})\)\)",
+    )
+    .unwrap();
 
     assert!(
         sha_link_pattern.is_match(&stdout),
-        "Expected changelog to contain SHA links in format ([short_sha](/commit/full_sha)), got: {stdout}"
+        "Expected changelog to contain SHA links with full GitHub URL, got: {stdout}"
     );
 
     if let Some(captures) = sha_link_pattern.captures(&stdout) {

@@ -1,5 +1,14 @@
 use std::{collections::HashMap, fs, io, io::Write as _};
 
+use crate::{
+    atry,
+    core::{
+        git::repository::{PathMatcher, RepoPathBuf, Repository},
+        project::DepRequirement,
+        session::{AppBuilder, AppSession},
+        ui::{components::toggle_panel::TogglePanel, utils::centered_rect},
+    },
+};
 use anyhow::Result;
 use crossterm::{
     event::{
@@ -16,18 +25,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph},
     Frame, Terminal,
-};
-use crate::{
-    atry,
-    core::{
-        git::repository::{PathMatcher, RepoPathBuf, Repository},
-        project::DepRequirement,
-        session::{AppBuilder, AppSession},
-        ui::{
-            components::toggle_panel::TogglePanel,
-            utils::centered_rect,
-        },
-    },
 };
 
 use super::{BootstrapConfiguration, BootstrapProjectInfo};
@@ -197,7 +194,11 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
     let result = run_wizard_loop(&mut terminal, &mut state);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen, DisableMouseCapture)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
 
     if state.confirmed {
         return execute_bootstrap_with_output(&state, &repo);
@@ -244,25 +245,53 @@ fn print_terminal_summary(state: &WizardState) {
 
     println!();
     if state.config_exists {
-        println!("{} {}", "✅".green(), "Repository reconfigured successfully!".green().bold());
+        println!(
+            "{} {}",
+            "✅".green(),
+            "Repository reconfigured successfully!".green().bold()
+        );
     } else {
-        println!("{} {}", "✅".green(), "Repository initialized successfully!".green().bold());
+        println!(
+            "{} {}",
+            "✅".green(),
+            "Repository initialized successfully!".green().bold()
+        );
     }
     println!();
     println!("{}", "Created:".white().bold());
     if let Some(ref path) = config_path {
-        println!("  {} {}", "•".cyan(), hyperlink(&"belaf/config.toml".yellow().to_string(), path));
+        println!(
+            "  {} {}",
+            "•".cyan(),
+            hyperlink(&"belaf/config.toml".yellow().to_string(), path)
+        );
     } else {
         println!("  {} {}", "•".cyan(), "belaf/config.toml".yellow());
     }
     println!();
     println!("{}", "Next steps:".white().bold());
-    println!("  {}. Run {} to see project versions", "1".cyan(), "belaf status".cyan());
-    println!("  {}. Run {} when ready to release", "2".cyan(), "belaf prepare".cyan());
+    println!(
+        "  {}. Run {} to see project versions",
+        "1".cyan(),
+        "belaf status".cyan()
+    );
+    println!(
+        "  {}. Run {} when ready to release",
+        "2".cyan(),
+        "belaf prepare".cyan()
+    );
     if let Some(ref path) = config_path {
-        println!("  {}. Edit {} to customize", "3".cyan(), hyperlink(&"belaf/config.toml".yellow().to_string(), path));
+        println!(
+            "  {}. Edit {} to customize",
+            "3".cyan(),
+            hyperlink(&"belaf/config.toml".yellow().to_string(), path)
+        );
     } else {
-        println!("  {}. Edit {} to customize", "3".cyan(), "belaf/config.toml".yellow());
+        println!(
+            "  {}. Edit {} to customize",
+            "3".cyan(),
+            "belaf/config.toml".yellow()
+        );
     }
     println!();
 }
@@ -549,9 +578,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
         .title(if is_reconfigure {
             Span::styled(
                 " ⚠ Reconfigure ",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             )
         } else {
             Span::styled(
@@ -615,9 +642,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
             Line::from(""),
             Line::from(vec![Span::styled(
                 "⚠️  RECONFIGURE MODE  ⚠️",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             )]),
         ];
         let warning_para =
@@ -658,9 +683,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
             Span::styled("Press ", Style::default().fg(Color::Gray)),
             Span::styled(
                 "ENTER",
-                Style::default()
-                    .fg(Color::Red)
-                    .add_modifier(Modifier::BOLD),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
             Span::styled(" to reconfigure  •  ", Style::default().fg(Color::Gray)),
             Span::styled(
@@ -671,8 +694,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
             ),
             Span::styled(" to quit", Style::default().fg(Color::Gray)),
         ])];
-        let action_para =
-            Paragraph::new(action_text).alignment(ratatui::layout::Alignment::Center);
+        let action_para = Paragraph::new(action_text).alignment(ratatui::layout::Alignment::Center);
         frame.render_widget(action_para, chunks[4]);
     } else {
         let chunks = Layout::default()
@@ -763,10 +785,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
         ]));
         info_lines.push(Line::from(vec![
             Span::styled("  → ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                "Project configuration",
-                Style::default().fg(Color::Gray),
-            ),
+            Span::styled("Project configuration", Style::default().fg(Color::Gray)),
         ]));
         info_lines.push(Line::from(vec![
             Span::styled("  → ", Style::default().fg(Color::Cyan)),
@@ -793,8 +812,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
             ),
             Span::styled(" to quit", Style::default().fg(Color::Gray)),
         ])];
-        let action_para =
-            Paragraph::new(action_text).alignment(ratatui::layout::Alignment::Center);
+        let action_para = Paragraph::new(action_text).alignment(ratatui::layout::Alignment::Center);
         frame.render_widget(action_para, chunks[2]);
     }
 }
@@ -903,7 +921,9 @@ fn render_preset_selection(frame: &mut Frame, area: Rect, state: &mut WizardStat
         .split(main_chunks[1]);
 
     let preset_name = state.selected_preset_name().to_string();
-    state.preset_toggle.render(frame, right_chunks[0], &preset_name);
+    state
+        .preset_toggle
+        .render(frame, right_chunks[0], &preset_name);
 
     let config_content = if preset_name == "default" {
         EmbeddedConfig::get_config_string().unwrap_or_else(|_| "Config not available".to_string())
@@ -1097,10 +1117,7 @@ fn render_project_selection(frame: &mut Frame, area: Rect, state: &WizardState) 
             let is_current = idx == state.selected_project_idx;
             let checkbox = if proj.selected { "✅" } else { "⬜" };
             let lines = vec![Line::from(vec![
-                Span::styled(
-                    format!(" {} ", checkbox),
-                    Style::default(),
-                ),
+                Span::styled(format!(" {} ", checkbox), Style::default()),
                 Span::styled(
                     proj.name.clone(),
                     if is_current {
@@ -1165,10 +1182,7 @@ fn render_project_selection(frame: &mut Frame, area: Rect, state: &WizardState) 
         frame.render_widget(Clear, popup_area);
         let popup = Paragraph::new(vec![
             Line::from(""),
-            Line::from(Span::styled(
-                error.clone(),
-                Style::default().fg(Color::Red),
-            )),
+            Line::from(Span::styled(error.clone(), Style::default().fg(Color::Red))),
         ])
         .alignment(ratatui::layout::Alignment::Center)
         .block(
@@ -1177,9 +1191,7 @@ fn render_project_selection(frame: &mut Frame, area: Rect, state: &WizardState) 
                 .border_style(Style::default().fg(Color::Red))
                 .title(Span::styled(
                     " ⚠ Error ",
-                    Style::default()
-                        .fg(Color::Red)
-                        .add_modifier(Modifier::BOLD),
+                    Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
                 )),
         );
         frame.render_widget(popup, popup_area);
@@ -1398,10 +1410,7 @@ fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
         Block::default()
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Gray))
-            .title(Span::styled(
-                " Summary ",
-                Style::default().fg(Color::White),
-            )),
+            .title(Span::styled(" Summary ", Style::default().fg(Color::White))),
     );
     frame.render_widget(summary_block, content_chunks[0]);
 
@@ -1413,10 +1422,7 @@ fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
         Line::from(""),
         Line::from(vec![
             Span::styled("   📄 ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                "Create belaf/config.toml",
-                Style::default().fg(Color::Gray),
-            ),
+            Span::styled("Create belaf/config.toml", Style::default().fg(Color::Gray)),
         ]),
         Line::from(vec![
             Span::styled("   📄 ", Style::default().fg(Color::Cyan)),
@@ -1434,10 +1440,7 @@ fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
         ]),
         Line::from(vec![
             Span::styled("   🏷️  ", Style::default().fg(Color::Green)),
-            Span::styled(
-                "Create baseline Git tags",
-                Style::default().fg(Color::Gray),
-            ),
+            Span::styled("Create baseline Git tags", Style::default().fg(Color::Gray)),
         ]),
     ];
 
@@ -1463,5 +1466,3 @@ fn render_confirmation(frame: &mut Frame, area: Rect, state: &WizardState) {
     let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
     frame.render_widget(hints_para, chunks[2]);
 }
-
-

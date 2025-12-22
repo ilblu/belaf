@@ -13,9 +13,17 @@ use time::OffsetDateTime;
 use super::contributor::RemoteContributor;
 use super::error::{Error, Result};
 
+/// HTTP User-Agent header sent with API requests, identifying this tool and version.
 pub const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
+
+/// Timeout in seconds for individual HTTP requests to remote APIs.
 pub const REQUEST_TIMEOUT: u64 = 30;
+
+/// Keep-alive duration in seconds for HTTP connection pooling.
 pub const REQUEST_KEEP_ALIVE: u64 = 60;
+
+/// Maximum number of items to request per page from paginated APIs.
+/// GitHub's maximum is 100, which we use to minimize the number of requests.
 pub const MAX_PAGE_SIZE: usize = 100;
 
 pub trait RemoteCommit: DynClone + Send + Sync {

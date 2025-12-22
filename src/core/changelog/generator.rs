@@ -7,6 +7,9 @@ use serde::Serialize;
 
 use super::commit::Commit;
 
+/// Length of abbreviated commit SHA displayed in logs and changelog entries.
+/// 7 characters is the Git default for short SHA and provides sufficient uniqueness
+/// for most repositories while remaining readable.
 const SHORT_SHA_LENGTH: usize = 7;
 use super::config::{ChangelogConfig, GitConfig};
 use super::error::{Error, Result};
@@ -99,8 +102,7 @@ impl Changelog {
         }
 
         if let Ok(value) = serde_json::to_value(&remote) {
-            self.additional_context
-                .insert("remote".to_string(), value);
+            self.additional_context.insert("remote".to_string(), value);
         }
 
         self.remote = Some(remote);

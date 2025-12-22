@@ -325,11 +325,7 @@ impl TuiState {
                 };
 
                 let commits_style = if proj.commits_count > 0 {
-                    if is_selected {
-                        Style::default().fg(Color::Yellow)
-                    } else {
-                        Style::default().fg(Color::Yellow)
-                    }
+                    Style::default().fg(Color::Yellow)
                 } else {
                     Style::default().fg(Color::Gray)
                 };
