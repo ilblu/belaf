@@ -49,7 +49,6 @@ That's it. belaf figures out the rest.
 - **Smart Detection** — Automatically discovers projects across 6 languages
 - **Dependency Resolution** — Determines correct release order based on inter-project dependencies
 - **Conventional Commits** — Analyzes commit history to suggest semantic version bumps
-- **AI Changelogs** — Generate human-readable changelogs with Claude AI (optional)
 - **Interactive TUI** — Beautiful terminal interface with keyboard navigation
 - **CI/CD Ready** — Full automation support with `--no-tui` mode and JSON output
 - **PR Workflow** — Creates pull requests with release manifests for team review
@@ -176,30 +175,51 @@ ignore = false              # Set true to exclude from releases
 
 ---
 
-## AI-Powered Changelogs
+## Why belaf?
 
-belaf integrates with Claude AI to generate human-readable changelogs:
-
-```bash
-# Authenticate with Anthropic
-belaf auth login --anthropic
-
-# Changelogs are now AI-enhanced
-belaf prepare
-```
+| Feature | belaf | git-cliff | semantic-release | changesets | release-please |
+|---------|-------|-----------|------------------|------------|----------------|
+| Multi-language | ✅ 6 languages | ❌ | ❌ Node.js only | ❌ Node.js only | ⚠️ Limited |
+| Monorepo support | ✅ Native | ⚠️ Manual | ❌ | ⚠️ Basic | ⚠️ Basic |
+| Commit-to-package matching | ✅ Smart | ❌ | ❌ | ❌ | ❌ |
+| Interactive TUI | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Dependency resolution | ✅ | ❌ | ❌ | ⚠️ Basic | ❌ |
+| Single binary | ✅ | ✅ | ❌ | ❌ | ❌ |
+| No runtime deps | ✅ | ✅ | ❌ Node.js | ❌ Node.js | ❌ Node.js |
 
 ---
 
-## Why belaf?
+## belaf vs git-cliff
 
-| Feature | belaf | semantic-release | changesets | release-please |
-|---------|-------|------------------|------------|----------------|
-| Multi-language | ✅ 6 languages | ❌ Node.js only | ❌ Node.js only | ⚠️ Limited |
-| Interactive TUI | ✅ | ❌ | ❌ | ❌ |
-| Dependency resolution | ✅ | ❌ | ⚠️ Basic | ❌ |
-| AI changelogs | ✅ | ❌ | ❌ | ❌ |
-| Single binary | ✅ | ❌ | ❌ | ❌ |
-| No runtime deps | ✅ | ❌ Node.js | ❌ Node.js | ❌ Node.js |
+Looking for a monorepo-friendly alternative to git-cliff? Here's what belaf does differently:
+
+| Capability | git-cliff | belaf |
+|------------|-----------|-------|
+| **Multi-package config** | ❌ One config per package | ✅ All packages in one file |
+| **Automatic commit routing** | ❌ Manual `include_paths` | ✅ Smart scope matching |
+| **Scope-to-package mapping** | ❌ | ✅ `feat(api)` → api package |
+| **Coordinated bumping** | ❌ Run per package | ✅ Analyzes entire monorepo |
+| **Dependency-aware releases** | ❌ | ✅ Correct release order |
+| **Multi-ecosystem** | ❌ | ✅ Rust, Node, Python, Go, Elixir, Swift |
+| **Changelog generation** | ✅ Tera templates | ✅ Tera templates |
+| **Interactive workflow** | ❌ CLI only | ✅ TUI wizard |
+
+### git-cliff monorepo workflow
+
+```bash
+# Run separately for each package
+git cliff -c packages/api/cliff.toml --include-path "packages/api/**"
+git cliff -c packages/sdk/cliff.toml --include-path "packages/sdk/**"
+git cliff -c packages/web/cliff.toml --include-path "packages/web/**"
+# Hope you got the dependency order right...
+```
+
+### belaf monorepo workflow
+
+```bash
+belaf prepare
+# Done. All packages analyzed, ordered, and released.
+```
 
 ---
 

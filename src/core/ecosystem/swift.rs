@@ -12,10 +12,10 @@ use std::{
 use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
-    core::release::{
+    core::{
         config::syntax::ProjectConfiguration,
         errors::Result,
-        repository::{RepoPath, RepoPathBuf},
+        git::repository::{RepoPath, RepoPathBuf},
         session::AppBuilder,
         version::Version,
     },

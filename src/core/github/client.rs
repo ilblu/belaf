@@ -6,7 +6,7 @@ use git_url_parse::types::provider::GenericProvider;
 use octocrab::Octocrab;
 use tracing::{debug, info};
 
-use crate::core::release::{env::require_var, errors::Result, session::AppSession};
+use crate::core::{env::require_var, errors::Result, session::AppSession};
 
 pub struct GitHubInformation {
     owner: String,
@@ -22,25 +22,20 @@ impl GitHubInformation {
     pub fn new_with_scopes(sess: &AppSession, required_scopes: &[&str]) -> Result<Self> {
         let is_ci = sess
             .execution_environment()
-            .map(|env| matches!(env, crate::core::release::session::ExecutionEnvironment::Ci))
+            .map(|env| matches!(env, crate::core::session::ExecutionEnvironment::Ci))
             .unwrap_or(false);
 
-        let keyring_result = crate::core::auth::token::load_token();
-        let env_result = require_var("GITHUB_TOKEN");
-
-        let token = keyring_result
+        let token = require_var("GITHUB_TOKEN")
             .inspect_err(|e| {
-                debug!("keyring token load failed: {}", e);
+                debug!("GITHUB_TOKEN env var not set: {}", e);
             })
             .ok()
             .or_else(|| {
-                env_result
-                    .as_ref()
+                crate::core::auth::token::load_token()
                     .inspect_err(|e| {
-                        debug!("GITHUB_TOKEN env var not found: {}", e);
+                        debug!("keyring token load failed: {}", e);
                     })
                     .ok()
-                    .cloned()
             })
             .ok_or_else(|| {
                 if is_ci {
@@ -57,8 +52,21 @@ impl GitHubInformation {
             })?;
 
         if !required_scopes.is_empty() {
-            crate::core::auth::github::validate_token_scopes_blocking(&token, required_scopes)
-                .context("GitHub token scope validation failed")?;
+            if let Err(e) =
+                crate::core::auth::github::validate_token_scopes_blocking(&token, required_scopes)
+            {
+                let revoke_url = crate::core::auth::github::get_revoke_url();
+                return Err(anyhow!(
+                    "GitHub token is missing required permissions.\n\n\
+                    Error: {}\n\n\
+                    To fix this:\n\
+                    1. Revoke the current authorization at:\n   {}\n\
+                    2. Run 'belaf auth login --github' again\n\
+                    3. When prompted, grant repository access",
+                    e,
+                    revoke_url
+                ));
+            }
         }
 
         let upstream_url = sess.repo.upstream_url()?;

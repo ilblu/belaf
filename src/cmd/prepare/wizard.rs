@@ -1,9 +1,13 @@
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+        MouseButton, MouseEvent, MouseEventKind,
+    },
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use owo_colors::OwoColorize;
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -13,23 +17,23 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::io;
+use std::sync::mpsc::{self, Receiver, TryRecvError};
+use std::thread;
+use std::time::Duration;
 use tracing::info;
 
-use crate::{
-    atry,
-    core::{
-        ecosystem::types::EcosystemType,
-        release::{
-            commit_analyzer::{self, BumpRecommendation},
-            graph::GraphQueryBuilder,
-            project::ProjectId,
-            session::AppSession,
-            workflow::{
-                create_release_branch, generate_changelog_body, polish_changelog_with_ai,
-                ReleasePipeline, SelectedProject,
-            },
-        },
-        ui::markdown,
+use std::path::Path;
+
+use crate::core::{
+    bump::{BumpConfig, BumpRecommendation},
+    changelog::{ChangelogConfig, Commit, GitConfig},
+    config::syntax::{BumpConfiguration, ChangelogConfiguration},
+    ecosystem::types::EcosystemType,
+    git::repository::RepoPathBuf,
+    session::AppSession,
+    ui::{components::toggle_panel::TogglePanel, markdown, utils::centered_rect},
+    workflow::{
+        generate_changelog_entry, BumpChoice, PrepareContext, ProjectCandidate, ProjectSelection,
     },
 };
 
@@ -40,70 +44,100 @@ enum WizardStep {
     Confirmation,
 }
 
-impl WizardStep {
-    fn step_number(&self, total_projects: usize) -> String {
-        match self {
-            Self::ProjectSelection => "Step 1".to_string(),
-            Self::ProjectConfig { project_index } => {
-                format!("Step {} of {}", project_index + 2, total_projects + 2)
-            }
-            Self::Confirmation => format!("Step {}", total_projects + 2),
-        }
-    }
-
-    fn title(&self, project_name: Option<&str>) -> String {
-        match self {
-            Self::ProjectSelection => "Select Projects".to_string(),
-            Self::ProjectConfig { .. } => {
-                format!("Configure: {}", project_name.unwrap_or("Unknown"))
-            }
-            Self::Confirmation => "Confirm Changes".to_string(),
-        }
-    }
-}
-
 struct ProjectItem {
-    ident: ProjectId,
-    name: String,
-    prefix: String,
+    candidate: ProjectCandidate,
     selected: bool,
-    commit_count: usize,
-    suggested_bump: BumpRecommendation,
-    chosen_bump: Option<BumpStrategy>,
-    commit_messages: Vec<String>,
-    project_type: EcosystemType,
+    chosen_bump: Option<BumpChoice>,
     cached_changelog: Option<String>,
+    existing_changelog: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BumpStrategy {
-    Auto,
-    Major,
-    Minor,
-    Patch,
-}
-
-impl BumpStrategy {
-    fn as_str(&self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Major => "major",
-            Self::Minor => "minor",
-            Self::Patch => "patch",
+impl ProjectItem {
+    fn from_candidate(candidate: ProjectCandidate, existing_changelog: String) -> Self {
+        Self {
+            candidate,
+            selected: true,
+            chosen_bump: None,
+            cached_changelog: None,
+            existing_changelog,
         }
     }
 
-    fn description(&self) -> &'static str {
-        match self {
-            Self::Auto => "Use conventional commits to determine bump type automatically",
-            Self::Major => "Breaking changes (1.0.0 → 2.0.0)",
-            Self::Minor => "New features (1.0.0 → 1.1.0)",
-            Self::Patch => "Bug fixes (1.0.0 → 1.0.1)",
-        }
+    fn name(&self) -> &str {
+        &self.candidate.name
     }
 
-    fn all() -> Vec<Self> {
-        vec![Self::Auto, Self::Major, Self::Minor, Self::Patch]
+    fn current_version(&self) -> &str {
+        &self.candidate.current_version
+    }
+
+    fn commit_count(&self) -> usize {
+        self.candidate.commit_count
+    }
+
+    fn suggested_bump(&self) -> BumpRecommendation {
+        self.candidate.suggested_bump
+    }
+
+    fn commits(&self) -> &[Commit] {
+        &self.candidate.commits
+    }
+
+    fn project_type(&self) -> EcosystemType {
+        self.candidate.ecosystem
+    }
+
+    fn effective_bump(&self) -> BumpChoice {
+        self.chosen_bump.unwrap_or(BumpChoice::Auto)
+    }
+
+    fn effective_bump_str(&self) -> &'static str {
+        self.effective_bump().resolve(self.candidate.suggested_bump)
+    }
+}
+
+fn calculate_next_version(current: &str, recommendation: BumpRecommendation) -> String {
+    match recommendation {
+        BumpRecommendation::Major => calculate_major_version(current),
+        BumpRecommendation::Minor => calculate_minor_version(current),
+        BumpRecommendation::Patch => calculate_patch_version(current),
+        BumpRecommendation::None => current.to_string(),
+    }
+}
+
+fn calculate_major_version(current: &str) -> String {
+    if let Ok(mut v) = semver::Version::parse(current) {
+        v.major += 1;
+        v.minor = 0;
+        v.patch = 0;
+        v.pre = semver::Prerelease::EMPTY;
+        v.build = semver::BuildMetadata::EMPTY;
+        v.to_string()
+    } else {
+        format!("{}+1.0.0", current)
+    }
+}
+
+fn calculate_minor_version(current: &str) -> String {
+    if let Ok(mut v) = semver::Version::parse(current) {
+        v.minor += 1;
+        v.patch = 0;
+        v.pre = semver::Prerelease::EMPTY;
+        v.build = semver::BuildMetadata::EMPTY;
+        v.to_string()
+    } else {
+        format!("{}+0.1.0", current)
+    }
+}
+
+fn calculate_patch_version(current: &str) -> String {
+    if let Ok(mut v) = semver::Version::parse(current) {
+        v.patch += 1;
+        v.pre = semver::Prerelease::EMPTY;
+        v.build = semver::BuildMetadata::EMPTY;
+        v.to_string()
+    } else {
+        format!("{}+0.0.1", current)
     }
 }
 
@@ -114,11 +148,21 @@ struct WizardState {
     bump_list_state: ListState,
     show_changelog: bool,
     show_help: bool,
-    ai_enabled: bool,
+    loading_changelog: bool,
+    loading_frame: usize,
+    loading_receiver: Option<Receiver<String>>,
+    changelog_toggle: TogglePanel,
+    changelog_config: ChangelogConfiguration,
+    bump_config: BumpConfiguration,
+    changelog_scroll_offset: u16,
 }
 
 impl WizardState {
-    fn new(projects: Vec<ProjectItem>, ai_enabled: bool) -> Self {
+    fn new(
+        projects: Vec<ProjectItem>,
+        changelog_config: ChangelogConfiguration,
+        bump_config: BumpConfiguration,
+    ) -> Self {
         let mut project_list_state = ListState::default();
         if !projects.is_empty() {
             project_list_state.select(Some(0));
@@ -134,8 +178,110 @@ impl WizardState {
             bump_list_state,
             show_changelog: false,
             show_help: false,
-            ai_enabled,
+            loading_changelog: false,
+            loading_frame: 0,
+            loading_receiver: None,
+            changelog_toggle: TogglePanel::default(),
+            changelog_config,
+            bump_config,
+            changelog_scroll_offset: 0,
         }
+    }
+
+    fn toggle_markdown_view(&mut self) {
+        self.changelog_toggle.toggle();
+    }
+
+    fn handle_mouse_click(&mut self, x: u16, y: u16) -> bool {
+        self.changelog_toggle.handle_click(x, y)
+    }
+
+    fn is_loading(&self) -> bool {
+        self.loading_changelog
+    }
+
+    fn tick_loading(&mut self) {
+        self.loading_frame = (self.loading_frame + 1) % 8;
+    }
+
+    fn loading_spinner(&self) -> &'static str {
+        const FRAMES: [&str; 8] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧"];
+        FRAMES[self.loading_frame]
+    }
+
+    fn start_background_changelog_generation(&mut self) {
+        let project = match self.get_current_project() {
+            Some(p) => p,
+            None => return,
+        };
+
+        if project.cached_changelog.is_some() {
+            self.loading_changelog = false;
+            self.show_changelog = true;
+            return;
+        }
+
+        let commits = project.commits().to_vec();
+        let current_version = project.current_version().to_string();
+        let chosen_bump = project.chosen_bump.unwrap_or(BumpChoice::Auto);
+        let suggested_bump = project.suggested_bump();
+
+        let new_version = match chosen_bump {
+            BumpChoice::Auto => calculate_next_version(&current_version, suggested_bump),
+            BumpChoice::Major => calculate_major_version(&current_version),
+            BumpChoice::Minor => calculate_minor_version(&current_version),
+            BumpChoice::Patch => calculate_patch_version(&current_version),
+        };
+
+        let (tx, rx) = mpsc::channel();
+        self.loading_receiver = Some(rx);
+
+        let git_config = GitConfig::from_user_config(&self.changelog_config);
+        let changelog_config = ChangelogConfig::from_user_config(&self.changelog_config);
+        let bump_config = BumpConfig::from_user_config(&self.bump_config);
+
+        thread::spawn(move || {
+            let changelog = generate_changelog_entry(
+                &new_version,
+                &commits,
+                &git_config,
+                &changelog_config,
+                &bump_config,
+            )
+            .unwrap_or_else(|_| "Failed to generate changelog".to_string());
+
+            let _ = tx.send(changelog);
+        });
+    }
+
+    fn check_loading_complete(&mut self) -> bool {
+        if let Some(ref receiver) = self.loading_receiver {
+            match receiver.try_recv() {
+                Ok(changelog) => {
+                    if let Some(project) = self.get_current_project_mut() {
+                        project.cached_changelog = Some(changelog);
+                    }
+                    self.loading_changelog = false;
+                    self.loading_receiver = None;
+                    self.show_changelog = true;
+                    true
+                }
+                Err(TryRecvError::Empty) => false,
+                Err(TryRecvError::Disconnected) => {
+                    self.loading_changelog = false;
+                    self.loading_receiver = None;
+                    self.show_changelog = true;
+                    true
+                }
+            }
+        } else {
+            false
+        }
+    }
+
+    fn cancel_loading(&mut self) {
+        self.loading_changelog = false;
+        self.loading_receiver = None;
     }
 
     fn get_current_project(&self) -> Option<&ProjectItem> {
@@ -168,40 +314,11 @@ impl WizardState {
         self.show_help = !self.show_help;
     }
 
-    fn ensure_current_changelog_cached(&mut self) {
-        let ai_enabled = self.ai_enabled;
-        let changelog_data = {
-            let project = match self.get_current_project() {
-                Some(p) => p,
-                None => return,
-            };
-
-            if project.cached_changelog.is_some() {
-                return;
-            }
-
-            let commit_messages = project.commit_messages.clone();
-            let draft = generate_changelog_body(&commit_messages);
-
-            if ai_enabled {
-                match polish_changelog_with_ai(&draft, &commit_messages) {
-                    Ok(polished) => polished,
-                    Err(e) => {
-                        tracing::warn!("AI changelog polishing failed, using draft: {:#}", e);
-                        draft
-                    }
-                }
-            } else {
-                draft
-            }
-        };
-
-        if let Some(project) = self.get_current_project_mut() {
-            project.cached_changelog = Some(changelog_data);
-        }
-    }
-
     fn next_step(&mut self) -> bool {
+        if self.loading_changelog {
+            return false;
+        }
+
         match &self.step {
             WizardStep::ProjectSelection => {
                 if self.selected_count() == 0 {
@@ -216,11 +333,11 @@ impl WizardState {
                 if !self.show_changelog {
                     if let Some(selected) = self.bump_list_state.selected() {
                         if let Some(project) = self.get_current_project_mut() {
-                            project.chosen_bump = Some(BumpStrategy::all()[selected]);
+                            project.chosen_bump = Some(BumpChoice::all()[selected]);
                         }
                     }
-                    self.show_changelog = true;
-                    self.ensure_current_changelog_cached();
+                    self.loading_changelog = true;
+                    self.start_background_changelog_generation();
                     true
                 } else {
                     if *project_index + 1 < self.selected_count() {
@@ -229,6 +346,7 @@ impl WizardState {
                         };
                         self.show_changelog = false;
                         self.bump_list_state.select(Some(0));
+                        self.changelog_scroll_offset = 0;
                     } else {
                         self.step = WizardStep::Confirmation;
                     }
@@ -314,20 +432,42 @@ impl WizardState {
         match key {
             KeyCode::Tab => {
                 self.show_changelog = !self.show_changelog;
-                if !self.show_changelog {
+                if self.show_changelog {
+                    self.changelog_scroll_offset = 0;
                     if let Some(project) = self.get_current_project() {
-                        if let Some(chosen) = project.chosen_bump {
-                            let idx = BumpStrategy::all()
-                                .iter()
-                                .position(|s| *s == chosen)
-                                .unwrap_or(0);
-                            self.bump_list_state.select(Some(idx));
+                        if project.cached_changelog.is_none() {
+                            self.loading_changelog = true;
+                            self.start_background_changelog_generation();
                         }
+                    }
+                } else if let Some(project) = self.get_current_project() {
+                    if let Some(chosen) = project.chosen_bump {
+                        let idx = BumpChoice::all()
+                            .iter()
+                            .position(|s| *s == chosen)
+                            .unwrap_or(0);
+                        self.bump_list_state.select(Some(idx));
                     }
                 }
                 false
             }
-            KeyCode::Up if !self.show_changelog => {
+            KeyCode::Up if self.show_changelog => {
+                self.changelog_scroll_offset = self.changelog_scroll_offset.saturating_sub(1);
+                false
+            }
+            KeyCode::Down if self.show_changelog => {
+                self.changelog_scroll_offset = self.changelog_scroll_offset.saturating_add(1);
+                false
+            }
+            KeyCode::PageUp if self.show_changelog => {
+                self.changelog_scroll_offset = self.changelog_scroll_offset.saturating_sub(10);
+                false
+            }
+            KeyCode::PageDown if self.show_changelog => {
+                self.changelog_scroll_offset = self.changelog_scroll_offset.saturating_add(10);
+                false
+            }
+            KeyCode::Up => {
                 if let Some(selected) = self.bump_list_state.selected() {
                     if selected > 0 {
                         self.bump_list_state.select(Some(selected - 1));
@@ -335,9 +475,9 @@ impl WizardState {
                 }
                 false
             }
-            KeyCode::Down if !self.show_changelog => {
+            KeyCode::Down => {
                 if let Some(selected) = self.bump_list_state.selected() {
-                    let strategies = BumpStrategy::all();
+                    let strategies = BumpChoice::all();
                     if selected < strategies.len() - 1 {
                         self.bump_list_state.select(Some(selected + 1));
                     }
@@ -359,189 +499,140 @@ impl WizardState {
     }
 }
 
-pub fn run() -> Result<i32> {
+pub fn run_with_overrides(project_overrides: Option<Vec<String>>) -> Result<i32> {
     info!("starting interactive TUI wizard for release preparation");
 
     let mut sess =
         AppSession::initialize_default().context("could not initialize app and project graph")?;
 
-    if let Some(dirty) = sess
-        .repo
-        .check_if_dirty(&[])
-        .context("failed to check repository for modified files")?
-    {
-        info!(
-            "preparing release with uncommitted changes in the repository (e.g.: `{}`)",
-            dirty.escaped()
-        );
-    }
+    let mut ctx = PrepareContext::initialize(&mut sess, true)?;
+    ctx.discover_projects()?;
 
-    let (base_branch, release_branch) = create_release_branch(&mut sess)?;
-
-    let q = GraphQueryBuilder::default();
-    let idents = sess.graph().query(q).context("could not select projects")?;
-
-    if idents.is_empty() {
-        info!("no projects found in repository");
+    if !ctx.has_candidates() {
+        ctx.cleanup();
+        print_no_changes_message();
         return Ok(0);
     }
 
-    let histories = sess
-        .analyze_histories()
-        .context("failed to analyze project histories")?;
+    let projects: Vec<ProjectItem> = ctx
+        .candidates
+        .iter()
+        .map(|candidate| {
+            let prefix = &candidate.prefix;
+            let changelog_rel_path = if prefix.is_empty() {
+                "CHANGELOG.md".to_string()
+            } else {
+                format!("{}/CHANGELOG.md", prefix)
+            };
+            let changelog_repo_path = RepoPathBuf::new(changelog_rel_path.as_bytes());
+            let changelog_path = ctx.resolve_workdir(changelog_repo_path.as_ref());
+            let existing_changelog = parse_existing_changelog(&changelog_path).unwrap_or_default();
+            ProjectItem::from_candidate(candidate.clone(), existing_changelog)
+        })
+        .collect();
 
-    let mut projects = Vec::new();
-    for ident in &idents {
-        let proj = sess.graph().lookup(*ident);
-        let history = histories.lookup(*ident);
-        let n_commits = history.n_commits();
-
-        if n_commits == 0 {
-            continue;
-        }
-
-        let commit_messages: Vec<String> = history
-            .commits()
-            .into_iter()
-            .filter_map(|cid| sess.repo.get_commit_summary(*cid).ok())
-            .collect();
-
-        let analysis = commit_analyzer::analyze_commit_messages(&commit_messages)
-            .context("failed to analyze commit messages")?;
-
-        let qnames = proj.qualified_names();
-        let project_type = qnames
-            .get(1)
-            .and_then(|s| EcosystemType::from_qname(s))
-            .unwrap_or(EcosystemType::Cargo);
-
-        projects.push(ProjectItem {
-            ident: *ident,
-            name: proj.user_facing_name.clone(),
-            prefix: proj.prefix().escaped(),
-            selected: true,
-            commit_count: n_commits,
-            suggested_bump: analysis.recommendation,
-            chosen_bump: None,
-            commit_messages,
-            project_type,
-            cached_changelog: None,
-        });
+    let mut projects = projects;
+    if let Some(ref overrides) = project_overrides {
+        apply_project_overrides_to_items(&mut projects, overrides)?;
     }
 
-    if projects.is_empty() {
-        info!("no projects with changes found");
-        return Ok(0);
-    }
+    let wizard_result = run_wizard_ui(
+        projects,
+        ctx.changelog_config.clone(),
+        ctx.bump_config.clone(),
+    )?;
 
-    let ai_enabled = sess.changelog_config.ai_enabled;
-    let wizard_result = run_wizard_ui(projects, ai_enabled)?;
-
-    let selected_projects = match wizard_result {
-        Some(projects) => projects,
+    let selected_items = match wizard_result {
+        Some(items) => items,
         None => {
             info!("release preparation cancelled by user");
+            ctx.cleanup();
             return Ok(1);
         }
     };
 
-    info!(
-        "applying version bumps to {} project(s)",
-        selected_projects.len()
-    );
-
-    let mut prepared: Vec<SelectedProject> = Vec::new();
-
-    for project_item in &selected_projects {
-        let proj = sess.graph().lookup(project_item.ident);
-        let history = histories.lookup(project_item.ident);
-
-        let bump_strategy = project_item.chosen_bump.unwrap_or(BumpStrategy::Auto);
-
-        let bump_scheme_text = match bump_strategy {
-            BumpStrategy::Auto => project_item.suggested_bump.as_str(),
-            BumpStrategy::Major => "major",
-            BumpStrategy::Minor => "minor",
-            BumpStrategy::Patch => "patch",
-        };
-
-        if bump_scheme_text == "no bump" {
-            info!("{}: no version bump needed", proj.user_facing_name);
-            continue;
-        }
-
-        let bump_scheme = proj
-            .version
-            .parse_bump_scheme(bump_scheme_text)
-            .with_context(|| {
-                format!(
-                    "invalid bump scheme \"{}\" for project {}",
-                    bump_scheme_text, proj.user_facing_name
-                )
-            })?;
-
-        let old_version = history
-            .release_version()
-            .map(|v| v.to_string())
-            .unwrap_or_else(|| proj.version.to_string());
-
-        let proj_mut = sess.graph_mut().lookup_mut(project_item.ident);
-
-        atry!(
-            bump_scheme.apply(&mut proj_mut.version);
-            ["failed to apply version bump to {}", proj_mut.user_facing_name]
-        );
-
-        let new_version = proj_mut.version.to_string();
-
-        info!(
-            "{}: {} -> {} ({} commit{})",
-            proj_mut.user_facing_name,
-            old_version,
-            new_version,
-            project_item.commit_count,
-            if project_item.commit_count == 1 {
-                ""
-            } else {
-                "s"
-            }
-        );
-
-        prepared.push(SelectedProject {
-            name: proj_mut.user_facing_name.clone(),
-            prefix: project_item.prefix.clone(),
-            old_version,
-            new_version,
-            bump_type: bump_scheme_text.to_string(),
-            commit_messages: project_item.commit_messages.clone(),
-            ecosystem: project_item.project_type,
-            cached_changelog: project_item.cached_changelog.clone(),
-        });
-    }
-
-    if prepared.is_empty() {
-        info!("no projects needed version bumps");
+    if selected_items.is_empty() {
+        ctx.cleanup();
+        println!();
+        println!("{} No projects selected.", "ℹ".cyan().bold());
+        println!();
         return Ok(0);
     }
 
-    let pipeline = ReleasePipeline::new(&mut sess, base_branch, release_branch)?;
-    pipeline.execute(prepared)?;
+    let selections: Vec<ProjectSelection> = selected_items
+        .into_iter()
+        .map(|item| ProjectSelection {
+            candidate: item.candidate,
+            bump_choice: item.chosen_bump.unwrap_or(BumpChoice::Auto),
+            cached_changelog: item.cached_changelog,
+        })
+        .collect();
+
+    println!();
+    let mut spinner = spinoff::Spinner::new(
+        spinoff::spinners::Dots,
+        "Creating release...",
+        spinoff::Color::Yellow,
+    );
+
+    let pr_url = match ctx.finalize(selections) {
+        Ok(url) => {
+            spinner.success("Release preparation complete!");
+            url
+        }
+        Err(e) => {
+            spinner.fail("Release preparation failed!");
+            return Err(e);
+        }
+    };
+
+    println!();
+    println!();
+    println!("  {} Pull request created:", "→".cyan());
+    println!("    {}", pr_url.cyan().underline());
+    println!();
 
     Ok(0)
 }
 
-fn run_wizard_ui(projects: Vec<ProjectItem>, ai_enabled: bool) -> Result<Option<Vec<ProjectItem>>> {
+fn print_no_changes_message() {
+    println!();
+    println!(
+        "{} No projects with unreleased changes found.",
+        "ℹ".cyan().bold()
+    );
+    println!();
+    println!(
+        "  {} All projects are up-to-date with their latest release tags.",
+        "→".dimmed()
+    );
+    println!(
+        "  {} Make commits with conventional format (feat:, fix:, etc.) to trigger a release.",
+        "→".dimmed()
+    );
+    println!();
+}
+
+fn run_wizard_ui(
+    projects: Vec<ProjectItem>,
+    changelog_config: ChangelogConfiguration,
+    bump_config: BumpConfiguration,
+) -> Result<Option<Vec<ProjectItem>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut state = WizardState::new(projects, ai_enabled);
+    let mut state = WizardState::new(projects, changelog_config, bump_config);
     let result = run_app(&mut terminal, &mut state);
 
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     if result? {
@@ -559,108 +650,97 @@ fn run_app(
     loop {
         terminal.draw(|f| ui(f, state))?;
 
-        if let Event::Key(KeyEvent {
-            code,
-            kind: KeyEventKind::Press,
-            ..
-        }) = event::read()?
-        {
-            if code == KeyCode::Char('q') || code == KeyCode::Char('c') {
-                return Ok(false);
-            }
+        if state.is_loading() {
+            state.check_loading_complete();
 
-            if code == KeyCode::Char('?') || code == KeyCode::Char('h') {
-                state.toggle_help();
-                continue;
-            }
-
-            if state.show_help {
-                state.toggle_help();
-                continue;
-            }
-
-            let result = match &state.step {
-                WizardStep::ProjectSelection => state.handle_key_project_selection(code),
-                WizardStep::ProjectConfig { .. } => state.handle_key_project_config(code),
-                WizardStep::Confirmation => {
-                    let (step_changed, confirmed) = state.handle_key_confirmation(code);
-                    if confirmed {
-                        return Ok(true);
+            if event::poll(Duration::from_millis(100))? {
+                if let Event::Key(KeyEvent {
+                    code,
+                    kind: KeyEventKind::Press,
+                    ..
+                }) = event::read()?
+                {
+                    if code == KeyCode::Esc {
+                        state.cancel_loading();
                     }
-                    step_changed
                 }
-            };
-
-            if result {
-                continue;
             }
+
+            state.tick_loading();
+            continue;
+        }
+
+        match event::read()? {
+            Event::Key(KeyEvent {
+                code,
+                kind: KeyEventKind::Press,
+                ..
+            }) => {
+                if code == KeyCode::Char('q') || code == KeyCode::Char('c') {
+                    return Ok(false);
+                }
+
+                if code == KeyCode::Char('?') || code == KeyCode::Char('h') {
+                    state.toggle_help();
+                    continue;
+                }
+
+                if state.show_help {
+                    state.toggle_help();
+                    continue;
+                }
+
+                if code == KeyCode::Char('m') && state.show_changelog {
+                    state.toggle_markdown_view();
+                    continue;
+                }
+
+                let result = match &state.step {
+                    WizardStep::ProjectSelection => state.handle_key_project_selection(code),
+                    WizardStep::ProjectConfig { .. } => state.handle_key_project_config(code),
+                    WizardStep::Confirmation => {
+                        let (step_changed, confirmed) = state.handle_key_confirmation(code);
+                        if confirmed {
+                            return Ok(true);
+                        }
+                        step_changed
+                    }
+                };
+
+                if result {
+                    continue;
+                }
+            }
+            Event::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                ..
+            }) => {
+                if state.show_changelog && state.handle_mouse_click(column, row) {
+                    continue;
+                }
+            }
+            _ => {}
         }
     }
 }
 
 fn ui(f: &mut Frame, state: &mut WizardState) {
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(3),
-        ])
-        .split(f.area());
-
-    render_header(f, chunks[0], state);
-    render_step(f, chunks[1], state);
-    render_footer(f, chunks[2], state);
+    render_step(f, f.area(), state);
 
     if state.show_help {
         render_help_popup(f, state);
     }
 }
 
-fn render_header(f: &mut Frame, area: Rect, state: &WizardState) {
-    let project_name = state.get_current_project().map(|p| p.name.as_str());
-    let step_number = state.step.step_number(state.selected_count());
-    let title = format!(
-        "Release Preparation Wizard - {} - {}",
-        step_number,
-        state.step.title(project_name)
-    );
-    let header = Paragraph::new(title)
-        .style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        )
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(header, area);
-}
-
-fn render_footer(f: &mut Frame, area: Rect, state: &WizardState) {
-    let help_text = match &state.step {
-        WizardStep::ProjectSelection => {
-            "↑/↓: Navigate | Space: Toggle | A: Toggle All | Enter: Next | Q: Quit | ?: Help"
-        }
-        WizardStep::ProjectConfig { .. } => {
-            if state.show_changelog {
-                "Tab: Back to Bump | Enter: Next Project | Esc: Back | Q: Quit | ?: Help"
-            } else {
-                "↑/↓: Navigate | Tab: Preview Changelog | Enter: Next | Esc: Back | Q: Quit | ?: Help"
-            }
-        }
-        WizardStep::Confirmation => "Enter: Confirm | Esc: Back | Q: Quit | ?: Help",
-    };
-
-    let footer = Paragraph::new(help_text)
-        .style(Style::default().fg(Color::Gray))
-        .block(Block::default().borders(Borders::ALL));
-    f.render_widget(footer, area);
-}
-
 fn render_step(f: &mut Frame, area: Rect, state: &mut WizardState) {
-    match &state.step {
+    let step = state.step.clone();
+    let show_changelog = state.show_changelog;
+    match step {
         WizardStep::ProjectSelection => render_project_selection(f, area, state),
         WizardStep::ProjectConfig { .. } => {
-            if state.show_changelog {
+            if show_changelog {
                 render_project_changelog(f, area, state);
             } else {
                 render_project_bump_strategy(f, area, state);
@@ -671,65 +751,109 @@ fn render_step(f: &mut Frame, area: Rect, state: &mut WizardState) {
 }
 
 fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) {
-    let items: Vec<ListItem> = state
-        .projects
-        .iter()
-        .map(|project| {
-            let checkbox = if project.selected { "[✓]" } else { "[ ]" };
-            let suggestion = match project.suggested_bump {
-                BumpRecommendation::Major => " (suggests: MAJOR)",
-                BumpRecommendation::Minor => " (suggests: MINOR)",
-                BumpRecommendation::Patch => " (suggests: PATCH)",
-                BumpRecommendation::None => "",
-            };
+    let selected_count = state.projects.iter().filter(|p| p.selected).count();
+    let total_count = state.projects.len();
 
-            let content = format!(
-                "{} {} ({} commits){}",
-                checkbox, project.name, project.commit_count, suggestion
-            );
-
-            ListItem::new(content).style(if project.selected {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default()
-            })
-        })
-        .collect();
-
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Select projects to prepare for release"),
-        )
-        .highlight_style(
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            " Step 1: Project Selection ",
             Style::default()
-                .bg(Color::DarkGray)
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("► ");
+        ));
 
-    f.render_stateful_widget(list, area, &mut state.project_list_state);
-}
-
-fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardState) {
-    let strategies = BumpStrategy::all();
-
-    let (project_name, suggested_bump, commit_count) = match state.get_current_project() {
-        Some(p) => (p.name.clone(), p.suggested_bump, p.commit_count),
-        None => return,
-    };
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(60), Constraint::Percentage(40)])
-        .split(area);
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
 
-    let items: Vec<ListItem> = strategies
+    let header_lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("🚀 ", Style::default()),
+            Span::styled(
+                "Select projects to prepare for release",
+                Style::default().fg(Color::White),
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled("   Selected: ", Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("{}", selected_count),
+                Style::default()
+                    .fg(if selected_count > 0 {
+                        Color::Green
+                    } else {
+                        Color::Yellow
+                    })
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" / {}", total_count),
+                Style::default().fg(Color::Gray),
+            ),
+        ]),
+    ];
+    let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(header, chunks[0]);
+
+    let items: Vec<ListItem> = state
+        .projects
         .iter()
-        .map(|strategy| {
-            let content = format!("{} - {}", strategy.as_str(), strategy.description());
-            ListItem::new(content)
+        .enumerate()
+        .map(|(idx, project)| {
+            let is_current = state.project_list_state.selected() == Some(idx);
+            let checkbox = if project.selected { "✅" } else { "⬜" };
+            let (suggestion_text, suggestion_color) = match project.suggested_bump() {
+                BumpRecommendation::Major => ("MAJOR", Color::Red),
+                BumpRecommendation::Minor => ("MINOR", Color::Yellow),
+                BumpRecommendation::Patch => ("PATCH", Color::Green),
+                BumpRecommendation::None => ("", Color::Gray),
+            };
+
+            let lines = vec![Line::from(vec![
+                Span::styled(format!(" {} ", checkbox), Style::default()),
+                Span::styled(
+                    project.name(),
+                    if is_current {
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD)
+                    } else if project.selected {
+                        Style::default().fg(Color::Green)
+                    } else {
+                        Style::default().fg(Color::White)
+                    },
+                ),
+                Span::styled(
+                    format!(" ({} commits)", project.commit_count()),
+                    Style::default().fg(Color::Gray),
+                ),
+                if !suggestion_text.is_empty() {
+                    Span::styled(
+                        format!("  → {}", suggestion_text),
+                        Style::default().fg(suggestion_color),
+                    )
+                } else {
+                    Span::raw("")
+                },
+            ])];
+
+            let style = if is_current {
+                Style::default().bg(Color::Rgb(40, 40, 50))
+            } else {
+                Style::default()
+            };
+            ListItem::new(lines).style(style)
         })
         .collect();
 
@@ -737,173 +861,754 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
         .block(
             Block::default()
                 .borders(Borders::ALL)
-                .title(format!("Choose version bump for {}", project_name)),
+                .border_style(Style::default().fg(Color::Gray))
+                .title(Span::styled(
+                    " Projects ",
+                    Style::default().fg(Color::White),
+                )),
         )
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
-        .highlight_symbol("► ");
+        .highlight_symbol("");
 
-    f.render_stateful_widget(list, chunks[0], &mut state.bump_list_state);
+    f.render_stateful_widget(list, chunks[1], &mut state.project_list_state);
 
-    let suggestion_text = match suggested_bump {
-        BumpRecommendation::Major => "MAJOR (breaking changes)",
-        BumpRecommendation::Minor => "MINOR (new features)",
-        BumpRecommendation::Patch => "PATCH (bug fixes)",
-        BumpRecommendation::None => "NO BUMP (no changes)",
-    };
-
-    let suggestions = Paragraph::new(format!(
-        "Suggested bump based on conventional commits:\n\n  {}\n\nProject has {} commit{}.\n\nPress Tab to preview the changelog.",
-        suggestion_text,
-        commit_count,
-        if commit_count == 1 { "" } else { "s" }
-    ))
-    .style(Style::default().fg(Color::Yellow))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .title("Analysis"),
-    )
-    .wrap(Wrap { trim: true });
-
-    f.render_widget(suggestions, chunks[1]);
+    let hints = Line::from(vec![
+        Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+        Span::styled(" navigate  ", Style::default().fg(Color::Gray)),
+        Span::styled("Space", Style::default().fg(Color::Cyan)),
+        Span::styled(" toggle  ", Style::default().fg(Color::Gray)),
+        Span::styled("a", Style::default().fg(Color::Green)),
+        Span::styled(" all  ", Style::default().fg(Color::Gray)),
+        Span::styled("Enter", Style::default().fg(Color::Green)),
+        Span::styled(" continue  ", Style::default().fg(Color::Gray)),
+        Span::styled("?", Style::default().fg(Color::Yellow)),
+        Span::styled(" help  ", Style::default().fg(Color::Gray)),
+        Span::styled("q", Style::default().fg(Color::Red)),
+        Span::styled(" quit", Style::default().fg(Color::Gray)),
+    ]);
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(hints_para, chunks[2]);
 }
 
-fn render_project_changelog(f: &mut Frame, area: Rect, state: &WizardState) {
+fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardState) {
+    let strategies = BumpChoice::all();
+
+    let project = match state.get_current_project() {
+        Some(p) => p,
+        None => return,
+    };
+
+    let project_name = project.name().to_string();
+    let current_version = project.current_version().to_string();
+    let suggested_bump = project.suggested_bump();
+    let commits = project.commits().to_vec();
+
+    let selected_index = state.bump_list_state.selected().unwrap_or(0);
+    let selected_strategy = strategies
+        .get(selected_index)
+        .copied()
+        .unwrap_or(BumpChoice::Auto);
+
+    let current_project_idx = match &state.step {
+        WizardStep::ProjectConfig { project_index } => *project_index + 1,
+        _ => 1,
+    };
+    let total_projects = state.selected_count();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            format!(
+                " Step 2: Configure Release ({}/{}) ",
+                current_project_idx, total_projects
+            ),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
+    let outer_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
+
+    let header_lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("📦 ", Style::default()),
+            Span::styled(
+                project_name.clone(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  v{}", current_version),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                format!("  ({} commits)", commits.len()),
+                Style::default().fg(Color::Gray),
+            ),
+        ]),
+    ];
+    let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(header, outer_chunks[0]);
+
+    let main_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
+        .split(outer_chunks[1]);
+
+    let items: Vec<ListItem> = strategies
+        .iter()
+        .enumerate()
+        .map(|(idx, strategy)| {
+            let is_selected = idx == selected_index;
+            let next_ver = match strategy {
+                BumpChoice::Auto => calculate_next_version(&current_version, suggested_bump),
+                BumpChoice::Major => calculate_major_version(&current_version),
+                BumpChoice::Minor => calculate_minor_version(&current_version),
+                BumpChoice::Patch => calculate_patch_version(&current_version),
+            };
+            let (icon, color) = match strategy {
+                BumpChoice::Auto => ("🔄", Color::Cyan),
+                BumpChoice::Major => ("🔴", Color::Red),
+                BumpChoice::Minor => ("🟡", Color::Yellow),
+                BumpChoice::Patch => ("🟢", Color::Green),
+            };
+            let lines = vec![Line::from(vec![
+                Span::styled(format!(" {} ", icon), Style::default()),
+                Span::styled(
+                    strategy.as_str(),
+                    if is_selected {
+                        Style::default().fg(color).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default().fg(Color::White)
+                    },
+                ),
+                Span::styled(
+                    format!("  →  {}", next_ver),
+                    Style::default().fg(Color::Gray),
+                ),
+            ])];
+            let style = if is_selected {
+                Style::default().bg(Color::Rgb(40, 40, 50))
+            } else {
+                Style::default()
+            };
+            ListItem::new(lines).style(style)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Gray))
+                .title(Span::styled(
+                    " Version Bump ",
+                    Style::default().fg(Color::White),
+                )),
+        )
+        .highlight_symbol("");
+
+    f.render_stateful_widget(list, main_chunks[0], &mut state.bump_list_state);
+
+    if state.is_loading() {
+        let loading_content = build_loading_panel(state, &commits);
+        let loading_panel = Paragraph::new(loading_content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow))
+                    .title(Span::styled(
+                        " 🤖 Generating Changelog... ",
+                        Style::default().fg(Color::Yellow),
+                    )),
+            )
+            .wrap(Wrap { trim: true });
+        f.render_widget(loading_panel, main_chunks[1]);
+    } else {
+        let detail_content = build_detail_panel(
+            &selected_strategy,
+            &current_version,
+            suggested_bump,
+            &commits,
+        );
+
+        let detail_panel = Paragraph::new(detail_content)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Gray))
+                    .title(Span::styled(
+                        format!(" {} Details ", selected_strategy.as_str()),
+                        Style::default().fg(Color::White),
+                    )),
+            )
+            .wrap(Wrap { trim: true });
+
+        f.render_widget(detail_panel, main_chunks[1]);
+    }
+
+    let hints = if state.is_loading() {
+        Line::from(vec![
+            Span::styled("⏳ ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                "Generating changelog...  ",
+                Style::default().fg(Color::Yellow),
+            ),
+            Span::styled("Esc", Style::default().fg(Color::Red)),
+            Span::styled(" cancel", Style::default().fg(Color::Gray)),
+        ])
+    } else {
+        Line::from(vec![
+            Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+            Span::styled(" select  ", Style::default().fg(Color::Gray)),
+            Span::styled("Tab", Style::default().fg(Color::Cyan)),
+            Span::styled(" preview changelog  ", Style::default().fg(Color::Gray)),
+            Span::styled("Enter", Style::default().fg(Color::Green)),
+            Span::styled(" next  ", Style::default().fg(Color::Gray)),
+            Span::styled("Esc", Style::default().fg(Color::Yellow)),
+            Span::styled(" back  ", Style::default().fg(Color::Gray)),
+            Span::styled("q", Style::default().fg(Color::Red)),
+            Span::styled(" quit", Style::default().fg(Color::Gray)),
+        ])
+    };
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(hints_para, outer_chunks[2]);
+}
+
+fn build_loading_panel(state: &WizardState, commits: &[Commit]) -> Text<'static> {
+    let spinner = state.loading_spinner();
+    let commit_count = commits.len();
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("{} ", spinner),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            "Analyzing commits with Claude AI",
+            Style::default().fg(Color::Cyan),
+        ),
+    ]));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!(
+            "   Processing {} commit{}...",
+            commit_count,
+            if commit_count == 1 { "" } else { "s" }
+        ),
+        Style::default().fg(Color::Gray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "   This may take a few seconds.",
+        Style::default().fg(Color::Gray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "─".repeat(40),
+        Style::default().fg(Color::Gray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "   Press Esc to cancel",
+        Style::default().fg(Color::Yellow),
+    )));
+
+    Text::from(lines)
+}
+
+fn build_detail_panel(
+    strategy: &BumpChoice,
+    current_version: &str,
+    suggested_bump: BumpRecommendation,
+    commits: &[Commit],
+) -> Text<'static> {
+    let mut lines: Vec<Line> = Vec::new();
+
+    let next_version = match strategy {
+        BumpChoice::Auto => calculate_next_version(current_version, suggested_bump),
+        BumpChoice::Major => calculate_major_version(current_version),
+        BumpChoice::Minor => calculate_minor_version(current_version),
+        BumpChoice::Patch => calculate_patch_version(current_version),
+    };
+
+    lines.push(Line::from(vec![
+        Span::styled("Version: ", Style::default().fg(Color::Gray)),
+        Span::styled(
+            current_version.to_string(),
+            Style::default().fg(Color::Yellow),
+        ),
+        Span::styled(" → ", Style::default().fg(Color::Gray)),
+        Span::styled(
+            next_version,
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ),
+    ]));
+    lines.push(Line::from(""));
+
+    match strategy {
+        BumpChoice::Auto => {
+            let bump_name = match suggested_bump {
+                BumpRecommendation::Major => "MAJOR (breaking changes)",
+                BumpRecommendation::Minor => "MINOR (new features)",
+                BumpRecommendation::Patch => "PATCH (bug fixes)",
+                BumpRecommendation::None => "NO CHANGES",
+            };
+            lines.push(Line::from(vec![
+                Span::styled("Detected: ", Style::default().fg(Color::Gray)),
+                Span::styled(bump_name.to_string(), Style::default().fg(Color::Cyan)),
+            ]));
+        }
+        BumpChoice::Major => {
+            lines.push(Line::from(Span::styled(
+                "⚠ Breaking Change Release",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  Consider updating migration guides",
+                Style::default().fg(Color::Gray),
+            )));
+        }
+        BumpChoice::Minor => {
+            lines.push(Line::from(Span::styled(
+                "✓ Feature Release",
+                Style::default().fg(Color::Green),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  Backwards compatible additions",
+                Style::default().fg(Color::Gray),
+            )));
+        }
+        BumpChoice::Patch => {
+            lines.push(Line::from(Span::styled(
+                "✓ Patch Release",
+                Style::default().fg(Color::Blue),
+            )));
+            lines.push(Line::from(Span::styled(
+                "  Bug fixes only",
+                Style::default().fg(Color::Gray),
+            )));
+        }
+    }
+
+    lines.push(Line::from(""));
+
+    let (feat_count, fix_count, breaking_count, other_count) = count_commit_types(commits);
+
+    lines.push(Line::from(Span::styled(
+        "Commit Analysis:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+
+    if breaking_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  breaking:  ", Style::default().fg(Color::Red)),
+            Span::styled(
+                format!("{}", breaking_count),
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+    if feat_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  feat:      ", Style::default().fg(Color::Green)),
+            Span::styled(format!("{}", feat_count), Style::default().fg(Color::Green)),
+        ]));
+    }
+    if fix_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  fix:       ", Style::default().fg(Color::Yellow)),
+            Span::styled(format!("{}", fix_count), Style::default().fg(Color::Yellow)),
+        ]));
+    }
+    if other_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  other:     ", Style::default().fg(Color::Gray)),
+            Span::styled(format!("{}", other_count), Style::default().fg(Color::Gray)),
+        ]));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Commits:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
+
+    for (i, commit) in commits.iter().take(8).enumerate() {
+        let msg = &commit.message;
+        let truncated = if msg.len() > 50 {
+            format!("{}...", &msg[..47])
+        } else {
+            msg.clone()
+        };
+
+        let color = if msg.starts_with("feat") {
+            Color::Green
+        } else if msg.starts_with("fix") {
+            Color::Yellow
+        } else if msg.contains("BREAKING") || msg.contains("!:") {
+            Color::Red
+        } else {
+            Color::Gray
+        };
+
+        lines.push(Line::from(Span::styled(
+            format!("  {} {}", if i < 9 { "•" } else { " " }, truncated),
+            Style::default().fg(color),
+        )));
+    }
+
+    if commits.len() > 8 {
+        lines.push(Line::from(Span::styled(
+            format!("  ... and {} more", commits.len() - 8),
+            Style::default().fg(Color::Gray),
+        )));
+    }
+
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Press Tab to preview full changelog",
+        Style::default().fg(Color::Gray),
+    )));
+
+    Text::from(lines)
+}
+
+fn count_commit_types(commits: &[Commit]) -> (usize, usize, usize, usize) {
+    let mut feat = 0;
+    let mut fix = 0;
+    let mut breaking = 0;
+    let mut other = 0;
+
+    for commit in commits {
+        let msg = &commit.message;
+        let lower = msg.to_lowercase();
+        if msg.contains("BREAKING") || msg.contains("!:") {
+            breaking += 1;
+        } else if lower.starts_with("feat") {
+            feat += 1;
+        } else if lower.starts_with("fix") {
+            fix += 1;
+        } else {
+            other += 1;
+        }
+    }
+
+    (feat, fix, breaking, other)
+}
+
+fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) {
     let current_project = match state.get_current_project() {
         Some(p) => p,
         None => return,
     };
 
-    let chosen_bump = current_project.chosen_bump.unwrap_or(BumpStrategy::Auto);
-    let bump_text = match chosen_bump {
-        BumpStrategy::Auto => current_project.suggested_bump.as_str(),
-        BumpStrategy::Major => "MAJOR",
-        BumpStrategy::Minor => "MINOR",
-        BumpStrategy::Patch => "PATCH",
+    let chosen_bump = current_project.chosen_bump.unwrap_or(BumpChoice::Auto);
+    let current_version = current_project.current_version();
+    let suggested_bump = current_project.suggested_bump();
+    let new_version = match chosen_bump {
+        BumpChoice::Auto => calculate_next_version(current_version, suggested_bump),
+        BumpChoice::Major => calculate_major_version(current_version),
+        BumpChoice::Minor => calculate_minor_version(current_version),
+        BumpChoice::Patch => calculate_patch_version(current_version),
     };
 
-    let mut changelog_content = format!(
-        "# Changelog Preview for {}\n\n\
-        **Selected bump:** `{}`\n\
-        **Commits analyzed:** {}\n\n",
-        current_project.name, bump_text, current_project.commit_count
-    );
-
-    let cached_body = current_project
+    let new_entry = current_project
         .cached_changelog
         .as_deref()
         .unwrap_or("Loading changelog...");
 
-    changelog_content.push_str(cached_body);
+    let mut changelog_content = String::from(new_entry);
 
-    changelog_content.push_str(
-        "\n\n---\n\n\
-        Press Tab to go back to bump selection.\n\
-        Press Enter to continue to the next project.",
+    if !current_project.existing_changelog.is_empty() {
+        changelog_content.push_str("\n\n");
+        changelog_content.push_str(&current_project.existing_changelog);
+    }
+
+    let current_project_idx = match &state.step {
+        WizardStep::ProjectConfig { project_index } => *project_index + 1,
+        _ => 1,
+    };
+    let total_projects = state.selected_count();
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            format!(
+                " Step 2: Changelog Preview ({}/{}) ",
+                current_project_idx, total_projects
+            ),
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        ));
+
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
+
+    let header_lines = vec![
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("📝 ", Style::default()),
+            Span::styled(
+                current_project.name(),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {} → {}", current_version, new_version),
+                Style::default().fg(Color::Green),
+            ),
+        ]),
+    ];
+    let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(header, chunks[0]);
+
+    let title = format!(
+        "{} ({} → {})",
+        current_project.name(),
+        current_version,
+        new_version
     );
+    state.changelog_toggle.render(f, chunks[1], &title);
 
-    let markdown_text = markdown::render_markdown(&changelog_content);
+    let scroll_offset = state.changelog_scroll_offset;
+    if state.changelog_toggle.is_right() {
+        let raw_text = Text::from(changelog_content.clone());
+        let paragraph = Paragraph::new(raw_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Gray))
+                    .title(Span::styled(
+                        " Markdown Source ",
+                        Style::default().fg(Color::Magenta),
+                    ))
+                    .padding(Padding::horizontal(1)),
+            )
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_offset, 0))
+            .style(Style::default().fg(Color::Rgb(180, 180, 180)));
+        f.render_widget(paragraph, chunks[2]);
+    } else {
+        let markdown_text = markdown::render_markdown(&changelog_content);
+        let paragraph = Paragraph::new(markdown_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Gray))
+                    .title(Span::styled(
+                        " Rendered Preview ",
+                        Style::default().fg(Color::Cyan),
+                    ))
+                    .padding(Padding::horizontal(1)),
+            )
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_offset, 0));
+        f.render_widget(paragraph, chunks[2]);
+    }
 
-    let paragraph = Paragraph::new(markdown_text)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(format!("Changelog Preview: {}", current_project.name))
-                .padding(Padding::horizontal(2)),
-        )
-        .wrap(Wrap { trim: false })
-        .scroll((0, 0));
-
-    f.render_widget(paragraph, area);
+    let hints = Line::from(vec![
+        Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+        Span::styled(" scroll  ", Style::default().fg(Color::Gray)),
+        Span::styled("m", Style::default().fg(Color::Cyan)),
+        Span::styled(" toggle view  ", Style::default().fg(Color::Gray)),
+        Span::styled("Tab", Style::default().fg(Color::Cyan)),
+        Span::styled(" back to bump  ", Style::default().fg(Color::Gray)),
+        Span::styled("Enter", Style::default().fg(Color::Green)),
+        Span::styled(" next  ", Style::default().fg(Color::Gray)),
+        Span::styled("Esc", Style::default().fg(Color::Yellow)),
+        Span::styled(" back  ", Style::default().fg(Color::Gray)),
+        Span::styled("q", Style::default().fg(Color::Red)),
+        Span::styled(" quit", Style::default().fg(Color::Gray)),
+    ]);
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(hints_para, chunks[3]);
 }
 
 fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
     let selected_projects = state.selected_projects();
 
-    let mut confirmation_lines = vec![
-        Line::from(Span::styled(
-            "Ready to prepare release!",
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Cyan))
+        .title(Span::styled(
+            " Step 3: Confirmation ",
             Style::default()
-                .fg(Color::Green)
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
-        )),
+        ));
+
+    let inner_area = block.inner(area);
+    f.render_widget(block, area);
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(4),
+            Constraint::Min(0),
+            Constraint::Length(2),
+        ])
+        .split(inner_area);
+
+    let header_lines = vec![
         Line::from(""),
+        Line::from(vec![
+            Span::styled("🚀 ", Style::default()),
+            Span::styled(
+                "Ready to prepare release!",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]),
         Line::from(Span::styled(
-            format!("Selected projects: {}", selected_projects.len()),
-            Style::default().fg(Color::Cyan),
+            format!("   {} projects selected", selected_projects.len()),
+            Style::default().fg(Color::Gray),
         )),
+    ];
+    let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(header, chunks[0]);
+
+    let content_chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .margin(1)
+        .split(chunks[1]);
+
+    let mut project_lines = vec![
+        Line::from(vec![
+            Span::styled("📦 ", Style::default()),
+            Span::styled("Projects", Style::default().fg(Color::White)),
+        ]),
         Line::from(""),
     ];
 
-    for project in &selected_projects {
-        let chosen_bump = project.chosen_bump.unwrap_or(BumpStrategy::Auto);
-        let bump_text = match chosen_bump {
-            BumpStrategy::Auto => project.suggested_bump.as_str(),
-            BumpStrategy::Major => "MAJOR",
-            BumpStrategy::Minor => "MINOR",
-            BumpStrategy::Patch => "PATCH",
+    for project in selected_projects.iter().take(10) {
+        let bump_text = project.effective_bump_str();
+        let bump_color = match bump_text {
+            "MAJOR" => Color::Red,
+            "MINOR" => Color::Yellow,
+            "PATCH" => Color::Green,
+            _ => Color::Cyan,
         };
 
-        confirmation_lines.push(Line::from(vec![
-            Span::styled("  • ", Style::default().fg(Color::Gray)),
-            Span::styled(&project.name, Style::default().fg(Color::White)),
+        project_lines.push(Line::from(vec![
+            Span::styled("   ✅ ", Style::default().fg(Color::Green)),
+            Span::styled(project.name(), Style::default().fg(Color::White)),
             Span::styled(
-                format!(" ({} commits) → ", project.commit_count),
+                format!(" ({} commits)", project.commit_count()),
                 Style::default().fg(Color::Gray),
             ),
-            Span::styled(
-                bump_text,
-                Style::default()
-                    .fg(Color::Yellow)
-                    .add_modifier(Modifier::BOLD),
-            ),
+        ]));
+        project_lines.push(Line::from(vec![
+            Span::styled("      → ", Style::default().fg(Color::Gray)),
+            Span::styled(bump_text, Style::default().fg(bump_color)),
         ]));
     }
 
-    confirmation_lines.push(Line::from(""));
-    confirmation_lines.push(Line::from(""));
-    confirmation_lines.push(Line::from(Span::styled(
-        "Files that will be modified:",
-        Style::default().fg(Color::Magenta),
-    )));
+    if selected_projects.len() > 10 {
+        project_lines.push(Line::from(Span::styled(
+            format!("   ... and {} more", selected_projects.len() - 10),
+            Style::default().fg(Color::Gray),
+        )));
+    }
+
+    let project_block = Paragraph::new(project_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Gray))
+            .title(Span::styled(" Summary ", Style::default().fg(Color::White))),
+    );
+    f.render_widget(project_block, content_chunks[0]);
+
+    let mut file_lines = vec![
+        Line::from(vec![
+            Span::styled("📄 ", Style::default()),
+            Span::styled("Files to Modify", Style::default().fg(Color::White)),
+        ]),
+        Line::from(""),
+    ];
 
     let mut ecosystems: std::collections::HashSet<EcosystemType> = std::collections::HashSet::new();
     for project in &selected_projects {
-        ecosystems.insert(project.project_type);
+        ecosystems.insert(project.project_type());
     }
 
     for ecosystem in &ecosystems {
-        confirmation_lines.push(Line::from(format!(
-            "  • {} (version bump)",
-            ecosystem.version_file()
-        )));
+        file_lines.push(Line::from(vec![
+            Span::styled("   ✏️  ", Style::default().fg(Color::Yellow)),
+            Span::styled(
+                ecosystem.version_file().to_string(),
+                Style::default().fg(Color::Gray),
+            ),
+        ]));
     }
-    confirmation_lines.push(Line::from("  • CHANGELOG.md (new entries)"));
-    confirmation_lines.push(Line::from("  • belaf/releases/*.json (release manifest)"));
+    file_lines.push(Line::from(vec![
+        Span::styled("   📝 ", Style::default().fg(Color::Cyan)),
+        Span::styled("CHANGELOG.md", Style::default().fg(Color::Gray)),
+    ]));
+    file_lines.push(Line::from(vec![
+        Span::styled("   📋 ", Style::default().fg(Color::Magenta)),
+        Span::styled("belaf/releases/*.json", Style::default().fg(Color::Gray)),
+    ]));
 
-    confirmation_lines.push(Line::from(""));
-    confirmation_lines.push(Line::from(""));
-    confirmation_lines.push(Line::from(Span::styled(
-        "Press Enter to confirm and apply changes",
-        Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
-    )));
-    confirmation_lines.push(Line::from(Span::styled(
-        "Press Esc to go back",
-        Style::default().fg(Color::Gray),
-    )));
+    let file_block = Paragraph::new(file_lines).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Gray))
+            .title(Span::styled(
+                " Will Execute ",
+                Style::default().fg(Color::White),
+            )),
+    );
+    f.render_widget(file_block, content_chunks[1]);
 
-    let text = Text::from(confirmation_lines);
-    let paragraph = Paragraph::new(text)
-        .block(Block::default().borders(Borders::ALL).title("Confirmation"))
-        .wrap(Wrap { trim: true });
-
-    f.render_widget(paragraph, area);
+    let hints = Line::from(vec![
+        Span::styled("Enter", Style::default().fg(Color::Green)),
+        Span::styled(" confirm  ", Style::default().fg(Color::Gray)),
+        Span::styled("Esc", Style::default().fg(Color::Yellow)),
+        Span::styled(" back  ", Style::default().fg(Color::Gray)),
+        Span::styled("?", Style::default().fg(Color::Yellow)),
+        Span::styled(" help  ", Style::default().fg(Color::Gray)),
+        Span::styled("q", Style::default().fg(Color::Red)),
+        Span::styled(" quit", Style::default().fg(Color::Gray)),
+    ]);
+    let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(hints_para, chunks[2]);
 }
 
 fn render_help_popup(f: &mut Frame, state: &WizardState) {
@@ -972,22 +1677,76 @@ fn render_help_popup(f: &mut Frame, state: &WizardState) {
     f.render_widget(paragraph, area);
 }
 
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
+fn parse_existing_changelog(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
 
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
+    let mut result = String::new();
+    let mut found_header = false;
+
+    for line in content.lines() {
+        if line.starts_with("## [") || line.starts_with("## Unreleased") {
+            found_header = true;
+        }
+
+        if found_header {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
+}
+
+fn apply_project_overrides_to_items(
+    projects: &mut [ProjectItem],
+    overrides: &[String],
+) -> Result<()> {
+    let project_names: Vec<String> = projects.iter().map(|p| p.name().to_string()).collect();
+
+    for override_str in overrides {
+        let parts: Vec<&str> = override_str.splitn(2, ':').collect();
+        if parts.len() != 2 {
+            return Err(anyhow::anyhow!(
+                "Invalid project override format '{}'. Expected 'project:bump' (e.g., 'gate:major')",
+                override_str
+            ));
+        }
+
+        let project_name = parts[0];
+        let bump_type = parts[1];
+
+        if !project_names.iter().any(|n| n == project_name) {
+            return Err(anyhow::anyhow!(
+                "Unknown project '{}'. Available: {}",
+                project_name,
+                project_names.join(", ")
+            ));
+        }
+
+        let valid_bumps = ["major", "minor", "patch"];
+        if !valid_bumps.contains(&bump_type) {
+            return Err(anyhow::anyhow!(
+                "Invalid bump type '{}' for project '{}'. Valid: major, minor, patch",
+                bump_type,
+                project_name
+            ));
+        }
+
+        if let Some(project) = projects.iter_mut().find(|p| p.name() == project_name) {
+            let chosen = match bump_type {
+                "major" => BumpChoice::Major,
+                "minor" => BumpChoice::Minor,
+                "patch" => BumpChoice::Patch,
+                _ => unreachable!(),
+            };
+            info!("override: {} -> {}", project_name, bump_type);
+            project.chosen_bump = Some(chosen);
+        }
+    }
+
+    Ok(())
 }

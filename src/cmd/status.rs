@@ -18,12 +18,8 @@ use tracing::info;
 
 use crate::atry;
 use crate::cli::ReleaseOutputFormat;
-use crate::core::release::{graph::GraphQueryBuilder, session::AppSession};
-use crate::core::ui::{
-    components::{status_bar::StatusBar, table::Table},
-    theme::AppColors,
-    utils::is_interactive_terminal,
-};
+use crate::core::ui::components::table::Table;
+use crate::core::{graph::GraphQueryBuilder, session::AppSession};
 
 struct ProjectStatus {
     name: String,
@@ -53,7 +49,6 @@ struct TuiState {
     selected_project_index: usize,
     commit_scroll_offset: usize,
     project_data: Vec<ProjectStatus>,
-    colors: AppColors,
     should_quit: bool,
     show_help: bool,
 }
@@ -65,7 +60,6 @@ impl TuiState {
             selected_project_index: 0,
             commit_scroll_offset: 0,
             project_data,
-            colors: AppColors::default(),
             should_quit: false,
             show_help: false,
         }
@@ -172,18 +166,38 @@ impl TuiState {
     }
 
     fn render(&self, frame: &mut ratatui::Frame) {
+        let outer_block = Block::default()
+            .title(" 📊 Release Status ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+
+        let inner_area = outer_block.inner(frame.area());
+        frame.render_widget(outer_block, frame.area());
+
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
                 Constraint::Length(3),
                 Constraint::Min(0),
-                Constraint::Length(1),
+                Constraint::Length(2),
             ])
-            .split(frame.area());
+            .split(inner_area);
 
-        self.render_header(frame, chunks[0]);
+        let header_lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("📦 ", Style::default()),
+                Span::styled(
+                    "View project versions and release information",
+                    Style::default().fg(Color::White),
+                ),
+            ]),
+        ];
+        let header = Paragraph::new(header_lines).alignment(Alignment::Center);
+        frame.render_widget(header, chunks[0]);
+
         self.render_projects(frame, chunks[1]);
-        self.render_footer(frame, chunks[2]);
+        self.render_hints(frame, chunks[2]);
 
         if self.show_help {
             self.render_help_popup(frame);
@@ -250,7 +264,7 @@ impl TuiState {
             Span::styled(
                 "Press any key to close",
                 Style::default()
-                    .fg(Color::DarkGray)
+                    .fg(Color::Gray)
                     .add_modifier(Modifier::ITALIC),
             )
             .into_centered_line(),
@@ -263,19 +277,6 @@ impl TuiState {
         frame.render_widget(help_text, popup_area);
     }
 
-    fn render_header(&self, frame: &mut ratatui::Frame, area: Rect) {
-        let block = Block::default()
-            .title("Release Status")
-            .borders(Borders::ALL)
-            .style(
-                Style::default()
-                    .fg(self.colors.headers_bar.text)
-                    .bg(self.colors.headers_bar.background),
-            );
-
-        frame.render_widget(block, area);
-    }
-
     fn render_projects(&self, frame: &mut ratatui::Frame, area: Rect) {
         if self.project_data.is_empty() {
             return;
@@ -284,6 +285,7 @@ impl TuiState {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .margin(1)
             .split(area);
 
         self.render_project_list(frame, chunks[0]);
@@ -292,13 +294,13 @@ impl TuiState {
 
     fn render_project_list(&self, frame: &mut ratatui::Frame, area: Rect) {
         let header = Row::new(vec![
-            Cell::from("Project"),
+            Cell::from("  Project"),
             Cell::from("Version"),
             Cell::from("Commits"),
         ])
         .style(
             Style::default()
-                .fg(self.colors.headers_bar.text)
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         );
 
@@ -307,20 +309,33 @@ impl TuiState {
             .iter()
             .enumerate()
             .map(|(idx, proj)| {
-                let style = if idx == self.selected_project_index {
-                    Style::default()
-                        .bg(self.colors.containers.background)
-                        .fg(self.colors.containers.text)
+                let is_selected = idx == self.selected_project_index;
+                let indicator = if is_selected { "▶ " } else { "  " };
+
+                let style = if is_selected {
+                    Style::default().bg(Color::Rgb(40, 40, 60)).fg(Color::White)
                 } else {
-                    Style::default()
+                    Style::default().fg(Color::Gray)
+                };
+
+                let version_style = if is_selected {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+
+                let commits_style = if proj.commits_count > 0 {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::Gray)
                 };
 
                 Row::new(vec![
-                    Cell::from(proj.name.clone()),
-                    Cell::from(proj.version.clone().unwrap_or_else(|| "N/A".to_string())),
-                    Cell::from(proj.commits_count.to_string()),
+                    Cell::from(format!("{}{}", indicator, proj.name)).style(style),
+                    Cell::from(proj.version.clone().unwrap_or_else(|| "—".to_string()))
+                        .style(version_style),
+                    Cell::from(proj.commits_count.to_string()).style(commits_style),
                 ])
-                .style(style)
             })
             .collect();
 
@@ -331,33 +346,28 @@ impl TuiState {
         ];
 
         let border_color = if self.selected_panel == SelectablePanel::Projects {
-            self.colors.borders.selected
+            Color::Cyan
         } else {
-            self.colors.borders.unselected
+            Color::Gray
         };
 
+        let title = format!(" 📦 Projects ({}) ", self.project_data.len());
+
         let block = Block::default()
-            .title("Projects")
+            .title(title)
             .borders(Borders::ALL)
             .border_style(Style::default().fg(border_color));
 
-        let table = Table::new(rows, &widths)
-            .header(header)
-            .block(block)
-            .highlight_style(
-                Style::default()
-                    .bg(self.colors.containers.background)
-                    .fg(self.colors.containers.text),
-            );
+        let table = Table::new(rows, &widths).header(header).block(block);
 
         table.render(frame, area);
     }
 
     fn render_project_details(&self, frame: &mut ratatui::Frame, area: Rect) {
         if let Some(proj) = self.project_data.get(self.selected_project_index) {
-            let header = Row::new(vec![Cell::from("#"), Cell::from("Commit Summary")]).style(
+            let header = Row::new(vec![Cell::from(" #"), Cell::from("Commit Summary")]).style(
                 Style::default()
-                    .fg(self.colors.headers_bar.text)
+                    .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             );
 
@@ -372,9 +382,16 @@ impl TuiState {
                 .skip(visible_start)
                 .take(available_height as usize)
                 .map(|(idx, commit)| {
+                    let is_current = idx == self.commit_scroll_offset;
+                    let style = if is_current && self.selected_panel == SelectablePanel::Commits {
+                        Style::default().fg(Color::White)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+
                     Row::new(vec![
-                        Cell::from((idx + 1).to_string()),
-                        Cell::from(commit.clone()),
+                        Cell::from(format!(" {}", idx + 1)).style(Style::default().fg(Color::Gray)),
+                        Cell::from(commit.clone()).style(style),
                     ])
                 })
                 .collect();
@@ -392,29 +409,25 @@ impl TuiState {
                 String::new()
             };
 
-            let title = if let Some(version) = &proj.version {
+            let version_info = if let Some(version) = &proj.version {
                 if proj.age.unwrap_or(0) == 0 {
-                    format!(
-                        "{} - {} commit(s) since {}{}",
-                        proj.name, proj.commits_count, version, scroll_indicator
-                    )
+                    format!("since {}", version)
                 } else {
-                    format!(
-                        "{} - ≤{} commit(s) since {} (inexact){}",
-                        proj.name, proj.commits_count, version, scroll_indicator
-                    )
+                    format!("since {} (inexact)", version)
                 }
             } else {
-                format!(
-                    "{} - {} commit(s) (no releases){}",
-                    proj.name, proj.commits_count, scroll_indicator
-                )
+                "no releases".to_string()
             };
 
+            let title = format!(
+                " 📝 {} — {} commit(s) {} {}",
+                proj.name, proj.commits_count, version_info, scroll_indicator
+            );
+
             let border_color = if self.selected_panel == SelectablePanel::Commits {
-                self.colors.borders.selected
+                Color::Cyan
             } else {
-                self.colors.borders.unselected
+                Color::Gray
             };
 
             let block = Block::default()
@@ -423,7 +436,12 @@ impl TuiState {
                 .border_style(Style::default().fg(border_color));
 
             if rows.is_empty() {
-                frame.render_widget(block, area);
+                let empty_msg = Paragraph::new(Line::from(vec![
+                    Span::styled("  ✨ ", Style::default().fg(Color::Green)),
+                    Span::styled("No pending commits", Style::default().fg(Color::Gray)),
+                ]))
+                .block(block);
+                frame.render_widget(empty_msg, area);
             } else {
                 let table = Table::new(rows, &widths).header(header).block(block);
                 table.render(frame, area);
@@ -431,15 +449,15 @@ impl TuiState {
         }
     }
 
-    fn render_footer(&self, frame: &mut ratatui::Frame, area: Rect) {
+    fn render_hints(&self, frame: &mut ratatui::Frame, area: Rect) {
         let (panel_name, count_text) = if self.project_data.is_empty() {
             ("Projects", "No projects".to_string())
         } else {
             match self.selected_panel {
                 SelectablePanel::Projects => (
-                    "Projects",
+                    "📦 Projects",
                     format!(
-                        "Project {}/{}",
+                        "{}/{}",
                         self.selected_project_index + 1,
                         self.project_data.len()
                     ),
@@ -448,30 +466,42 @@ impl TuiState {
                     let total_commits = self.current_project_commits();
                     if total_commits > 0 {
                         (
-                            "Commits",
-                            format!("Commit {}/{}", self.commit_scroll_offset + 1, total_commits),
+                            "📝 Commits",
+                            format!("{}/{}", self.commit_scroll_offset + 1, total_commits),
                         )
                     } else {
-                        ("Commits", "No commits".to_string())
+                        ("📝 Commits", "0".to_string())
                     }
                 }
             }
         };
 
-        let center_text = format!("[{}] {}", panel_name, count_text);
+        let hints = Line::from(vec![
+            Span::styled(" Tab", Style::default().fg(Color::Cyan)),
+            Span::styled(" Switch  ", Style::default().fg(Color::Gray)),
+            Span::styled("↑↓/jk", Style::default().fg(Color::Cyan)),
+            Span::styled(" Navigate  ", Style::default().fg(Color::Gray)),
+            Span::styled("g/G", Style::default().fg(Color::Cyan)),
+            Span::styled(" Top/Bottom  ", Style::default().fg(Color::Gray)),
+            Span::styled("h", Style::default().fg(Color::Yellow)),
+            Span::styled(" Help  ", Style::default().fg(Color::Gray)),
+            Span::styled("q", Style::default().fg(Color::Red)),
+            Span::styled(" Quit", Style::default().fg(Color::Gray)),
+            Span::raw("  │  "),
+            Span::styled(
+                panel_name,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" [{}]", count_text),
+                Style::default().fg(Color::White),
+            ),
+        ]);
 
-        let status_bar = StatusBar::new(
-            " Tab: Switch  ↑/↓: Scroll  PgUp/PgDn  g/G: Top/Bottom  h: Help",
-            &center_text,
-            "q: Quit ",
-        )
-        .style(
-            Style::default()
-                .bg(self.colors.headers_bar.background)
-                .fg(self.colors.headers_bar.text),
-        );
-
-        status_bar.render(frame, area);
+        let hints_widget = Paragraph::new(hints).alignment(Alignment::Center);
+        frame.render_widget(hints_widget, area);
     }
 }
 
@@ -534,7 +564,9 @@ fn run_tui(sess: &AppSession, idents: &[usize]) -> Result<()> {
     Ok(())
 }
 
-pub fn run(format: Option<ReleaseOutputFormat>, no_tui: bool) -> Result<i32> {
+pub fn run(format: Option<ReleaseOutputFormat>, ci: bool) -> Result<i32> {
+    use crate::core::ui::utils::should_use_tui;
+
     info!(
         "checking release status with belaf version {}",
         env!("CARGO_PKG_VERSION")
@@ -553,16 +585,20 @@ pub fn run(format: Option<ReleaseOutputFormat>, no_tui: bool) -> Result<i32> {
 
     let histories = sess.analyze_histories()?;
 
-    let format = format.unwrap_or(ReleaseOutputFormat::Table);
-    let use_tui =
-        matches!(format, ReleaseOutputFormat::Table) && is_interactive_terminal() && !no_tui;
+    let use_tui = should_use_tui(ci, &format);
+
+    let output_format = if ci {
+        ReleaseOutputFormat::Json
+    } else {
+        format.unwrap_or(ReleaseOutputFormat::Text)
+    };
 
     if use_tui {
         run_tui(&sess, &idents)?;
         return Ok(0);
     }
 
-    match format {
+    match output_format {
         ReleaseOutputFormat::Json => {
             use serde_json::json;
 

@@ -4,6 +4,9 @@ use reqwest::header::ACCEPT;
 use secrecy::{ExposeSecret, SecretString};
 use tracing::debug;
 
+pub const REQUIRED_SCOPES: &[&str] = &["repo"];
+pub const REQUESTED_SCOPES: &[&str] = &["repo", "read:org", "user:email", "read:packages"];
+
 pub struct DeviceFlowCodes {
     pub user_code: String,
     pub verification_uri: String,
@@ -36,10 +39,8 @@ pub async fn request_device_code(client_id: &str) -> Result<DeviceFlowCodes> {
         .build()
         .map_err(|e| CliError::GitHubApi(format!("Failed to build GitHub client: {}", e)))?;
 
-    let scopes = ["repo", "read:org", "user:email", "read:packages"];
-
     let device_codes = client
-        .authenticate_as_device(&secret_client_id, scopes)
+        .authenticate_as_device(&secret_client_id, REQUESTED_SCOPES.to_vec())
         .await
         .map_err(|e| CliError::GitHubApi(format!("Failed to request device code: {}", e)))?;
 
@@ -97,6 +98,44 @@ pub fn validate_token_scopes_blocking(token: &str, required_scopes: &[&str]) -> 
 }
 
 const GITHUB_API_USER_URL: &str = "https://api.github.com/user";
+const GITHUB_REVOKE_URL: &str =
+    "https://github.com/settings/connections/applications/Ov23liuSrRXBZ7PDX61o";
+
+pub async fn get_token_scopes(token: &str) -> Result<Vec<String>> {
+    let client = reqwest::Client::new();
+
+    let response = client
+        .get(GITHUB_API_USER_URL)
+        .header("Authorization", format!("Bearer {}", token))
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "belaf")
+        .send()
+        .await
+        .map_err(|e| CliError::GitHubApi(format!("Failed to check token scopes: {}", e)))?;
+
+    if !response.status().is_success() {
+        return Err(CliError::GitHubApi(format!(
+            "Token validation failed: HTTP {}",
+            response.status()
+        )));
+    }
+
+    let scopes = response
+        .headers()
+        .get("x-oauth-scopes")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    Ok(scopes
+        .split(", ")
+        .filter(|s| !s.is_empty())
+        .map(|s| s.trim().to_string())
+        .collect())
+}
+
+pub fn get_revoke_url() -> &'static str {
+    GITHUB_REVOKE_URL
+}
 
 fn validate_response_and_scopes(
     status: reqwest::StatusCode,

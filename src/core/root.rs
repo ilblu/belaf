@@ -16,9 +16,12 @@ pub fn check_for_updates() {
     let current_version = env!("CARGO_PKG_VERSION");
 
     let result = std::thread::spawn(move || {
-        let token = match crate::core::auth::token::load_token() {
-            Ok(t) => t,
-            Err(_) => return,
+        let token = match std::env::var("GITHUB_TOKEN")
+            .ok()
+            .or_else(|| crate::core::auth::token::load_token().ok())
+        {
+            Some(t) => t,
+            None => return,
         };
 
         let config = ureq::Agent::config_builder()

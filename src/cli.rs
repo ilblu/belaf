@@ -57,48 +57,36 @@ pub enum Commands {
 
     #[command(
         about = "Prepare a release (bump versions)",
-        long_about = "Prepare a new release by bumping versions and updating changelogs.\n\nBump types:\n  • major: Breaking changes (1.0.0 → 2.0.0)\n  • minor: New features (1.0.0 → 1.1.0)\n  • patch: Bug fixes (1.0.0 → 1.0.1)\n  • auto: Automatic bump based on conventional commits\n  • manual: Interactive TUI wizard with suggestions\n\nThis command:\n  • Creates a release branch\n  • Updates version numbers in all affected project files\n  • Generates/updates CHANGELOG.md for each project\n  • Creates a release manifest\n  • Commits, pushes, and creates a Pull Request\n\nModes:\n  • TUI mode (default): Interactive 4-step wizard with auto-suggestions\n  • Auto mode (--no-tui): Automatic bump based on conventional commits\n  • CI mode (--ci): Full automation with PR creation"
+        long_about = "Prepare a new release by bumping versions and updating changelogs.\n\nBump types:\n  • major: Breaking changes (1.0.0 → 2.0.0)\n  • minor: New features (1.0.0 → 1.1.0)\n  • patch: Bug fixes (1.0.0 → 1.0.1)\n  • auto: Automatic bump based on conventional commits\n\nThis command:\n  • Creates a release branch\n  • Updates version numbers in all affected project files\n  • Generates/updates CHANGELOG.md for each project\n  • Creates a release manifest\n  • Commits, pushes, and creates a Pull Request\n\nModes:\n  • TUI mode (default): Interactive 4-step wizard with auto-suggestions\n  • CI mode (--ci): Full automation with PR creation"
     )]
     Prepare(PrepareArgs),
 
     #[command(
         about = "Show project dependency graph",
-        long_about = "Display the project dependency graph.\n\nInteractive TUI mode (default):\n  • Navigate through projects with arrow keys\n  • View dependency details\n  • Visual dependency tree\n\nBrowser mode (--web):\n  • Interactive Cytoscape.js graph\n  • Multiple layouts (Hierarchy, Force, Circle)\n  • Search, zoom, export PNG\n\nNon-interactive mode (--no-tui):\n  • ASCII art graph\n  • DOT format for Graphviz\n  • JSON for programmatic use"
+        long_about = "Display the project dependency graph.\n\nInteractive TUI mode (default):\n  • Navigate through projects with arrow keys\n  • View dependency details\n  • Visual dependency tree\n\nBrowser mode (--web):\n  • Interactive Cytoscape.js graph\n  • Multiple layouts (Hierarchy, Force, Circle)\n  • Search, zoom, export PNG\n\nOutput formats (--format):\n  • ascii: ASCII art graph\n  • dot: Graphviz DOT format\n  • json: JSON for programmatic use\n\nCI mode (--ci): JSON output, no TUI"
     )]
     Graph(GraphArgs),
+
+    #[command(
+        about = "Generate changelog from commits",
+        long_about = "Generate changelog entries based on conventional commits.\n\nThis command generates changelogs without the full release workflow.\nUseful for previewing changes or generating changelogs as a separate step.\n\nModes:\n  • Default: Write changelog files to disk\n  • Preview (--preview): Show changelog without writing files\n  • Stdout (--stdout): Output to stdout instead of files\n\nExamples:\n  belaf changelog                    # Generate all changelogs\n  belaf changelog --preview          # Preview without writing\n  belaf changelog --project mylib    # Only for specific project\n  belaf changelog --stdout           # Output to terminal"
+    )]
+    Changelog(ChangelogArgs),
 }
 
 #[derive(Subcommand)]
 pub enum AuthCommands {
     #[command(
-        about = "Authenticate with services",
-        long_about = "Authenticate with GitHub and/or Anthropic.\n\nWithout flags, shows an interactive menu to choose the service.\nCredentials are stored securely in the system keychain."
+        about = "Authenticate with GitHub",
+        long_about = "Authenticate with GitHub for PR creation and release management.\n\nCredentials are stored securely in the system keychain."
     )]
     Login {
-        #[arg(long, help = "Authenticate with GitHub")]
-        github: bool,
-
-        #[arg(long, help = "Authenticate with Anthropic (Claude)")]
-        anthropic: bool,
-
-        #[arg(long, help = "Authenticate with all services")]
-        all: bool,
-
         #[arg(long, help = "Skip opening browser and show URL only")]
         no_browser: bool,
     },
 
-    #[command(about = "Sign out from services")]
-    Logout {
-        #[arg(long, help = "Sign out from GitHub")]
-        github: bool,
-
-        #[arg(long, help = "Sign out from Anthropic (Claude)")]
-        anthropic: bool,
-
-        #[arg(long, help = "Sign out from all services")]
-        all: bool,
-    },
+    #[command(about = "Sign out from GitHub")]
+    Logout,
 
     #[command(about = "Show authentication status")]
     Status,
@@ -112,36 +100,30 @@ pub struct InitArgs {
     #[arg(short, long, help = "The name of the Git upstream remote")]
     pub upstream: Option<String>,
 
-    #[arg(long, help = "Skip interactive TUI, use automatic detection")]
-    pub no_tui: bool,
+    #[arg(long, help = "CI/CD mode: auto-detect all projects, no prompts")]
+    pub ci: bool,
+
+    #[arg(
+        long,
+        help = "Use a preset configuration template (keepachangelog, flat, minimal)"
+    )]
+    pub preset: Option<String>,
 }
 
 #[derive(Args)]
 pub struct StatusArgs {
-    #[arg(
-        short,
-        long,
-        value_enum,
-        default_value = "table",
-        help = "Output format"
-    )]
+    #[arg(short, long, value_enum, help = "Output format (table, text, json)")]
     pub format: Option<ReleaseOutputFormat>,
 
-    #[arg(long, help = "Force text mode even in TTY")]
-    pub no_tui: bool,
+    #[arg(long, help = "CI/CD mode: JSON output, no TUI")]
+    pub ci: bool,
 }
 
 #[derive(Args)]
 pub struct PrepareArgs {
-    #[arg(help = "Version bump type: major, minor, patch, auto, or manual")]
-    pub bump: Option<String>,
-
-    #[arg(long, help = "Force auto mode, skip interactive TUI wizard")]
-    pub no_tui: bool,
-
     #[arg(
         long,
-        help = "Full CI/CD mode: auto-bump, changelog, commit, push, and PR creation"
+        help = "CI/CD mode: auto-bump, changelog, commit, push, and PR creation"
     )]
     pub ci: bool,
 
@@ -149,24 +131,45 @@ pub struct PrepareArgs {
         short,
         long,
         value_delimiter = ',',
-        help = "Per-project version bumps (e.g., gate:major,rig:minor)"
+        help = "Override bump for specific projects (e.g., gate:major,core:minor)"
     )]
     pub project: Option<Vec<String>>,
 }
 
 #[derive(Args)]
 pub struct GraphArgs {
-    #[arg(short, long, value_enum, help = "Output format (only with --no-tui)")]
+    #[arg(short, long, value_enum, help = "Output format (ascii, dot, json)")]
     pub format: Option<GraphOutputFormat>,
 
-    #[arg(long, help = "Skip interactive TUI, output static graph")]
-    pub no_tui: bool,
+    #[arg(long, help = "CI/CD mode: JSON output, no TUI")]
+    pub ci: bool,
 
     #[arg(long, short, help = "Open interactive graph in web browser")]
     pub web: bool,
 
     #[arg(long, short, help = "Save HTML graph to file (implies --web)")]
     pub out: Option<String>,
+}
+
+#[derive(Args)]
+pub struct ChangelogArgs {
+    #[arg(long, help = "Preview changelog without writing files")]
+    pub preview: bool,
+
+    #[arg(long, help = "Output changelog to stdout instead of files")]
+    pub stdout: bool,
+
+    #[arg(short, long, help = "Generate changelog only for specific project")]
+    pub project: Option<String>,
+
+    #[arg(short, long, help = "Custom output file path (overrides config)")]
+    pub output: Option<String>,
+
+    #[arg(long, help = "Include unreleased changes (no version tag)")]
+    pub unreleased: bool,
+
+    #[arg(long, help = "CI/CD mode: suppress info messages, only errors")]
+    pub ci: bool,
 }
 
 #[derive(Clone, ValueEnum)]
@@ -181,7 +184,7 @@ pub enum GraphOutputFormat {
 
 #[derive(Clone, ValueEnum)]
 pub enum ReleaseOutputFormat {
-    #[value(help = "Interactive table (TUI mode)")]
+    #[value(help = "Formatted table output")]
     Table,
     #[value(help = "Plain text output")]
     Text,

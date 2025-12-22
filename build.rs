@@ -1,6 +1,9 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rustc-env=TARGET={}", std::env::var("TARGET").unwrap_or_default());
+    println!(
+        "cargo:rustc-env=TARGET={}",
+        std::env::var("TARGET").unwrap_or_default()
+    );
 
     let rustc = std::process::Command::new("rustc")
         .arg("--version")

@@ -75,11 +75,7 @@ fn print_version_info() {
     let target = env!("TARGET");
     let rustc_version = env!("RUSTC_VERSION");
 
-    println!(
-        "{} {}",
-        "belaf".cyan().bold(),
-        version.green().bold()
-    );
+    println!("{} {}", "belaf".cyan().bold(), version.green().bold());
     println!("{}", description.dimmed());
     println!();
     println!("{:<12} {}", "Repository:".dimmed(), repository);

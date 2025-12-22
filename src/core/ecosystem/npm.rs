@@ -21,12 +21,12 @@ use tracing::warn;
 use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
-    core::release::{
+    core::{
         config::syntax::ProjectConfiguration,
         errors::Result,
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
         graph::GraphQueryBuilder,
         project::{DepRequirement, DependencyTarget, ProjectId},
-        repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
         version::Version,
@@ -52,7 +52,7 @@ impl NpmLoader {
     pub fn process_index_item(
         &mut self,
         repo: &Repository,
-        graph: &mut crate::core::release::graph::ProjectGraphBuilder,
+        graph: &mut crate::core::graph::ProjectGraphBuilder,
         repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,

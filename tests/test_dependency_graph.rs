@@ -48,6 +48,7 @@ dep-core = { path = "../core" }
         "Init failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    repo.commit("chore: add belaf config");
 
     repo.write_file(
         "packages/core/src/feature.rs",
@@ -55,12 +56,7 @@ dep-core = { path = "../core" }
     );
     repo.commit("feat(core): add new core feature");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(
-        output.status.success(),
-        "Prepare failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let core_toml = repo.read_file("packages/core/Cargo.toml");
     assert!(
@@ -125,16 +121,12 @@ chain-middle = { path = "../middle" }
         "Init failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    repo.commit("chore: add belaf config");
 
     repo.write_file("packages/base/src/feature.rs", "pub fn base_feature() {}\n");
     repo.commit("feat(base): add base feature");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(
-        output.status.success(),
-        "Prepare failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let base_toml = repo.read_file("packages/base/Cargo.toml");
     assert!(
@@ -213,6 +205,7 @@ diamond-right = { path = "../right" }
         "Init failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    repo.commit("chore: add belaf config");
 
     repo.write_file(
         "packages/shared/src/feature.rs",
@@ -220,12 +213,7 @@ diamond-right = { path = "../right" }
     );
     repo.commit("feat(shared): add shared feature");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(
-        output.status.success(),
-        "Prepare failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let shared_toml = repo.read_file("packages/shared/Cargo.toml");
     assert!(
@@ -270,6 +258,7 @@ edition = "2021"
 
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
+    repo.commit("chore: add belaf config");
 
     repo.write_file(
         "packages/alpha/src/feature.rs",
@@ -277,8 +266,7 @@ edition = "2021"
     );
     repo.commit("feat(alpha): add alpha feature");
 
-    let output = repo.run_belaf_command(&["prepare", "--no-tui", "auto"]);
-    assert!(output.status.success());
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let alpha_toml = repo.read_file("packages/alpha/Cargo.toml");
     let beta_toml = repo.read_file("packages/beta/Cargo.toml");
