@@ -429,15 +429,20 @@ impl WizardState {
         match key {
             KeyCode::Tab => {
                 self.show_changelog = !self.show_changelog;
-                if !self.show_changelog {
+                if self.show_changelog {
                     if let Some(project) = self.get_current_project() {
-                        if let Some(chosen) = project.chosen_bump {
-                            let idx = BumpChoice::all()
-                                .iter()
-                                .position(|s| *s == chosen)
-                                .unwrap_or(0);
-                            self.bump_list_state.select(Some(idx));
+                        if project.cached_changelog.is_none() {
+                            self.loading_changelog = true;
+                            self.start_background_changelog_generation();
                         }
+                    }
+                } else if let Some(project) = self.get_current_project() {
+                    if let Some(chosen) = project.chosen_bump {
+                        let idx = BumpChoice::all()
+                            .iter()
+                            .position(|s| *s == chosen)
+                            .unwrap_or(0);
+                        self.bump_list_state.select(Some(idx));
                     }
                 }
                 false
