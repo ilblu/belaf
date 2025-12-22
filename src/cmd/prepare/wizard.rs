@@ -154,6 +154,7 @@ struct WizardState {
     changelog_toggle: TogglePanel,
     changelog_config: ChangelogConfiguration,
     bump_config: BumpConfiguration,
+    changelog_scroll_offset: u16,
 }
 
 impl WizardState {
@@ -183,6 +184,7 @@ impl WizardState {
             changelog_toggle: TogglePanel::default(),
             changelog_config,
             bump_config,
+            changelog_scroll_offset: 0,
         }
     }
 
@@ -344,6 +346,7 @@ impl WizardState {
                         };
                         self.show_changelog = false;
                         self.bump_list_state.select(Some(0));
+                        self.changelog_scroll_offset = 0;
                     } else {
                         self.step = WizardStep::Confirmation;
                     }
@@ -430,6 +433,7 @@ impl WizardState {
             KeyCode::Tab => {
                 self.show_changelog = !self.show_changelog;
                 if self.show_changelog {
+                    self.changelog_scroll_offset = 0;
                     if let Some(project) = self.get_current_project() {
                         if project.cached_changelog.is_none() {
                             self.loading_changelog = true;
@@ -447,7 +451,23 @@ impl WizardState {
                 }
                 false
             }
-            KeyCode::Up if !self.show_changelog => {
+            KeyCode::Up if self.show_changelog => {
+                self.changelog_scroll_offset = self.changelog_scroll_offset.saturating_sub(1);
+                false
+            }
+            KeyCode::Down if self.show_changelog => {
+                self.changelog_scroll_offset = self.changelog_scroll_offset.saturating_add(1);
+                false
+            }
+            KeyCode::PageUp if self.show_changelog => {
+                self.changelog_scroll_offset = self.changelog_scroll_offset.saturating_sub(10);
+                false
+            }
+            KeyCode::PageDown if self.show_changelog => {
+                self.changelog_scroll_offset = self.changelog_scroll_offset.saturating_add(10);
+                false
+            }
+            KeyCode::Up => {
                 if let Some(selected) = self.bump_list_state.selected() {
                     if selected > 0 {
                         self.bump_list_state.select(Some(selected - 1));
@@ -455,7 +475,7 @@ impl WizardState {
                 }
                 false
             }
-            KeyCode::Down if !self.show_changelog => {
+            KeyCode::Down => {
                 if let Some(selected) = self.bump_list_state.selected() {
                     let strategies = BumpChoice::all();
                     if selected < strategies.len() - 1 {
@@ -1385,6 +1405,7 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
     );
     state.changelog_toggle.render(f, chunks[1], &title);
 
+    let scroll_offset = state.changelog_scroll_offset;
     if state.changelog_toggle.is_right() {
         let raw_text = Text::from(changelog_content.clone());
         let paragraph = Paragraph::new(raw_text)
@@ -1399,6 +1420,7 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
                     .padding(Padding::horizontal(1)),
             )
             .wrap(Wrap { trim: false })
+            .scroll((scroll_offset, 0))
             .style(Style::default().fg(Color::Rgb(180, 180, 180)));
         f.render_widget(paragraph, chunks[2]);
     } else {
@@ -1414,11 +1436,14 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
                     ))
                     .padding(Padding::horizontal(1)),
             )
-            .wrap(Wrap { trim: false });
+            .wrap(Wrap { trim: false })
+            .scroll((scroll_offset, 0));
         f.render_widget(paragraph, chunks[2]);
     }
 
     let hints = Line::from(vec![
+        Span::styled("↑↓", Style::default().fg(Color::Cyan)),
+        Span::styled(" scroll  ", Style::default().fg(Color::Gray)),
         Span::styled("m", Style::default().fg(Color::Cyan)),
         Span::styled(" toggle view  ", Style::default().fg(Color::Gray)),
         Span::styled("Tab", Style::default().fg(Color::Cyan)),
