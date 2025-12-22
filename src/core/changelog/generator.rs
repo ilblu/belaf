@@ -88,7 +88,22 @@ impl Changelog {
     }
 
     pub fn with_remote(mut self, owner: String, repo: String) -> Self {
-        self.remote = Some(RemoteConfig { owner, repo });
+        let remote = RemoteConfig {
+            owner: owner.clone(),
+            repo: repo.clone(),
+        };
+        let repository_url = format!("https://github.com/{}/{}", owner, repo);
+
+        for release in &mut self.releases {
+            release.repository = Some(repository_url.clone());
+        }
+
+        if let Ok(value) = serde_json::to_value(&remote) {
+            self.additional_context
+                .insert("remote".to_string(), value);
+        }
+
+        self.remote = Some(remote);
         self
     }
 

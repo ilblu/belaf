@@ -19,7 +19,7 @@ tree_cache_size = 3
 
 [changelog]
 # Changelog header text
-header = "# Changelog\n"
+#header = "# Changelog\n\n"
 
 # Tera template for rendering each release
 # See https://keats.github.io/tera/docs/#introduction
