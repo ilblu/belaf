@@ -94,6 +94,15 @@ pub struct UserInfo {
     pub email: Option<String>,
 }
 
+impl UserInfo {
+    pub fn display_name(&self) -> &str {
+        self.username
+            .as_deref()
+            .or(self.name.as_deref())
+            .unwrap_or("Unknown")
+    }
+}
+
 #[derive(Debug, Deserialize)]
 pub struct RepoInfo {
     pub full_name: String,

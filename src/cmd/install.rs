@@ -8,10 +8,13 @@ use tokio::time::sleep;
 use crate::core::api::{ApiClient, ApiError, DeviceCodeResponse, StoredToken};
 use crate::core::auth::token::{delete_token, load_token, save_token};
 
+const MIN_POLL_INTERVAL_SECS: u64 = 5;
+const INSTALLATION_TIMEOUT_SECS: u64 = 300;
+
 pub async fn run() -> Result<i32> {
     let client = ApiClient::new();
 
-    let needs_auth = check_existing_auth(&client).await;
+    let needs_auth = needs_authentication(&client).await;
 
     if needs_auth {
         println!("{} Authenticating with belaf...\n", "🔐".bold());
@@ -37,29 +40,20 @@ pub async fn run() -> Result<i32> {
         save_token(&stored_token)?;
 
         let user = client.get_user_info(&stored_token).await?;
-        let display_name = user
-            .username
-            .as_deref()
-            .or(user.name.as_deref())
-            .unwrap_or("Unknown");
         println!(
             "\n{} Authenticated as: {} ({})",
             "✓".green(),
-            display_name.cyan(),
+            user.display_name().cyan(),
             user.email.as_deref().unwrap_or("no email")
         );
     } else {
-        let token = load_token()?.expect("Token must exist after auth check");
+        let token =
+            load_token()?.ok_or_else(|| anyhow::anyhow!("Token must exist after auth check"))?;
         let user = client.get_user_info(&token).await?;
-        let display_name = user
-            .username
-            .as_deref()
-            .or(user.name.as_deref())
-            .unwrap_or("Unknown");
         println!(
             "{} Already authenticated as: {} ({})",
             "✓".green(),
-            display_name.cyan(),
+            user.display_name().cyan(),
             user.email.as_deref().unwrap_or("no email")
         );
     }
@@ -73,7 +67,7 @@ pub async fn run() -> Result<i32> {
         full_repo.cyan()
     );
 
-    let token = load_token()?.expect("Token must exist");
+    let token = load_token()?.ok_or_else(|| anyhow::anyhow!("Token must exist"))?;
     let installation = client.check_installation(&token, &full_repo).await?;
 
     if installation.installed {
@@ -91,7 +85,7 @@ pub async fn run() -> Result<i32> {
 
     let install_url = installation
         .install_url
-        .unwrap_or_else(|| "https://github.com/apps/belaf-app/installations/new".to_string());
+        .ok_or_else(|| anyhow::anyhow!("API did not provide installation URL"))?;
 
     println!(
         "\n{} GitHub App not installed. Opening installation page...",
@@ -105,8 +99,16 @@ pub async fn run() -> Result<i32> {
     }
 
     let spinner = create_spinner("Waiting for installation...");
+    let deadline = Instant::now() + Duration::from_secs(INSTALLATION_TIMEOUT_SECS);
 
     loop {
+        if Instant::now() > deadline {
+            spinner.finish_and_clear();
+            println!("\n{} Installation timed out.", "✗".red());
+            println!("Please run 'belaf install' again after installing the GitHub App.");
+            return Ok(1);
+        }
+
         sleep(Duration::from_secs(3)).await;
 
         match client.check_installation(&token, &full_repo).await {
@@ -147,7 +149,7 @@ pub async fn status() -> Result<i32> {
                 println!("{} Authenticated", "✓".green());
                 println!(
                     "  User: {} ({})",
-                    user.name.as_deref().unwrap_or("Unknown").cyan(),
+                    user.display_name().cyan(),
                     user.email.as_deref().unwrap_or("no email")
                 );
                 if let Some(expires_at) = token.expires_at {
@@ -181,7 +183,7 @@ pub async fn whoami() -> Result<i32> {
     match load_token()? {
         Some(token) if !token.is_expired() => match client.get_user_info(&token).await {
             Ok(user) => {
-                println!("{}", user.name.as_deref().unwrap_or("Unknown"));
+                println!("{}", user.display_name());
                 Ok(0)
             }
             Err(ApiError::Unauthorized) => {
@@ -197,14 +199,9 @@ pub async fn whoami() -> Result<i32> {
     }
 }
 
-async fn check_existing_auth(client: &ApiClient) -> bool {
+async fn needs_authentication(client: &ApiClient) -> bool {
     match load_token() {
-        Ok(Some(token)) if !token.is_expired() => {
-            matches!(
-                client.get_user_info(&token).await,
-                Err(ApiError::Unauthorized)
-            )
-        }
+        Ok(Some(token)) if !token.is_expired() => client.get_user_info(&token).await.is_err(),
         _ => true,
     }
 }
@@ -218,7 +215,7 @@ async fn poll_for_token(
     client: &ApiClient,
     codes: &DeviceCodeResponse,
 ) -> Result<TokenResult, ApiError> {
-    let mut interval = codes.interval.max(5);
+    let mut interval = codes.interval.max(MIN_POLL_INTERVAL_SECS);
     let deadline = Instant::now() + Duration::from_secs(codes.expires_in);
 
     loop {
@@ -231,8 +228,11 @@ async fn poll_for_token(
         let response = client.poll_for_token(&codes.device_code).await?;
 
         if response.is_success() {
+            let access_token = response.access_token.ok_or_else(|| {
+                ApiError::InvalidResponse("Missing access_token in success response".into())
+            })?;
             return Ok(TokenResult {
-                access_token: response.access_token.expect("Token must exist on success"),
+                access_token,
                 expires_in: response.expires_in,
             });
         }
@@ -240,7 +240,7 @@ async fn poll_for_token(
         match response.error_code() {
             Some("authorization_pending") => continue,
             Some("slow_down") => {
-                interval += 5;
+                interval += MIN_POLL_INTERVAL_SECS;
                 continue;
             }
             Some("expired_token") => return Err(ApiError::DeviceCodeExpired),
@@ -269,7 +269,7 @@ fn parse_github_remote(url: &str) -> Result<(String, String)> {
     if let Some(rest) = url.strip_prefix("git@github.com:") {
         let repo = rest.trim_end_matches(".git");
         let parts: Vec<&str> = repo.split('/').collect();
-        if parts.len() == 2 {
+        if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
             return Ok((parts[0].to_string(), parts[1].to_string()));
         }
     }
@@ -277,7 +277,7 @@ fn parse_github_remote(url: &str) -> Result<(String, String)> {
     if let Some(rest) = url.strip_prefix("https://github.com/") {
         let repo = rest.trim_end_matches(".git");
         let parts: Vec<&str> = repo.split('/').collect();
-        if parts.len() >= 2 {
+        if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
             return Ok((parts[0].to_string(), parts[1].to_string()));
         }
     }
