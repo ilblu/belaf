@@ -106,14 +106,7 @@ impl ApiClient {
             .send()
             .await?;
 
-        if !response.status().is_success() {
-            return Err(ApiError::ApiResponse {
-                status: response.status().as_u16(),
-                message: response.text().await.unwrap_or_default(),
-            });
-        }
-
-        Ok(response.json().await?)
+        Self::handle_response(response).await
     }
 
     /// Polls for an access token during the device authorization flow.
@@ -245,7 +238,16 @@ impl ApiClient {
 
     /// Gets all commits for a repository, handling pagination automatically.
     ///
-    /// Limited to [`MAX_PAGINATION_PAGES`] pages to prevent infinite loops.
+    /// # Limits
+    ///
+    /// - Maximum of [`MAX_PAGINATION_PAGES`] (100) pages will be fetched
+    /// - At 100 commits per page, this allows up to 10,000 commits
+    /// - If the limit is reached, results are truncated with a warning log
+    ///
+    /// # Memory Considerations
+    ///
+    /// All commits are loaded into memory. For repositories with many commits,
+    /// consider using [`get_commits`] with manual pagination if memory is constrained.
     pub async fn get_all_commits(
         &self,
         token: &StoredToken,
@@ -309,7 +311,16 @@ impl ApiClient {
 
     /// Gets all closed pull requests for a repository.
     ///
-    /// Limited to [`MAX_PAGINATION_PAGES`] pages to prevent infinite loops.
+    /// # Limits
+    ///
+    /// - Maximum of [`MAX_PAGINATION_PAGES`] (100) pages will be fetched
+    /// - At 100 PRs per page, this allows up to 10,000 pull requests
+    /// - If the limit is reached, results are truncated with a warning log
+    ///
+    /// # Memory Considerations
+    ///
+    /// All pull requests are loaded into memory. For repositories with many PRs,
+    /// consider using [`get_pull_requests`] with manual pagination if memory is constrained.
     pub async fn get_all_pull_requests(
         &self,
         token: &StoredToken,

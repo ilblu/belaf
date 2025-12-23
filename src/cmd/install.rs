@@ -240,9 +240,13 @@ async fn poll_for_token(
 ) -> Result<TokenResult, ApiError> {
     let mut interval = codes.interval.max(MIN_POLL_INTERVAL_SECS);
     let deadline = Instant::now() + Duration::from_secs(codes.expires_in);
+    let mut first_poll = true;
 
     loop {
-        sleep(Duration::from_secs(interval)).await;
+        if !first_poll {
+            sleep(Duration::from_secs(interval)).await;
+        }
+        first_poll = false;
 
         if Instant::now() > deadline {
             return Err(ApiError::DeviceCodeExpired);

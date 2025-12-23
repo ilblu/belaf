@@ -48,6 +48,12 @@ impl TokenPollResponse {
     }
 }
 
+/// A stored API token with optional expiration timestamp.
+///
+/// The belaf API always returns `expires_in` with tokens, so `expires_at` should
+/// always be `Some` for tokens obtained through normal authentication flows.
+/// The `None` case is handled defensively for backwards compatibility with
+/// tokens stored before expiry tracking was added.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredToken {
     pub access_token: String,
@@ -56,6 +62,10 @@ pub struct StoredToken {
 }
 
 impl StoredToken {
+    /// Creates a new stored token with an optional expiry time.
+    ///
+    /// If `expires_in_secs` is provided, the expiry timestamp is calculated
+    /// from the current time. The belaf API should always provide this value.
     pub fn new(access_token: String, expires_in_secs: Option<u64>) -> Self {
         let expires_at =
             expires_in_secs.map(|secs| Utc::now() + chrono::Duration::seconds(secs as i64));
@@ -65,6 +75,16 @@ impl StoredToken {
         }
     }
 
+    /// Checks if the token has expired.
+    ///
+    /// # Behavior
+    ///
+    /// - Returns `true` if the token's expiry time has passed
+    /// - Returns `true` if no expiry time is set (fail-safe: assumes expired)
+    ///
+    /// The fail-safe behavior for missing expiry ensures that tokens without
+    /// proper expiration tracking (e.g., legacy tokens or API bugs) will
+    /// trigger re-authentication rather than potentially using invalid tokens.
     pub fn is_expired(&self) -> bool {
         match self.expires_at {
             Some(exp) => exp < Utc::now(),
