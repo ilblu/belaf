@@ -87,6 +87,8 @@ pub struct CheckInstallationResponse {
 pub struct UserInfo {
     pub id: String,
     #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
     pub email: Option<String>,

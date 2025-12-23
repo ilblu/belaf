@@ -37,19 +37,29 @@ pub async fn run() -> Result<i32> {
         save_token(&stored_token)?;
 
         let user = client.get_user_info(&stored_token).await?;
+        let display_name = user
+            .username
+            .as_deref()
+            .or(user.name.as_deref())
+            .unwrap_or("Unknown");
         println!(
             "\n{} Authenticated as: {} ({})",
             "✓".green(),
-            user.name.as_deref().unwrap_or("Unknown").cyan(),
+            display_name.cyan(),
             user.email.as_deref().unwrap_or("no email")
         );
     } else {
         let token = load_token()?.expect("Token must exist after auth check");
         let user = client.get_user_info(&token).await?;
+        let display_name = user
+            .username
+            .as_deref()
+            .or(user.name.as_deref())
+            .unwrap_or("Unknown");
         println!(
             "{} Already authenticated as: {} ({})",
             "✓".green(),
-            user.name.as_deref().unwrap_or("Unknown"),
+            display_name.cyan(),
             user.email.as_deref().unwrap_or("no email")
         );
     }
