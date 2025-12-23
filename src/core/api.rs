@@ -7,6 +7,7 @@ pub use error::ApiError;
 pub use types::{
     ApiCommit, ApiPullRequest, CheckInstallationResponse, CommitAuthor, CommitsResponse,
     CreatePullRequestParams, CreatePullRequestRequest, CreatePullRequestResponse,
-    DeviceCodeRequest, DeviceCodeResponse, LatestReleaseResponse, PullRequestsResponse, RepoInfo,
-    StoredToken, TokenPollRequest, TokenPollResponse, UserInfo,
+    DeviceCodeRequest, DeviceCodeResponse, GitCredentialsResponse, GitPushFile, GitPushRequest,
+    GitPushResponse, LatestReleaseResponse, PullRequestsResponse, RepoInfo, StoredToken,
+    TokenPollRequest, TokenPollResponse, UserInfo,
 };

@@ -5,8 +5,8 @@ use super::error::ApiError;
 use super::types::{
     ApiCommit, ApiPullRequest, CheckInstallationResponse, CommitsResponse, CreatePullRequestParams,
     CreatePullRequestRequest, CreatePullRequestResponse, DeviceCodeRequest, DeviceCodeResponse,
-    LatestReleaseResponse, PullRequestsResponse, RepoInfo, StoredToken, TokenPollRequest,
-    TokenPollResponse, UserInfo,
+    GitCredentialsResponse, GitPushRequest, GitPushResponse, LatestReleaseResponse,
+    PullRequestsResponse, RepoInfo, StoredToken, TokenPollRequest, TokenPollResponse, UserInfo,
 };
 
 const API_BASE_URL: &str = "https://api.belaf.dev";
@@ -326,6 +326,68 @@ impl ApiClient {
         }
 
         Ok(Some(response.json().await?))
+    }
+
+    pub async fn git_push(
+        &self,
+        token: &StoredToken,
+        owner: &str,
+        repo: &str,
+        request: &GitPushRequest,
+    ) -> Result<GitPushResponse, ApiError> {
+        let response = self
+            .client
+            .post(format!(
+                "{}/api/cli/repos/{}/{}/git/push",
+                self.base_url, owner, repo
+            ))
+            .bearer_auth(&token.access_token)
+            .json(request)
+            .send()
+            .await?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ApiError::Unauthorized);
+        }
+
+        if !response.status().is_success() {
+            return Err(ApiError::ApiResponse {
+                status: response.status().as_u16(),
+                message: response.text().await.unwrap_or_default(),
+            });
+        }
+
+        Ok(response.json().await?)
+    }
+
+    pub async fn get_git_credentials(
+        &self,
+        token: &StoredToken,
+        owner: &str,
+        repo: &str,
+    ) -> Result<GitCredentialsResponse, ApiError> {
+        let response = self
+            .client
+            .get(format!(
+                "{}/api/cli/repos/{}/{}/git/credentials",
+                self.base_url, owner, repo
+            ))
+            .bearer_auth(&token.access_token)
+            .send()
+            .await?;
+
+        if response.status() == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(ApiError::Unauthorized);
+        }
+
+        if !response.status().is_success() {
+            return Err(ApiError::ApiResponse {
+                status: response.status().as_u16(),
+                message: response.text().await.unwrap_or_default(),
+            });
+        }
+
+        Ok(response.json().await?)
     }
 }
 

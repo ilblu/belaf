@@ -17,6 +17,8 @@ use std::collections::HashMap;
 use tracing::{debug, info};
 
 use crate::core::{
+    api::ApiClient,
+    auth::token::load_token,
     bump::{self, BumpConfig, BumpRecommendation},
     changelog::{Changelog, ChangelogConfig, Commit, GitConfig, Release},
     config::syntax::{BumpConfiguration, ChangelogConfiguration},
@@ -537,11 +539,47 @@ impl<'a> ReleasePipeline<'a> {
     }
 
     fn push_branch(&self) -> Result<()> {
+        let git_token = self.fetch_git_credentials()?;
         self.sess
             .repo
-            .push_branch(&self.release_branch)
+            .push_branch(&self.release_branch, Some(&git_token))
             .context("failed to push release branch")?;
         Ok(())
+    }
+
+    fn fetch_git_credentials(&self) -> Result<String> {
+        let token = load_token()
+            .context("failed to load token")?
+            .context("not authenticated - run 'belaf install' first")?;
+
+        let upstream_url = self
+            .sess
+            .repo
+            .upstream_url()
+            .context("failed to get upstream URL")?;
+
+        let (owner, repo) =
+            parse_github_url(&upstream_url).context("failed to parse GitHub URL from upstream")?;
+
+        let api_client = ApiClient::new();
+
+        let future = async {
+            api_client
+                .get_git_credentials(&token, &owner, &repo)
+                .await
+                .context("failed to get git credentials from API")
+        };
+
+        let credentials = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+            Err(_) => {
+                let rt =
+                    tokio::runtime::Runtime::new().context("failed to create async runtime")?;
+                rt.block_on(future)
+            }
+        }?;
+
+        Ok(credentials.token)
     }
 
     fn create_pull_request(
@@ -946,4 +984,24 @@ pub fn generate_and_write_project_changelog(
         has_user_changes: true,
         processed_commits: commit_list,
     })
+}
+
+fn parse_github_url(url: &str) -> Result<(String, String)> {
+    if let Some(rest) = url.strip_prefix("git@github.com:") {
+        let repo = rest.trim_end_matches(".git");
+        let parts: Vec<&str> = repo.split('/').collect();
+        if parts.len() == 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+
+    if let Some(rest) = url.strip_prefix("https://github.com/") {
+        let repo = rest.trim_end_matches(".git");
+        let parts: Vec<&str> = repo.split('/').collect();
+        if parts.len() >= 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
+        }
+    }
+
+    anyhow::bail!("Could not parse GitHub URL: {}", url)
 }

@@ -941,22 +941,19 @@ impl Repository {
         Ok(())
     }
 
-    pub fn push_branch(&self, branch_name: &str) -> Result<()> {
+    pub fn push_branch(&self, branch_name: &str, git_token: Option<&str>) -> Result<()> {
         let mut remote = self.repo.find_remote(&self.upstream_name)?;
         let refspec = format!("refs/heads/{}:refs/heads/{}", branch_name, branch_name);
 
+        let token_for_closure = git_token.map(|s| s.to_string());
+
         let mut callbacks = git2::RemoteCallbacks::new();
-        callbacks.credentials(|_url, username_from_url, allowed_types| {
+        callbacks.credentials(move |_url, username_from_url, allowed_types| {
             if allowed_types.contains(git2::CredentialType::SSH_KEY) {
                 git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git"))
             } else if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
-                let token = crate::core::auth::token::load_token()
-                    .ok()
-                    .flatten()
-                    .filter(|t| !t.is_expired())
-                    .map(|t| t.access_token);
-                if let Some(token) = token {
-                    git2::Cred::userpass_plaintext("x-access-token", &token)
+                if let Some(ref token) = token_for_closure {
+                    git2::Cred::userpass_plaintext("x-access-token", token)
                 } else {
                     git2::Cred::default()
                 }

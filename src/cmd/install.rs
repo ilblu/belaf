@@ -30,10 +30,10 @@ pub async fn run() -> Result<i32> {
 
         let spinner = create_spinner("Waiting for authorization...");
 
-        let token = poll_for_token(&client, &device_codes).await?;
+        let token_result = poll_for_token(&client, &device_codes).await?;
         spinner.finish_and_clear();
 
-        let stored_token = StoredToken::new(token, device_codes.expires_in.into());
+        let stored_token = StoredToken::new(token_result.access_token, token_result.expires_in);
         save_token(&stored_token)?;
 
         let user = client.get_user_info(&stored_token).await?;
@@ -209,10 +209,15 @@ async fn check_existing_auth(client: &ApiClient) -> bool {
     }
 }
 
+struct TokenResult {
+    access_token: String,
+    expires_in: Option<u64>,
+}
+
 async fn poll_for_token(
     client: &ApiClient,
     codes: &DeviceCodeResponse,
-) -> Result<String, ApiError> {
+) -> Result<TokenResult, ApiError> {
     let mut interval = codes.interval.max(5);
     let deadline = Instant::now() + Duration::from_secs(codes.expires_in);
 
@@ -226,7 +231,10 @@ async fn poll_for_token(
         let response = client.poll_for_token(&codes.device_code).await?;
 
         if response.is_success() {
-            return Ok(response.access_token.expect("Token must exist on success"));
+            return Ok(TokenResult {
+                access_token: response.access_token.expect("Token must exist on success"),
+                expires_in: response.expires_in,
+            });
         }
 
         match response.error_code() {

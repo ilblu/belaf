@@ -177,6 +177,27 @@ pub struct CreatePullRequestResponse {
     pub state: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct GitPushFile {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct GitPushRequest {
+    pub branch: String,
+    pub base: String,
+    pub files: Vec<GitPushFile>,
+    pub message: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitPushResponse {
+    pub sha: String,
+    pub branch: String,
+    pub url: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct GitRef {
     #[serde(rename = "ref")]
@@ -203,4 +224,10 @@ pub struct LatestReleaseResponse {
     pub html_url: String,
     #[serde(default)]
     pub published_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GitCredentialsResponse {
+    pub token: String,
+    pub expires_at: String,
 }

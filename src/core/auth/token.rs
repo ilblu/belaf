@@ -5,7 +5,15 @@ use keyring::Entry;
 const SERVICE_NAME: &str = "belaf";
 const TOKEN_KEY: &str = "api-token";
 
+fn is_keyring_disabled() -> bool {
+    std::env::var("BELAF_NO_KEYRING").is_ok()
+}
+
 pub fn save_token(token: &StoredToken) -> Result<()> {
+    if is_keyring_disabled() {
+        return Ok(());
+    }
+
     let entry = Entry::new(SERVICE_NAME, TOKEN_KEY)
         .map_err(|e| CliError::TokenStorage(format!("Failed to create keyring entry: {}", e)))?;
 
@@ -20,6 +28,10 @@ pub fn save_token(token: &StoredToken) -> Result<()> {
 }
 
 pub fn load_token() -> Result<Option<StoredToken>> {
+    if is_keyring_disabled() {
+        return Ok(None);
+    }
+
     let entry = Entry::new(SERVICE_NAME, TOKEN_KEY)
         .map_err(|e| CliError::TokenStorage(format!("Failed to create keyring entry: {}", e)))?;
 
