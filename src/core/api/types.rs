@@ -66,7 +66,13 @@ impl StoredToken {
     }
 
     pub fn is_expired(&self) -> bool {
-        self.expires_at.map(|exp| exp < Utc::now()).unwrap_or(false)
+        match self.expires_at {
+            Some(exp) => exp < Utc::now(),
+            None => {
+                tracing::warn!("Token has no expiry timestamp - treating as expired for safety");
+                true
+            }
+        }
     }
 }
 

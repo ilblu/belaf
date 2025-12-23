@@ -1,6 +1,7 @@
 use crate::core::api::StoredToken;
 use crate::error::{CliError, Result};
 use keyring::Entry;
+use tracing::warn;
 
 const SERVICE_NAME: &str = "belaf";
 const TOKEN_KEY: &str = "api-token";
@@ -11,6 +12,7 @@ fn is_keyring_disabled() -> bool {
 
 pub fn save_token(token: &StoredToken) -> Result<()> {
     if is_keyring_disabled() {
+        warn!("BELAF_NO_KEYRING is set - token will not be persisted");
         return Ok(());
     }
 

@@ -4,12 +4,16 @@ use owo_colors::OwoColorize;
 use std::process::Command;
 use std::time::{Duration, Instant};
 use tokio::time::sleep;
+use tracing::warn;
 
 use crate::core::api::{ApiClient, ApiError, DeviceCodeResponse, StoredToken};
 use crate::core::auth::token::{delete_token, load_token, save_token};
+use crate::core::git::url::parse_github_url;
 
 const MIN_POLL_INTERVAL_SECS: u64 = 5;
 const INSTALLATION_TIMEOUT_SECS: u64 = 300;
+const INSTALLATION_POLL_INTERVAL_SECS: u64 = 3;
+const MAX_TRANSIENT_ERRORS: u32 = 5;
 
 pub async fn run() -> Result<i32> {
     let client = ApiClient::new();
@@ -100,16 +104,17 @@ pub async fn run() -> Result<i32> {
 
     let spinner = create_spinner("Waiting for installation...");
     let deadline = Instant::now() + Duration::from_secs(INSTALLATION_TIMEOUT_SECS);
+    let mut transient_error_count: u32 = 0;
 
     loop {
+        sleep(Duration::from_secs(INSTALLATION_POLL_INTERVAL_SECS)).await;
+
         if Instant::now() > deadline {
             spinner.finish_and_clear();
             println!("\n{} Installation timed out.", "✗".red());
             println!("Please run 'belaf install' again after installing the GitHub App.");
             return Ok(1);
         }
-
-        sleep(Duration::from_secs(3)).await;
 
         match client.check_installation(&token, &full_repo).await {
             Ok(result) if result.installed => {
@@ -125,7 +130,25 @@ pub async fn run() -> Result<i32> {
                 );
                 return Ok(0);
             }
-            Ok(_) => continue,
+            Ok(_) => {
+                transient_error_count = 0;
+                continue;
+            }
+            Err(ref e) if e.is_transient() => {
+                transient_error_count += 1;
+                warn!(
+                    "Transient error checking installation (attempt {}/{}): {}",
+                    transient_error_count, MAX_TRANSIENT_ERRORS, e
+                );
+                if transient_error_count >= MAX_TRANSIENT_ERRORS {
+                    spinner.finish_and_clear();
+                    return Err(anyhow::anyhow!(
+                        "Too many network errors while checking installation: {}",
+                        e
+                    ));
+                }
+                continue;
+            }
             Err(e) => {
                 spinner.finish_and_clear();
                 return Err(e.into());
@@ -219,11 +242,11 @@ async fn poll_for_token(
     let deadline = Instant::now() + Duration::from_secs(codes.expires_in);
 
     loop {
+        sleep(Duration::from_secs(interval)).await;
+
         if Instant::now() > deadline {
             return Err(ApiError::DeviceCodeExpired);
         }
-
-        sleep(Duration::from_secs(interval)).await;
 
         let response = client.poll_for_token(&codes.device_code).await?;
 
@@ -262,27 +285,7 @@ fn detect_repository() -> Result<(String, String)> {
     }
 
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    parse_github_remote(&url)
-}
-
-fn parse_github_remote(url: &str) -> Result<(String, String)> {
-    if let Some(rest) = url.strip_prefix("git@github.com:") {
-        let repo = rest.trim_end_matches(".git");
-        let parts: Vec<&str> = repo.split('/').collect();
-        if parts.len() == 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-            return Ok((parts[0].to_string(), parts[1].to_string()));
-        }
-    }
-
-    if let Some(rest) = url.strip_prefix("https://github.com/") {
-        let repo = rest.trim_end_matches(".git");
-        let parts: Vec<&str> = repo.split('/').collect();
-        if parts.len() >= 2 && !parts[0].is_empty() && !parts[1].is_empty() {
-            return Ok((parts[0].to_string(), parts[1].to_string()));
-        }
-    }
-
-    anyhow::bail!("Could not parse GitHub remote URL: {}", url)
+    parse_github_url(&url)
 }
 
 fn create_spinner(message: &str) -> ProgressBar {

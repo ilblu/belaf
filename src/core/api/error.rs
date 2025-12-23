@@ -1,9 +1,13 @@
 use thiserror::Error;
 
 #[derive(Debug, Error)]
+#[non_exhaustive]
 pub enum ApiError {
     #[error("HTTP request failed: {0}")]
     Request(#[from] reqwest::Error),
+
+    #[error("Network error (transient): {0}")]
+    Network(String),
 
     #[error("API returned error: {status} - {message}")]
     ApiResponse { status: u16, message: String },
@@ -31,4 +35,18 @@ pub enum ApiError {
 
     #[error("JSON parsing error: {0}")]
     Json(#[from] serde_json::Error),
+
+    #[error("Failed to create HTTP client: {0}")]
+    ClientCreation(String),
+}
+
+impl ApiError {
+    pub fn is_transient(&self) -> bool {
+        match self {
+            ApiError::Network(_) => true,
+            ApiError::Request(_) => true,
+            ApiError::ApiResponse { status, .. } => *status >= 500,
+            _ => false,
+        }
+    }
 }

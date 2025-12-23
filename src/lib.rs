@@ -38,6 +38,7 @@ pub mod core {
         pub mod branch;
         pub mod gitignore;
         pub mod repository;
+        pub mod url;
         pub mod utils;
         pub mod validate;
     }
