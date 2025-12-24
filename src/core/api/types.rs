@@ -75,19 +75,24 @@ impl StoredToken {
         }
     }
 
-    /// Checks if the token has expired.
+    /// Checks if the token has expired or will expire soon.
     ///
     /// # Behavior
     ///
-    /// - Returns `true` if the token's expiry time has passed
+    /// - Returns `true` if the token expires within 60 seconds
     /// - Returns `true` if no expiry time is set (fail-safe: assumes expired)
+    ///
+    /// The 60-second buffer prevents race conditions where a token passes
+    /// the expiry check but expires before the API request completes.
     ///
     /// The fail-safe behavior for missing expiry ensures that tokens without
     /// proper expiration tracking (e.g., legacy tokens or API bugs) will
     /// trigger re-authentication rather than potentially using invalid tokens.
     pub fn is_expired(&self) -> bool {
+        const EXPIRY_BUFFER_SECS: i64 = 60;
+
         match self.expires_at {
-            Some(exp) => exp < Utc::now(),
+            Some(exp) => exp < Utc::now() + chrono::Duration::seconds(EXPIRY_BUFFER_SECS),
             None => {
                 tracing::warn!("Token has no expiry timestamp - treating as expired for safety");
                 true

@@ -48,10 +48,11 @@ impl ApiClient {
             .build()
             .map_err(|e| ApiError::ClientCreation(e.to_string()))?;
 
-        Ok(Self {
-            client,
-            base_url: std::env::var("BELAF_API_URL").unwrap_or_else(|_| API_BASE_URL.to_string()),
-        })
+        let base_url = std::env::var("BELAF_API_URL").unwrap_or_else(|_| API_BASE_URL.to_string());
+
+        validate_api_url(&base_url)?;
+
+        Ok(Self { client, base_url })
     }
 
     /// Creates a new API client with a custom base URL.
@@ -453,6 +454,20 @@ impl Default for ApiClient {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn validate_api_url(url: &str) -> Result<(), ApiError> {
+    if url.starts_with("https://") {
+        return Ok(());
+    }
+
+    if url.starts_with("http://localhost") || url.starts_with("http://127.0.0.1") {
+        return Ok(());
+    }
+
+    Err(ApiError::InvalidConfiguration(
+        "BELAF_API_URL must use HTTPS (or localhost for development)".into(),
+    ))
 }
 
 #[cfg(test)]

@@ -38,6 +38,9 @@ pub enum ApiError {
 
     #[error("Failed to create HTTP client: {0}")]
     ClientCreation(String),
+
+    #[error("Invalid configuration: {0}")]
+    InvalidConfiguration(String),
 }
 
 impl ApiError {
