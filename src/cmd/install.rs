@@ -242,7 +242,7 @@ async fn poll_for_token(
     let mut interval = codes.interval.max(MIN_POLL_INTERVAL_SECS);
     let deadline = Instant::now() + Duration::from_secs(codes.expires_in);
     let mut first_poll = true;
-    let mut retry_count: u32 = 0;
+    let mut error_count: u32 = 0;
 
     loop {
         if !first_poll {
@@ -254,16 +254,28 @@ async fn poll_for_token(
             return Err(ApiError::DeviceCodeExpired);
         }
 
-        retry_count += 1;
-        if retry_count > MAX_POLL_RETRIES {
-            warn!(
-                "Reached maximum poll retries ({}) while waiting for authorization",
-                MAX_POLL_RETRIES
-            );
-            return Err(ApiError::DeviceCodeExpired);
-        }
-
-        let response = client.poll_for_token(&codes.device_code).await?;
+        let response = match client.poll_for_token(&codes.device_code).await {
+            Ok(r) => {
+                error_count = 0;
+                r
+            }
+            Err(e) if e.is_transient() => {
+                error_count += 1;
+                if error_count > MAX_POLL_RETRIES {
+                    warn!(
+                        "Reached maximum error retries ({}) while polling for token",
+                        MAX_POLL_RETRIES
+                    );
+                    return Err(e);
+                }
+                warn!(
+                    "Transient error polling for token (attempt {}): {}",
+                    error_count, e
+                );
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
 
         if response.is_success() {
             let access_token = response.access_token.ok_or_else(|| {
