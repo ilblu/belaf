@@ -27,6 +27,9 @@ pub enum ApiError {
     #[error("Rate limited. Slow down polling.")]
     SlowDown,
 
+    #[error("Rate limited (429). Retry after {retry_after_secs} seconds.")]
+    RateLimited { retry_after_secs: u64 },
+
     #[error("Token storage error: {0}")]
     TokenStorage(String),
 
@@ -48,6 +51,7 @@ impl ApiError {
         match self {
             ApiError::Network(_) => true,
             ApiError::Request(_) => true,
+            ApiError::RateLimited { .. } => true,
             ApiError::ApiResponse { status, .. } => *status >= 500,
             _ => false,
         }

@@ -77,6 +77,18 @@ impl ApiClient {
             return Err(ApiError::Unauthorized);
         }
 
+        if response.status() == StatusCode::TOO_MANY_REQUESTS {
+            let retry_after = response
+                .headers()
+                .get("retry-after")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or(60);
+            return Err(ApiError::RateLimited {
+                retry_after_secs: retry_after,
+            });
+        }
+
         if !response.status().is_success() {
             return Err(ApiError::ApiResponse {
                 status: response.status().as_u16(),

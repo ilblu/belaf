@@ -66,9 +66,13 @@ impl StoredToken {
     ///
     /// If `expires_in_secs` is provided, the expiry timestamp is calculated
     /// from the current time. The belaf API should always provide this value.
+    ///
+    /// Values larger than `i64::MAX` seconds are clamped to prevent overflow.
     pub fn new(access_token: String, expires_in_secs: Option<u64>) -> Self {
-        let expires_at =
-            expires_in_secs.map(|secs| Utc::now() + chrono::Duration::seconds(secs as i64));
+        let expires_at = expires_in_secs.map(|secs| {
+            let safe_secs = i64::try_from(secs).unwrap_or(i64::MAX);
+            Utc::now() + chrono::Duration::seconds(safe_secs)
+        });
         Self {
             access_token,
             expires_at,

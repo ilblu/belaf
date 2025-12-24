@@ -14,6 +14,7 @@ const MIN_POLL_INTERVAL_SECS: u64 = 5;
 const INSTALLATION_TIMEOUT_SECS: u64 = 300;
 const INSTALLATION_POLL_INTERVAL_SECS: u64 = 3;
 const MAX_TRANSIENT_ERRORS: u32 = 5;
+const MAX_POLL_RETRIES: u32 = 180;
 
 pub async fn run() -> Result<i32> {
     let client = ApiClient::new();
@@ -241,6 +242,7 @@ async fn poll_for_token(
     let mut interval = codes.interval.max(MIN_POLL_INTERVAL_SECS);
     let deadline = Instant::now() + Duration::from_secs(codes.expires_in);
     let mut first_poll = true;
+    let mut retry_count: u32 = 0;
 
     loop {
         if !first_poll {
@@ -249,6 +251,15 @@ async fn poll_for_token(
         first_poll = false;
 
         if Instant::now() > deadline {
+            return Err(ApiError::DeviceCodeExpired);
+        }
+
+        retry_count += 1;
+        if retry_count > MAX_POLL_RETRIES {
+            warn!(
+                "Reached maximum poll retries ({}) while waiting for authorization",
+                MAX_POLL_RETRIES
+            );
             return Err(ApiError::DeviceCodeExpired);
         }
 
@@ -294,11 +305,10 @@ fn detect_repository() -> Result<(String, String)> {
 
 fn create_spinner(message: &str) -> ProgressBar {
     let spinner = ProgressBar::new_spinner();
-    spinner.set_style(
-        ProgressStyle::default_spinner()
-            .template("{spinner:.cyan} {msg}")
-            .expect("Invalid spinner template"),
-    );
+    let style = ProgressStyle::default_spinner()
+        .template("{spinner:.cyan} {msg}")
+        .unwrap_or_else(|_| ProgressStyle::default_spinner());
+    spinner.set_style(style);
     spinner.set_message(message.to_string());
     spinner.enable_steady_tick(Duration::from_millis(100));
     spinner
