@@ -1,29 +1,10 @@
-use std::time::Duration;
-
 use dyn_clone::DynClone;
-use http_cache_reqwest::{CACacheManager, Cache, CacheMode, HttpCache, HttpCacheOptions};
-use reqwest::header::{HeaderMap, HeaderValue};
-use reqwest::Client;
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use secrecy::{ExposeSecret, SecretString};
 use serde::{Deserialize, Serialize};
 use time::format_description::well_known::Rfc3339;
 use time::OffsetDateTime;
 
 use super::contributor::RemoteContributor;
-use super::error::{Error, Result};
 
-/// HTTP User-Agent header sent with API requests, identifying this tool and version.
-pub const USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
-
-/// Timeout in seconds for individual HTTP requests to remote APIs.
-pub const REQUEST_TIMEOUT: u64 = 30;
-
-/// Keep-alive duration in seconds for HTTP connection pooling.
-pub const REQUEST_KEEP_ALIVE: u64 = 60;
-
-/// Maximum number of items to request per page from paginated APIs.
-/// GitHub's maximum is 100, which we use to minimize the number of requests.
 pub const MAX_PAGE_SIZE: usize = 100;
 
 pub trait RemoteCommit: DynClone + Send + Sync {
@@ -54,42 +35,4 @@ pub type RemoteMetadata = (Vec<Box<dyn RemoteCommit>>, Vec<Box<dyn RemotePullReq
 #[derive(Debug, Default, Clone, Eq, PartialEq, Deserialize, Serialize)]
 pub struct RemoteReleaseMetadata {
     pub contributors: Vec<RemoteContributor>,
-}
-
-pub fn create_http_client(
-    accept_header: &str,
-    token: Option<&SecretString>,
-) -> Result<ClientWithMiddleware> {
-    let mut headers = HeaderMap::new();
-    headers.insert(
-        reqwest::header::ACCEPT,
-        HeaderValue::from_str(accept_header)?,
-    );
-    if let Some(token) = token {
-        headers.insert(
-            reqwest::header::AUTHORIZATION,
-            format!("Bearer {}", token.expose_secret()).parse()?,
-        );
-    }
-    headers.insert(reqwest::header::USER_AGENT, USER_AGENT.parse()?);
-
-    let client = Client::builder()
-        .timeout(Duration::from_secs(REQUEST_TIMEOUT))
-        .tcp_keepalive(Duration::from_secs(REQUEST_KEEP_ALIVE))
-        .default_headers(headers)
-        .build()?;
-
-    let cache_path = dirs::cache_dir()
-        .ok_or_else(|| Error::ChangelogError("failed to find cache directory".to_string()))?
-        .join(env!("CARGO_PKG_NAME"));
-
-    let client = ClientBuilder::new(client)
-        .with(Cache(HttpCache {
-            mode: CacheMode::Default,
-            manager: CACacheManager { path: cache_path },
-            options: HttpCacheOptions::default(),
-        }))
-        .build();
-
-    Ok(client)
 }

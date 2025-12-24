@@ -10,7 +10,7 @@ check:
 
 test:
     @echo "🧪 Running tests..."
-    cargo test --all-features
+    BELAF_NO_KEYRING=1 cargo test --all-features
 
 lint:
     @echo "📋 Running clippy..."

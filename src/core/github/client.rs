@@ -1,97 +1,47 @@
-//! Release automation utilities related to the GitHub service.
-
 use anyhow::{anyhow, Context};
-use clap::Parser;
-use git_url_parse::types::provider::GenericProvider;
-use octocrab::Octocrab;
-use tracing::{debug, info};
+use tracing::info;
 
-use crate::core::{env::require_var, errors::Result, session::AppSession};
+use crate::core::api::{ApiClient, CreatePullRequestParams, StoredToken};
+use crate::core::auth::token::load_token;
+use crate::core::errors::Result;
+use crate::core::session::AppSession;
 
 pub struct GitHubInformation {
     owner: String,
     repo: String,
-    client: Octocrab,
+    api_client: ApiClient,
+    token: StoredToken,
 }
 
 impl GitHubInformation {
     pub fn new(sess: &AppSession) -> Result<Self> {
-        Self::new_with_scopes(sess, &["repo"])
-    }
-
-    pub fn new_with_scopes(sess: &AppSession, required_scopes: &[&str]) -> Result<Self> {
-        let is_ci = sess
-            .execution_environment()
-            .map(|env| matches!(env, crate::core::session::ExecutionEnvironment::Ci))
-            .unwrap_or(false);
-
-        let token = require_var("GITHUB_TOKEN")
-            .inspect_err(|e| {
-                debug!("GITHUB_TOKEN env var not set: {}", e);
-            })
-            .ok()
-            .or_else(|| {
-                crate::core::auth::token::load_token()
-                    .inspect_err(|e| {
-                        debug!("keyring token load failed: {}", e);
-                    })
-                    .ok()
-            })
+        let token = load_token()
+            .map_err(|e| anyhow!("Failed to load token: {}", e))?
             .ok_or_else(|| {
-                if is_ci {
-                    anyhow!(
-                        "GitHub authentication required in CI. Set the GITHUB_TOKEN environment variable \
-                        (typically via secrets.GITHUB_TOKEN in GitHub Actions)."
-                    )
-                } else {
-                    anyhow!(
-                        "GitHub authentication required. Run 'belaf login' to authenticate, \
-                        or set the GITHUB_TOKEN environment variable."
-                    )
-                }
+                anyhow!("Authentication required. Run 'belaf install' to authenticate.")
             })?;
 
-        if !required_scopes.is_empty() {
-            if let Err(e) =
-                crate::core::auth::github::validate_token_scopes_blocking(&token, required_scopes)
-            {
-                let revoke_url = crate::core::auth::github::get_revoke_url();
-                return Err(anyhow!(
-                    "GitHub token is missing required permissions.\n\n\
-                    Error: {}\n\n\
-                    To fix this:\n\
-                    1. Revoke the current authorization at:\n   {}\n\
-                    2. Run 'belaf auth login --github' again\n\
-                    3. When prompted, grant repository access",
-                    e,
-                    revoke_url
-                ));
-            }
+        if token.is_expired() {
+            return Err(anyhow!(
+                "Token expired. Run 'belaf install' to re-authenticate."
+            ));
         }
 
         let upstream_url = sess.repo.upstream_url()?;
         info!("upstream url: {}", upstream_url);
 
-        let upstream_url = git_url_parse::GitUrl::parse(&upstream_url)
-            .map_err(|e| anyhow!("cannot parse upstream Git URL `{}`: {}", upstream_url, e))?;
-
-        let provider: GenericProvider = upstream_url
-            .provider_info()
-            .map_err(|e| anyhow!("cannot extract provider info from Git URL: {}", e))?;
-
-        let owner = provider.owner().to_string();
-        let repo = provider.repo().to_string();
-
-        let client = Octocrab::builder()
-            .personal_token(token)
-            .build()
-            .context("failed to build GitHub client")?;
+        let (owner, repo) = parse_github_url(&upstream_url)?;
 
         Ok(GitHubInformation {
             owner,
             repo,
-            client,
+            api_client: ApiClient::new(),
+            token,
         })
+    }
+
+    pub fn new_with_scopes(sess: &AppSession, _required_scopes: &[&str]) -> Result<Self> {
+        Self::new(sess)
     }
 
     pub fn create_pull_request(
@@ -103,28 +53,31 @@ impl GitHubInformation {
     ) -> Result<String> {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
-        let client = self.client.clone();
+        let token = self.token.clone();
         let title = title.to_string();
         let head = head.to_string();
         let base = base.to_string();
         let body = body.to_string();
+        let api_client = self.api_client.clone();
 
         let future = async move {
-            let pr = client
-                .pulls(&owner, &repo)
-                .create(&title, &head, &base)
-                .body(&body)
-                .send()
+            let params = CreatePullRequestParams {
+                token: &token,
+                owner: &owner,
+                repo: &repo,
+                title: &title,
+                head: &head,
+                base: &base,
+                body: &body,
+            };
+
+            let pr = api_client
+                .create_pull_request(params)
                 .await
                 .context("failed to create pull request")?;
 
-            let html_url = pr
-                .html_url
-                .ok_or_else(|| anyhow!("PR response missing html_url"))?
-                .to_string();
-
-            info!("created pull request: {}", html_url);
-            Ok(html_url)
+            info!("created pull request: {}", pr.html_url);
+            Ok(pr.html_url)
         };
 
         match tokio::runtime::Handle::try_current() {
@@ -138,73 +91,28 @@ impl GitHubInformation {
     }
 }
 
-/// The `github` subcommands.
-#[derive(Debug, Eq, PartialEq, Parser)]
-pub enum GithubCommands {
-    #[command(name = "_credential-helper", hide = true)]
-    /// (hidden) github credential helper
-    CredentialHelper(CredentialHelperCommand),
-
-    #[command(name = "install-credential-helper")]
-    /// Install Belaf as a Git "credential helper", using $GITHUB_TOKEN to log in
-    InstallCredentialHelper(InstallCredentialHelperCommand),
+impl Clone for ApiClient {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
 }
 
-#[derive(Debug, Eq, PartialEq, Parser)]
-pub struct GithubCommand {
-    #[command(subcommand)]
-    command: GithubCommands,
-}
-
-impl GithubCommand {
-    pub fn execute(self) -> Result<i32> {
-        match self.command {
-            GithubCommands::CredentialHelper(o) => o.execute(),
-            GithubCommands::InstallCredentialHelper(o) => o.execute(),
+fn parse_github_url(url: &str) -> Result<(String, String)> {
+    if let Some(rest) = url.strip_prefix("git@github.com:") {
+        let repo = rest.trim_end_matches(".git");
+        let parts: Vec<&str> = repo.split('/').collect();
+        if parts.len() == 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
         }
     }
-}
 
-/// hidden Git credential helper command
-#[derive(Debug, Eq, PartialEq, Parser)]
-pub struct CredentialHelperCommand {
-    #[arg(help = "The operation")]
-    operation: String,
-}
-
-impl CredentialHelperCommand {
-    pub fn execute(self) -> Result<i32> {
-        if self.operation != "get" {
-            info!("ignoring Git credential operation `{}`", self.operation);
-        } else {
-            let token = require_var("GITHUB_TOKEN")?;
-            println!("username=token");
-            println!("password={token}");
+    if let Some(rest) = url.strip_prefix("https://github.com/") {
+        let repo = rest.trim_end_matches(".git");
+        let parts: Vec<&str> = repo.split('/').collect();
+        if parts.len() >= 2 {
+            return Ok((parts[0].to_string(), parts[1].to_string()));
         }
-
-        Ok(0)
     }
-}
 
-/// Install as a Git credential helper
-#[derive(Debug, Eq, PartialEq, Parser)]
-pub struct InstallCredentialHelperCommand {}
-
-impl InstallCredentialHelperCommand {
-    pub fn execute(self) -> Result<i32> {
-        let this_exe = std::env::current_exe()?;
-        let this_exe = this_exe.to_str().ok_or_else(|| {
-            anyhow!(
-                "cannot install belaf as a Git \
-                 credential helper because its executable path is not Unicode"
-            )
-        })?;
-        let mut cfg = git2::Config::open_default().context("cannot open Git configuration")?;
-        cfg.set_str(
-            "credential.helper",
-            &format!("{this_exe} github _credential-helper"),
-        )
-        .context("cannot update Git configuration setting `credential.helper`")?;
-        Ok(0)
-    }
+    Err(anyhow!("Could not parse GitHub URL: {}", url))
 }

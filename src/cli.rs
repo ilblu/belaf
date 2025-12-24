@@ -31,7 +31,13 @@ pub struct Cli {
 
 #[derive(Subcommand)]
 pub enum Commands {
-    #[command(subcommand, about = "Authentication management")]
+    #[command(
+        about = "Install belaf and connect to your repository",
+        long_about = "Authenticate with belaf and install the GitHub App on your repository.\n\nThis command:\n  • Authenticates you via the belaf dashboard\n  • Detects your current repository\n  • Installs the GitHub App if needed\n\nAfter installation, you can use all belaf commands."
+    )]
+    Install,
+
+    #[command(subcommand, about = "Authentication status and management")]
     Auth(AuthCommands),
 
     #[command(about = "Generate shell completions")]
@@ -76,20 +82,14 @@ pub enum Commands {
 
 #[derive(Subcommand)]
 pub enum AuthCommands {
-    #[command(
-        about = "Authenticate with GitHub",
-        long_about = "Authenticate with GitHub for PR creation and release management.\n\nCredentials are stored securely in the system keychain."
-    )]
-    Login {
-        #[arg(long, help = "Skip opening browser and show URL only")]
-        no_browser: bool,
-    },
-
-    #[command(about = "Sign out from GitHub")]
-    Logout,
-
     #[command(about = "Show authentication status")]
     Status,
+
+    #[command(about = "Show current user name")]
+    Whoami,
+
+    #[command(about = "Log out and remove stored credentials")]
+    Logout,
 }
 
 #[derive(Args)]

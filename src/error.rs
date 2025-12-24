@@ -28,6 +28,9 @@ pub enum CliError {
 
     #[error("Project not initialized. Run 'belaf init' to get started.")]
     ProjectNotInitialized,
+
+    #[error("API error: {0}")]
+    Api(#[from] crate::core::api::ApiError),
 }
 
 pub type Result<T> = std::result::Result<T, CliError>;

@@ -2,12 +2,12 @@ pub mod cli;
 pub mod error;
 
 pub mod cmd {
-    pub mod auth;
     pub mod changelog;
     pub mod completions;
     pub mod dashboard;
     pub mod graph;
     pub mod init;
+    pub mod install;
     pub mod prepare;
     pub mod status;
 }
@@ -28,8 +28,9 @@ pub mod core {
     pub mod version;
     pub mod workflow;
 
+    pub mod api;
+
     pub mod auth {
-        pub mod github;
         pub mod token;
     }
 
@@ -37,6 +38,7 @@ pub mod core {
         pub mod branch;
         pub mod gitignore;
         pub mod repository;
+        pub mod url;
         pub mod utils;
         pub mod validate;
     }
@@ -75,10 +77,35 @@ use cli::{AuthCommands, Cli, Commands};
 pub async fn execute(cli: Cli) -> Result<()> {
     let command = cli.command.expect("Command must be present");
     match command {
+        Commands::Install => {
+            let exit_code = cmd::install::run().await?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
         Commands::Auth(auth_cmd) => match auth_cmd {
-            AuthCommands::Login { no_browser } => cmd::auth::login(no_browser).await,
-            AuthCommands::Logout => cmd::auth::logout().await,
-            AuthCommands::Status => cmd::auth::status().await,
+            AuthCommands::Status => {
+                let exit_code = cmd::install::status().await?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
+            AuthCommands::Whoami => {
+                let exit_code = cmd::install::whoami().await?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
+            AuthCommands::Logout => {
+                let exit_code = cmd::install::logout().await?;
+                if exit_code != 0 {
+                    std::process::exit(exit_code);
+                }
+                Ok(())
+            }
         },
         Commands::Completions { shell } => {
             cmd::completions::generate(shell);
