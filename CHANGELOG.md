@@ -1,3 +1,10 @@
+# [1.3.0](https://github.com/ilblu/belaf/compare/v1.2.0...v1.3.0) (2025-12-24)
+
+
+### Features
+
+* **cli:** add belaf install command with API authentication ([#13](https://github.com/ilblu/belaf/issues/13)) ([146be3e](https://github.com/ilblu/belaf/commit/146be3ecfbf26dfcb2f23496db0a938208cce1ff))
+
 # [1.2.0](https://github.com/ilblu/belaf/compare/v1.1.4...v1.2.0) (2025-12-22)
 
 
