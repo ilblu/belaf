@@ -9,6 +9,15 @@ fn create_test_token() -> StoredToken {
     }
 }
 
+#[test]
+fn test_stored_token_serde_roundtrip() {
+    let token = StoredToken::new("test-token".to_string(), Some(3600));
+    let json = serde_json::to_string(&token).unwrap();
+    let deserialized: StoredToken = serde_json::from_str(&json).unwrap();
+    assert_eq!(token.access_token, deserialized.access_token);
+    assert!(deserialized.expires_at.is_some());
+}
+
 #[tokio::test]
 async fn test_request_device_code_success() {
     let mock_server = MockServer::start().await;
