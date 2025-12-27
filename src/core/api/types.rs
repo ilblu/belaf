@@ -1,5 +1,5 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use time::OffsetDateTime;
 
 #[derive(Debug, Serialize)]
 pub struct DeviceCodeRequest {
@@ -57,8 +57,8 @@ impl TokenPollResponse {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredToken {
     pub access_token: String,
-    #[serde(default)]
-    pub expires_at: Option<DateTime<Utc>>,
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub expires_at: Option<OffsetDateTime>,
 }
 
 impl StoredToken {
@@ -71,7 +71,7 @@ impl StoredToken {
     pub fn new(access_token: String, expires_in_secs: Option<u64>) -> Self {
         let expires_at = expires_in_secs.map(|secs| {
             let safe_secs = i64::try_from(secs).unwrap_or(i64::MAX);
-            Utc::now() + chrono::Duration::seconds(safe_secs)
+            OffsetDateTime::now_utc() + time::Duration::seconds(safe_secs)
         });
         Self {
             access_token,
@@ -96,7 +96,9 @@ impl StoredToken {
         const EXPIRY_BUFFER_SECS: i64 = 60;
 
         match self.expires_at {
-            Some(exp) => exp < Utc::now() + chrono::Duration::seconds(EXPIRY_BUFFER_SECS),
+            Some(exp) => {
+                exp < OffsetDateTime::now_utc() + time::Duration::seconds(EXPIRY_BUFFER_SECS)
+            }
             None => {
                 tracing::warn!("Token has no expiry timestamp - treating as expired for safety");
                 true

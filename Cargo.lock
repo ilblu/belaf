@@ -243,7 +243,6 @@ dependencies = [
  "base64 0.22.1",
  "cacache",
  "cargo_metadata",
- "chrono",
  "clap",
  "clap_complete",
  "config",

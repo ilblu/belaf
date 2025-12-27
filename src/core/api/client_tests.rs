@@ -5,7 +5,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 fn create_test_token() -> StoredToken {
     StoredToken {
         access_token: "test-token-12345".to_string(),
-        expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+        expires_at: Some(time::OffsetDateTime::now_utc() + time::Duration::hours(1)),
     }
 }
 
