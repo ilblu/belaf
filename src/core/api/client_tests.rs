@@ -5,8 +5,17 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 fn create_test_token() -> StoredToken {
     StoredToken {
         access_token: "test-token-12345".to_string(),
-        expires_at: Some(chrono::Utc::now() + chrono::Duration::hours(1)),
+        expires_at: Some(time::OffsetDateTime::now_utc() + time::Duration::hours(1)),
     }
+}
+
+#[test]
+fn test_stored_token_serde_roundtrip() {
+    let token = StoredToken::new("test-token".to_string(), Some(3600));
+    let json = serde_json::to_string(&token).unwrap();
+    let deserialized: StoredToken = serde_json::from_str(&json).unwrap();
+    assert_eq!(token.access_token, deserialized.access_token);
+    assert!(deserialized.expires_at.is_some());
 }
 
 #[tokio::test]
