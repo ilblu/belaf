@@ -51,7 +51,7 @@ pub enum Commands {
 
     #[command(
         about = "Initialize release management",
-        long_about = "Initialize release management in your repository.\n\nThis command:\n  • Detects all projects (Rust, Node.js, Python, Go, Elixir, Swift, C#)\n  • Creates .belaf/release.toml configuration\n  • Analyzes project dependencies and builds dependency graph\n  • Sets up changelog tracking\n\nRequires a clean Git working directory unless --force is used."
+        long_about = "Initialize release management in your repository.\n\nThis command:\n  • Detects all projects (Rust, Node.js, Python, Go, Elixir, Swift, C#)\n  • Creates belaf/config.toml configuration\n  • Analyzes project dependencies and builds dependency graph\n  • Sets up changelog tracking\n\nRequires a clean Git working directory unless --force is used."
     )]
     Init(InitArgs),
 

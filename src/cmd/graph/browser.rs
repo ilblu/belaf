@@ -79,7 +79,14 @@ pub fn open_browser(output_path: Option<&str>) -> Result<i32> {
     let graph_data = GraphData { nodes, edges };
     let json_data = serde_json::to_string(&graph_data)?;
 
-    let html_content = HTML_TEMPLATE.replace("/*GRAPH_DATA_PLACEHOLDER*/", &json_data);
+    let project_name = std::env::current_dir()
+        .ok()
+        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "Project".to_string());
+
+    let html_content = HTML_TEMPLATE
+        .replace("/*GRAPH_DATA_PLACEHOLDER*/", &json_data)
+        .replace("{{PROJECT_NAME}}", &project_name);
 
     let output_file = if let Some(path) = output_path {
         std::path::PathBuf::from(path)

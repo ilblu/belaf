@@ -46,23 +46,23 @@ That's it. belaf figures out the rest.
 
 ## Features
 
-- **Smart Detection** — Automatically discovers projects across 6 languages
+- **Smart Detection** — Automatically discovers projects across 7 languages
 - **Dependency Resolution** — Determines correct release order based on inter-project dependencies
 - **Conventional Commits** — Analyzes commit history to suggest semantic version bumps
 - **Interactive TUI** — Beautiful terminal interface with keyboard navigation
-- **CI/CD Ready** — Full automation support with `--no-tui` mode and JSON output
+- **CI/CD Ready** — Full automation support with `--ci` mode and JSON output
 - **PR Workflow** — Creates pull requests with release manifests for team review
+- **Changelog Generation** — Generates beautiful changelogs with Tera templates
 
 ---
 
 ## Quick Start
 
 ```bash
-# Install
-brew install ilblu/tap/belaf
+# Install and authenticate
+belaf install
 
 # Initialize in your monorepo
-cd your-monorepo
 belaf init
 
 # See what changed
@@ -113,10 +113,11 @@ cargo install belaf
 |----------|----------|----------------|
 | **Rust** | `Cargo.toml` | `version` field |
 | **Node.js** | `package.json` | `version` field |
-| **Python** | `pyproject.toml`, `setup.py` | PEP 440 version |
+| **Python** | `pyproject.toml` | PEP 440 version |
 | **Go** | `go.mod` | Git tags |
 | **Elixir** | `mix.exs` | `version` in project |
 | **Swift** | `Package.swift` | Git tags |
+| **C# (.NET)** | `*.csproj` | `<Version>` element |
 
 ---
 
@@ -124,36 +125,58 @@ cargo install belaf
 
 | Command | Description |
 |---------|-------------|
+| `belaf install` | Authenticate and install the GitHub App on your repository |
 | `belaf init` | Initialize release management in your repo |
 | `belaf status` | Show which projects have unreleased changes |
 | `belaf prepare` | Prepare releases with version bumps and changelogs |
+| `belaf changelog` | Generate changelogs from conventional commits |
 | `belaf graph` | Visualize project dependency graph |
+| `belaf auth status` | Show authentication status |
+| `belaf auth whoami` | Show current authenticated user |
+| `belaf auth logout` | Log out and remove stored credentials |
+| `belaf completions <shell>` | Generate shell completions (bash, zsh, fish, powershell) |
 
 ### CI/CD Mode
 
-All commands support `--no-tui` for automation:
+All commands support `--ci` for automation:
 
 ```bash
 # JSON output for scripts
 belaf status --format json
 
 # Auto-bump based on commits
-belaf prepare --no-tui
+belaf prepare --ci
 
-# Explicit version control
-belaf prepare -p api:major,sdk:minor,utils:patch
+# Generate changelog without TUI
+belaf changelog --ci
+```
+
+### Graph Visualization
+
+```bash
+# Interactive TUI (default)
+belaf graph
+
+# Open in browser with interactive Cytoscape.js visualization
+belaf graph --web
+
+# Export formats
+belaf graph --format ascii
+belaf graph --format dot
+belaf graph --format json
 ```
 
 ---
 
 ## How It Works
 
-1. **Discover** — belaf scans your repo for supported manifest files
-2. **Analyze** — Parses dependencies between projects
-3. **Detect** — Identifies changes since last release using git history
-4. **Suggest** — Recommends version bumps based on conventional commits
-5. **Generate** — Creates changelogs from commit messages
-6. **Release** — Updates versions, creates tags, opens PR
+1. **Authenticate** — `belaf install` connects to your GitHub repository
+2. **Discover** — belaf scans your repo for supported manifest files
+3. **Analyze** — Parses dependencies between projects
+4. **Detect** — Identifies changes since last release using git history
+5. **Suggest** — Recommends version bumps based on conventional commits
+6. **Generate** — Creates changelogs from commit messages
+7. **Release** — Updates versions, creates tags, opens PR
 
 ---
 
@@ -162,15 +185,34 @@ belaf prepare -p api:major,sdk:minor,utils:patch
 belaf stores configuration in `belaf/config.toml`:
 
 ```toml
-[release.repo]
+[repo]
 upstream_urls = ["https://github.com/your-org/your-repo.git"]
 
-[release.commit_attribution]
-strategy = "scope_first"    # How to attribute commits to projects
-scope_matching = "smart"    # Fuzzy matching for commit scopes
+[repo.analysis]
+commit_cache_size = 512
+tree_cache_size = 3
 
-[release.projects.my-package]
-ignore = false              # Set true to exclude from releases
+[changelog]
+conventional_commits = true
+include_breaking_section = true
+include_contributors = true
+emoji_groups = true
+output = "CHANGELOG.md"
+
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = true
+initial_tag = "0.1.0"
+
+[commit_attribution]
+strategy = "scope_first"
+scope_matching = "smart"
+
+[projects.my-package]
+ignore = false
+
+[projects.my-package.cargo]
+publish = true
 ```
 
 ---
@@ -179,13 +221,13 @@ ignore = false              # Set true to exclude from releases
 
 | Feature | belaf | git-cliff | semantic-release | changesets | release-please |
 |---------|-------|-----------|------------------|------------|----------------|
-| Multi-language | ✅ 6 languages | ❌ | ❌ Node.js only | ❌ Node.js only | ⚠️ Limited |
-| Monorepo support | ✅ Native | ⚠️ Manual | ❌ | ⚠️ Basic | ⚠️ Basic |
-| Commit-to-package matching | ✅ Smart | ❌ | ❌ | ❌ | ❌ |
-| Interactive TUI | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Dependency resolution | ✅ | ❌ | ❌ | ⚠️ Basic | ❌ |
-| Single binary | ✅ | ✅ | ❌ | ❌ | ❌ |
-| No runtime deps | ✅ | ✅ | ❌ Node.js | ❌ Node.js | ❌ Node.js |
+| Multi-language | 7 languages | - | Node.js only | Node.js only | Limited |
+| Monorepo support | Native | Manual | - | Basic | Basic |
+| Commit-to-package matching | Smart | - | - | - | - |
+| Interactive TUI | Yes | - | - | - | - |
+| Dependency resolution | Yes | - | - | Basic | - |
+| Single binary | Yes | Yes | - | - | - |
+| No runtime deps | Yes | Yes | Node.js | Node.js | Node.js |
 
 ---
 
@@ -195,14 +237,14 @@ Looking for a monorepo-friendly alternative to git-cliff? Here's what belaf does
 
 | Capability | git-cliff | belaf |
 |------------|-----------|-------|
-| **Multi-package config** | ❌ One config per package | ✅ All packages in one file |
-| **Automatic commit routing** | ❌ Manual `include_paths` | ✅ Smart scope matching |
-| **Scope-to-package mapping** | ❌ | ✅ `feat(api)` → api package |
-| **Coordinated bumping** | ❌ Run per package | ✅ Analyzes entire monorepo |
-| **Dependency-aware releases** | ❌ | ✅ Correct release order |
-| **Multi-ecosystem** | ❌ | ✅ Rust, Node, Python, Go, Elixir, Swift |
-| **Changelog generation** | ✅ Tera templates | ✅ Tera templates |
-| **Interactive workflow** | ❌ CLI only | ✅ TUI wizard |
+| **Multi-package config** | One config per package | All packages in one file |
+| **Automatic commit routing** | Manual `include_paths` | Smart scope matching |
+| **Scope-to-package mapping** | - | `feat(api)` → api package |
+| **Coordinated bumping** | Run per package | Analyzes entire monorepo |
+| **Dependency-aware releases** | - | Correct release order |
+| **Multi-ecosystem** | - | Rust, Node, Python, Go, Elixir, Swift, C# |
+| **Changelog generation** | Tera templates | Tera templates |
+| **Interactive workflow** | CLI only | TUI wizard |
 
 ### git-cliff monorepo workflow
 
