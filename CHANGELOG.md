@@ -1,3 +1,10 @@
+## [1.3.2](https://github.com/ilblu/belaf/compare/v1.3.1...v1.3.2) (2025-12-29)
+
+
+### Bug Fixes
+
+* **graph:** show dynamic project name in web view and update docs ([3a8888e](https://github.com/ilblu/belaf/commit/3a8888ec9a54079b362e138dcfee2a7cbf3ad586))
+
 ## [1.3.1](https://github.com/ilblu/belaf/compare/v1.3.0...v1.3.1) (2025-12-27)
 
 # [1.3.0](https://github.com/ilblu/belaf/compare/v1.2.0...v1.3.0) (2025-12-24)
