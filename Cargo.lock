@@ -527,9 +527,9 @@ dependencies = [
 
 [[package]]
 name = "clap_complete"
-version = "4.5.62"
+version = "4.5.63"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "004eef6b14ce34759aa7de4aea3217e368f463f46a3ed3764ca4b5a4404003b4"
+checksum = "90ef1fcbbf16b486489d0df91725ccc653c07115dd61f46363162535b74c6bc3"
 dependencies = [
  "clap",
 ]
@@ -2038,9 +2038,9 @@ dependencies = [
 
 [[package]]
 name = "insta"
-version = "1.45.0"
+version = "1.45.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b76866be74d68b1595eb8060cb9191dca9c021db2316558e52ddc5d55d41b66c"
+checksum = "983e3b24350c84ab8a65151f537d67afbbf7153bb9f1110e03e9fa9b07f67a5c"
 dependencies = [
  "console 0.15.11",
  "once_cell",
