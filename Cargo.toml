@@ -60,7 +60,7 @@ kdam = { version = "0.6.3", features = ["gradient", "rich", "spinner"] }
 dialoguer = "0.12.0"
 open = "5.3.3"
 
-ratatui = "0.29.0"
+ratatui = "0.30.0"
 crossterm = { version = "0.29.0", features = ["event-stream"] }
 pulldown-cmark = "0.13.0"
 
