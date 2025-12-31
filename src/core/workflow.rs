@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use tracing::{debug, info};
 
 use crate::core::{
-    api::ApiClient,
+    api::{ApiClient, ApiError},
     auth::token::load_token,
     bump::{self, BumpConfig, BumpRecommendation},
     changelog::{Changelog, ChangelogConfig, Commit, GitConfig, Release},
@@ -567,7 +567,15 @@ impl<'a> ReleasePipeline<'a> {
             api_client
                 .get_git_credentials(&token, &owner, &repo)
                 .await
-                .context("failed to get git credentials from API")
+                .map_err(|e| match &e {
+                    ApiError::ApiResponse { status, message } => {
+                        anyhow::anyhow!("failed to get git credentials ({}): {}", status, message)
+                    }
+                    ApiError::Unauthorized => {
+                        anyhow::anyhow!("authentication expired - run 'belaf login' to re-authenticate")
+                    }
+                    _ => anyhow::anyhow!("failed to get git credentials: {}", e),
+                })
         };
 
         let credentials = match tokio::runtime::Handle::try_current() {

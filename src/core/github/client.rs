@@ -71,10 +71,17 @@ impl GitHubInformation {
                 body: &body,
             };
 
-            let pr = api_client
-                .create_pull_request(params)
-                .await
-                .context("failed to create pull request")?;
+            let pr = api_client.create_pull_request(params).await.map_err(|e| {
+                match &e {
+                    crate::core::api::ApiError::ApiResponse { status: 422, message } => {
+                        anyhow::anyhow!("pull request creation failed: {}", message)
+                    }
+                    crate::core::api::ApiError::ApiResponse { status, message } => {
+                        anyhow::anyhow!("GitHub API error ({}): {}", status, message)
+                    }
+                    _ => anyhow::anyhow!("{}", e),
+                }
+            })?;
 
             info!("created pull request: {}", pr.html_url);
             Ok(pr.html_url)
