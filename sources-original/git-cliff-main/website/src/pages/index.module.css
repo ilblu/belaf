@@ -1,0 +1,50 @@
+/**
+ * CSS files with the .module.css suffix will be treated as CSS modules
+ * and scoped locally.
+ */
+
+@font-face {
+  font-family: "A Angkanya Sebelas";
+  src: url("/static/fonts/aAngkanyaSebelas.ttf") format("truetype");
+}
+
+@keyframes intro {
+  0% {
+    opacity: 0;
+  }
+
+  100% {
+    opacity: 1;
+  }
+}
+
+.heroBanner {
+  padding: 1rem 2rem;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  background-color: #c5cdd0;
+  color: #1c2c2e;
+}
+
+@media screen and (max-width: 996px) {
+  .heroBanner {
+    padding: 2rem;
+  }
+}
+
+.buttons {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding-bottom: 10px;
+}
+
+.bodyContainer {
+  animation: intro 1s both;
+  animation-delay: 0.15s;
+}
+
+.animContainer {
+  padding: 20px;
+}

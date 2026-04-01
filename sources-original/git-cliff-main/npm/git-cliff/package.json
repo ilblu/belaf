@@ -1,0 +1,108 @@
+{
+  "name": "git-cliff",
+  "version": "2.11.0",
+  "description": "A highly customizable Changelog Generator that follows Conventional Commit specifications ⛰️",
+  "type": "module",
+  "main": "lib/cjs/index.d.cts",
+  "module": "lib/esm/index.d.ts",
+  "types": "lib/cjs/index.d.cts",
+  "bin": "lib/cli/cli.js",
+  "exports": {
+    "./cli": {
+      "import": "./lib/cli/cli.js"
+    },
+    ".": {
+      "import": {
+        "types": "./lib/esm/index.d.ts",
+        "default": "./lib/esm/index.js"
+      },
+      "require": {
+        "types": "./lib/cjs/index.d.cts",
+        "default": "./lib/cjs/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "lib"
+  ],
+  "scripts": {
+    "typecheck": "tsc",
+    "lint": "eslint src",
+    "lint:fix": "eslint src --fix",
+    "build": "tsup",
+    "dev": "yarn build && node lib/cli/cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/orhun/git-cliff.git"
+  },
+  "keywords": [
+    "git-cliff",
+    "git",
+    "changelog",
+    "change log",
+    "CHANGELOG.md",
+    "commit messages",
+    "commits",
+    "changes",
+    "unreleased",
+    "history",
+    "what's new",
+    "change set",
+    "conventionalcommits.org",
+    "conventional",
+    "conventional-commit",
+    "conventional-changelog",
+    "releases",
+    "release notes",
+    "git-changelog",
+    "versioning",
+    "semver",
+    "distribution",
+    "semantic",
+    "semantic versioning",
+    "parser",
+    "changelog-generator",
+    "generator",
+    "keepachangelog",
+    "keep-a-changelog",
+    "commit",
+    "automation",
+    "rust"
+  ],
+  "author": "git-cliff contributors <git-cliff@protonmail.com>",
+  "license": "MIT OR Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/orhun/git-cliff/issues"
+  },
+  "homepage": "https://github.com/orhun/git-cliff#readme",
+  "dependencies": {
+    "execa": "^9.6.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.32.0",
+    "@swc/core": "^1.13.2",
+    "@types/node": "^24.1.0",
+    "@typescript-eslint/eslint-plugin": "^8.38.0",
+    "@typescript-eslint/parser": "^8.38.0",
+    "eslint": "^9.32.0",
+    "tsup": "^8.5.0",
+    "typescript": "^5.8.3",
+    "typescript-eslint": "^8.38.0"
+  },
+  "optionalDependencies": {
+    "git-cliff-darwin-arm64": "2.11.0",
+    "git-cliff-darwin-x64": "2.11.0",
+    "git-cliff-linux-arm64": "2.11.0",
+    "git-cliff-linux-x64": "2.11.0",
+    "git-cliff-windows-arm64": "2.11.0",
+    "git-cliff-windows-x64": "2.11.0"
+  },
+  "packageManager": "yarn@4.1.0",
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18.19 || >=20.6 || >=21"
+  }
+}
