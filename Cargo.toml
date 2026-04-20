@@ -55,7 +55,7 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 
 owo-colors = { version = "4.2.3", features = ["supports-colors"] }
 spinoff = { version = "0.8.0", features = ["arc"] }
-indicatif = "0.17"
+indicatif = "0.18"
 kdam = { version = "0.6.3", features = ["gradient", "rich", "spinner"] }
 dialoguer = "0.12.0"
 open = "5.3.3"
