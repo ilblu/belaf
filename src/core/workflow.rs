@@ -572,7 +572,9 @@ impl<'a> ReleasePipeline<'a> {
                         anyhow::anyhow!("failed to get git credentials ({}): {}", status, message)
                     }
                     ApiError::Unauthorized => {
-                        anyhow::anyhow!("authentication expired - run 'belaf login' to re-authenticate")
+                        anyhow::anyhow!(
+                            "authentication expired - run 'belaf login' to re-authenticate"
+                        )
                     }
                     _ => anyhow::anyhow!("failed to get git credentials: {}", e),
                 })

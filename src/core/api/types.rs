@@ -1,6 +1,41 @@
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
+// ----------------------------------------------------------------------------
+// Wire types — re-exported from the progenitor-generated module.
+// These mirror the Zod schemas in github-app/apps/api/src/routes/cli/schemas.ts
+// 1:1; any drift is caught at compile time when the generated module rebuilds.
+// Do NOT add hand-written wire structs here.
+// ----------------------------------------------------------------------------
+
+pub use crate::core::api::generated::types::{
+    ApiCommit, ApiPullRequest, CheckInstallationResponse, CommitAuthor, CommitsResponse,
+    CreatePullRequestRequest, CreatePullRequestResponse, ErrorResponse, GitCredentialsResponse,
+    PullRequestsResponse, UserInfo,
+};
+
+impl UserInfo {
+    pub fn display_name(&self) -> &str {
+        self.username
+            .as_deref()
+            .or(self.name.as_deref())
+            .unwrap_or("Unknown")
+    }
+}
+
+// ----------------------------------------------------------------------------
+// Hand-written types
+//
+// `DeviceCode*` / `TokenPoll*` belong to Better-Auth's device-flow endpoints
+// (`/api/auth/device/*`), which are NOT under `/api/cli/*` and therefore not
+// part of the OpenAPI contract. They stay hand-written.
+//
+// `StoredToken` is local on-disk storage, not a wire format.
+//
+// `CreatePullRequestParams` is a borrowed builder used only inside
+// `client.rs` — pure ergonomic, no wire involvement.
+// ----------------------------------------------------------------------------
+
 #[derive(Debug, Serialize)]
 pub struct DeviceCodeRequest {
     pub client_id: String,
@@ -107,95 +142,6 @@ impl StoredToken {
     }
 }
 
-#[derive(Debug, Deserialize)]
-pub struct CheckInstallationResponse {
-    pub installed: bool,
-    #[serde(default)]
-    pub installation_id: Option<i64>,
-    #[serde(default)]
-    pub repository_id: Option<i64>,
-    #[serde(default)]
-    pub install_url: Option<String>,
-    #[serde(default)]
-    pub error: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct UserInfo {
-    pub id: String,
-    #[serde(default)]
-    pub username: Option<String>,
-    #[serde(default)]
-    pub name: Option<String>,
-    #[serde(default)]
-    pub email: Option<String>,
-}
-
-impl UserInfo {
-    pub fn display_name(&self) -> &str {
-        self.username
-            .as_deref()
-            .or(self.name.as_deref())
-            .unwrap_or("Unknown")
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RepoInfo {
-    pub full_name: String,
-    pub default_branch: String,
-    #[serde(default)]
-    pub private: bool,
-    #[serde(default)]
-    pub installation_id: Option<i64>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CommitAuthor {
-    #[serde(default)]
-    pub login: Option<String>,
-    #[serde(default)]
-    pub name: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ApiCommit {
-    pub sha: String,
-    #[serde(default)]
-    pub message: Option<String>,
-    #[serde(default)]
-    pub author: Option<CommitAuthor>,
-    #[serde(default)]
-    pub timestamp: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CommitsResponse {
-    pub commits: Vec<ApiCommit>,
-    #[serde(default)]
-    pub has_more: bool,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ApiPullRequest {
-    pub number: i64,
-    #[serde(default)]
-    pub title: Option<String>,
-    #[serde(default)]
-    pub merge_commit_sha: Option<String>,
-    #[serde(default)]
-    pub labels: Vec<String>,
-    #[serde(default)]
-    pub merged_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct PullRequestsResponse {
-    pub pull_requests: Vec<ApiPullRequest>,
-    #[serde(default)]
-    pub has_more: bool,
-}
-
 #[derive(Debug)]
 pub struct CreatePullRequestParams<'a> {
     pub token: &'a StoredToken,
@@ -205,75 +151,4 @@ pub struct CreatePullRequestParams<'a> {
     pub head: &'a str,
     pub base: &'a str,
     pub body: &'a str,
-}
-
-#[derive(Debug, Serialize)]
-pub struct CreatePullRequestRequest {
-    pub title: String,
-    pub head: String,
-    pub base: String,
-    pub body: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CreatePullRequestResponse {
-    pub number: i64,
-    pub html_url: String,
-    #[serde(default)]
-    pub state: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GitPushFile {
-    pub path: String,
-    pub content: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GitPushRequest {
-    pub branch: String,
-    pub base: String,
-    pub files: Vec<GitPushFile>,
-    pub message: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct GitPushResponse {
-    pub sha: String,
-    pub branch: String,
-    pub url: String,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct GitRef {
-    #[serde(rename = "ref")]
-    pub ref_name: String,
-    pub sha: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct RefsResponse {
-    pub refs: Vec<GitRef>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct CompareResponse {
-    pub ahead_by: i64,
-    pub behind_by: i64,
-    pub commits: Vec<ApiCommit>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct LatestReleaseResponse {
-    pub tag_name: String,
-    pub version: String,
-    pub html_url: String,
-    #[serde(default)]
-    pub published_at: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct GitCredentialsResponse {
-    pub token: String,
-    pub expires_at: String,
 }

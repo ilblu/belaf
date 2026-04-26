@@ -13,8 +13,6 @@ pub mod cmd {
 }
 
 pub mod core {
-    pub mod root;
-
     pub mod bump;
     pub mod config;
     pub mod embed;

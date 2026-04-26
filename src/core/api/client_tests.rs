@@ -274,49 +274,6 @@ async fn test_get_git_credentials_success() {
 }
 
 #[tokio::test]
-async fn test_get_latest_release_exists() {
-    let mock_server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/api/cli/releases/latest"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-            "tag_name": "v1.2.3",
-            "version": "1.2.3",
-            "html_url": "https://github.com/ilblu/belaf/releases/tag/v1.2.3",
-            "published_at": "2024-01-01T00:00:00Z"
-        })))
-        .mount(&mock_server)
-        .await;
-
-    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
-    let result = client.get_latest_release().await;
-
-    assert!(result.is_ok());
-    let release = result.unwrap();
-    assert!(release.is_some());
-    let release = release.unwrap();
-    assert_eq!(release.version, "1.2.3");
-    assert_eq!(release.tag_name, "v1.2.3");
-}
-
-#[tokio::test]
-async fn test_get_latest_release_not_found() {
-    let mock_server = MockServer::start().await;
-
-    Mock::given(method("GET"))
-        .and(path("/api/cli/releases/latest"))
-        .respond_with(ResponseTemplate::new(404))
-        .mount(&mock_server)
-        .await;
-
-    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
-    let result = client.get_latest_release().await;
-
-    assert!(result.is_ok());
-    assert!(result.unwrap().is_none());
-}
-
-#[tokio::test]
 async fn test_api_error_is_transient() {
     assert!(ApiError::Network("connection reset".to_string()).is_transient());
 

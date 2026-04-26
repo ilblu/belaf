@@ -21,12 +21,6 @@ async fn main() -> Result<()> {
     if let Some(command) = cli.command {
         let is_completions = matches!(command, belaf::cli::Commands::Completions { .. });
 
-        let should_pre_execute = !matches!(command, belaf::cli::Commands::Completions { .. });
-
-        if should_pre_execute {
-            belaf::core::root::pre_execute();
-        }
-
         let res = belaf::execute(belaf::cli::Cli {
             verbose: cli.verbose,
             no_color: cli.no_color,
@@ -49,28 +43,24 @@ async fn main() -> Result<()> {
                 use belaf::cmd::dashboard::DashboardAction;
                 match action {
                     DashboardAction::Prepare => {
-                        belaf::core::root::pre_execute();
                         let exit_code = belaf::cmd::prepare::run(false, None)?;
                         if exit_code != 0 {
                             std::process::exit(exit_code);
                         }
                     }
                     DashboardAction::Status => {
-                        belaf::core::root::pre_execute();
                         let exit_code = belaf::cmd::status::run(None, false)?;
                         if exit_code != 0 {
                             std::process::exit(exit_code);
                         }
                     }
                     DashboardAction::Graph => {
-                        belaf::core::root::pre_execute();
                         let exit_code = belaf::cmd::graph::run(None, false, false, None)?;
                         if exit_code != 0 {
                             std::process::exit(exit_code);
                         }
                     }
                     DashboardAction::Changelog => {
-                        belaf::core::root::pre_execute();
                         let exit_code =
                             belaf::cmd::changelog::run(false, false, None, None, false, false)?;
                         if exit_code != 0 {
@@ -78,7 +68,6 @@ async fn main() -> Result<()> {
                         }
                     }
                     DashboardAction::Init => {
-                        belaf::core::root::pre_execute();
                         let exit_code = belaf::cmd::init::run(false, None, false, None)?;
                         if exit_code != 0 {
                             std::process::exit(exit_code);
@@ -97,6 +86,7 @@ async fn main() -> Result<()> {
                     }
                     DashboardAction::Quit | DashboardAction::None => {}
                 }
+                belaf::utils::version_check::check_for_updates(env!("CARGO_PKG_VERSION"), false);
             }
             Err(e) => {
                 print_error(&e);

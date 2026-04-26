@@ -136,6 +136,19 @@ To add support for a new language:
 4. Add tests in the same file
 5. Update documentation
 
+## Modifying the API client
+
+The Rust types under `src/core/api/types.rs` for `/api/cli/*` endpoints are **code-generated** at build time from `api-spec/openapi.cli.json` via `progenitor` (see `build.rs`). Do **not** hand-edit a wire struct in `types.rs` — the next build will overwrite the change with whatever the spec says.
+
+To change a wire field:
+
+1. In the github-app repo, edit the Zod schema in `apps/api/src/routes/cli/schemas.ts` and regenerate via `bun run apps/api/scripts/generate-openapi.ts`.
+2. Copy the new spec into this repo: `cp ../github-app/apps/api/openapi.cli.json api-spec/openapi.cli.json`.
+3. `cargo build` — the compiler will surface every drifted call site as a type error. Fix them.
+4. Commit `api-spec/openapi.cli.json` alongside the call-site fixes.
+
+The hand-written exceptions that *do* live in `types.rs` are documented at the top of that file: `StoredToken`, the device-flow request/response pair, and `CreatePullRequestParams`. Auth endpoints (`/api/auth/device/*`) are served by Better Auth, not by the schema-first `/api/cli/*` layer, so they are not in the generated module.
+
 ## Questions?
 
 Open an issue or start a discussion on GitHub.
