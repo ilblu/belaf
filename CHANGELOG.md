@@ -1,3 +1,32 @@
+## [1.3.4](https://github.com/ilblu/belaf/compare/v1.3.3...v1.3.4) (2026-04-27)
+
+
+### Bug Fixes
+
+* **install:** `belaf install` no longer fails with "API did not provide installation URL" on uninstalled repos. Root cause: the API was emitting `installUrl` (camelCase) while the CLI deserialised `install_url` (snake_case); the missing field defaulted to `None`. The `/api/cli/*` contract is now schema-first with snake_case enforced at the type level on both sides. ([2ac07cc](https://github.com/ilblu/belaf/commit/2ac07cc))
+* **api:** `belaf install` now receives `username` correctly (was emitted as `githubUsername` — a second silent drift in the same shape). ([2ac07cc](https://github.com/ilblu/belaf/commit/2ac07cc))
+
+
+### Code Refactoring
+
+* **api:** Replace hand-written wire types with `progenitor`-generated Rust types from a committed OpenAPI spec (`api-spec/openapi.cli.json`). Future drift between the belaf API and CLI surfaces as a Rust compile error instead of a silent `serde(default)` miss. ([2ac07cc](https://github.com/ilblu/belaf/commit/2ac07cc))
+* **deps:** Drop unused `octocrab` (0% used in `src/`) and `core/root.rs` (duplicated `version_check.rs`). All GitHub data flows exclusively through the belaf API now. ([2ac07cc](https://github.com/ilblu/belaf/commit/2ac07cc))
+
+
+### Security
+
+* **deps:** Resolve all open `cargo audit` advisories. Bump `git2 0.20.2 → 0.20.4` (RUSTSEC-2026-0008), `ratatui 0.29 → 0.30` (drops indirect `lru 0.12.5`, RUSTSEC-2026-0002), `indicatif 0.17 → 0.18` (drops `number_prefix`, RUSTSEC-2025-0119). Transitive bumps via `cargo update`: `lru → 0.16.4`, `rand → 0.9.4 / 0.8.6` (RUSTSEC-2026-0097), `time → 0.3.47+` (RUSTSEC-2026-0009), `rustls-webpki → 0.103.13` (RUSTSEC-2026-0049/-0098/-0099/-0104). ([98f3eee](https://github.com/ilblu/belaf/commit/98f3eee))
+* **deps:** Drop unused `http-cache-reqwest`, `reqwest-middleware`, and `cacache` (never imported in `src/`) to close the last unmaintained `bincode 1.3.3` warning (RUSTSEC-2025-0141). ([98f3eee](https://github.com/ilblu/belaf/commit/98f3eee))
+
+
+## [1.3.3](https://github.com/ilblu/belaf/compare/v1.3.2...v1.3.3) (2025-12-31)
+
+
+### Bug Fixes
+
+* **api:** Improve error messages for API failures. Display actual messages from the API instead of generic "failed to create pull request" or "failed to get git credentials" — e.g. so users see "PR already exists" or "authentication expired" directly. ([e4c5960](https://github.com/ilblu/belaf/commit/e4c5960))
+
+
 ## [1.3.2](https://github.com/ilblu/belaf/compare/v1.3.1...v1.3.2) (2025-12-29)
 
 
