@@ -43,9 +43,6 @@ pub enum Error {
     #[error("HTTP request error: {0}")]
     RequestError(#[from] reqwest::Error),
 
-    #[error("HTTP middleware error: {0}")]
-    MiddlewareError(#[from] reqwest_middleware::Error),
-
     #[error("HTTP header error: {0}")]
     HeaderError(#[from] reqwest::header::InvalidHeaderValue),
 

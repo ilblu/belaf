@@ -171,7 +171,10 @@ pub fn run() -> Result<i32> {
     result
 }
 
-fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<i32> {
+fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<i32>
+where
+    B::Error: Send + Sync + 'static,
+{
     loop {
         terminal.draw(|f| ui(f, app))?;
 
