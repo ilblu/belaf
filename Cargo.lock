@@ -354,6 +354,7 @@ dependencies = [
  "ureq",
  "urlencoding",
  "uuid",
+ "wait-timeout",
  "wiremock",
  "zeroize",
 ]

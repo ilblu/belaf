@@ -134,6 +134,20 @@ pub struct PrepareArgs {
         help = "Override bump for specific projects (e.g., gate:major,core:minor)"
     )]
     pub project: Option<Vec<String>>,
+
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Read bump decisions from a JSON file (use `-` for stdin in --ci mode)"
+    )]
+    pub bump_source: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "CMD",
+        help = "Run a shell command and parse its stdout as JSON bump decisions"
+    )]
+    pub bump_source_cmd: Option<String>,
 }
 
 #[derive(Args)]

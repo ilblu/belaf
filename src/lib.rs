@@ -16,6 +16,7 @@ pub mod core {
     pub mod wire;
 
     pub mod bump;
+    pub mod bump_source;
     pub mod config;
     pub mod embed;
     pub mod env;
@@ -132,7 +133,12 @@ pub async fn execute(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::Prepare(args) => {
-            let exit_code = cmd::prepare::run(args.ci, args.project)?;
+            let exit_code = cmd::prepare::run(
+                args.ci,
+                args.project,
+                args.bump_source,
+                args.bump_source_cmd,
+            )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }

@@ -499,7 +499,10 @@ impl WizardState {
     }
 }
 
-pub fn run_with_overrides(project_overrides: Option<Vec<String>>) -> Result<i32> {
+pub fn run_with_overrides_and_decisions(
+    project_overrides: Option<Vec<String>>,
+    decisions: Vec<crate::core::bump_source::BumpDecision>,
+) -> Result<i32> {
     info!("starting interactive TUI wizard for release preparation");
 
     let mut sess =
@@ -532,6 +535,11 @@ pub fn run_with_overrides(project_overrides: Option<Vec<String>>) -> Result<i32>
         .collect();
 
     let mut projects = projects;
+    // Precedence: external decisions feed in first; explicit
+    // `--project name:bump` CLI overrides win on top. The wizard then
+    // shows the resulting `chosen_bump` so the user can still change it
+    // interactively before confirming.
+    apply_decisions_to_items(&mut projects, &decisions)?;
     if let Some(ref overrides) = project_overrides {
         apply_project_overrides_to_items(&mut projects, overrides)?;
     }
@@ -1699,6 +1707,40 @@ fn parse_existing_changelog(path: &Path) -> Option<String> {
     } else {
         Some(result)
     }
+}
+
+fn apply_decisions_to_items(
+    projects: &mut [ProjectItem],
+    decisions: &[crate::core::bump_source::BumpDecision],
+) -> Result<()> {
+    if decisions.is_empty() {
+        return Ok(());
+    }
+    let names: Vec<String> = projects.iter().map(|p| p.name().to_string()).collect();
+    for d in decisions {
+        let Some(p) = projects.iter_mut().find(|p| p.name() == d.project) else {
+            return Err(anyhow::anyhow!(
+                "bump-source decision for `{}` does not match any project. Available: {}",
+                d.project,
+                names.join(", ")
+            ));
+        };
+        let choice = match d.bump.as_str() {
+            "major" => BumpChoice::Major,
+            "minor" => BumpChoice::Minor,
+            "patch" => BumpChoice::Patch,
+            other => {
+                return Err(anyhow::anyhow!(
+                    "bump-source decision for `{}` has invalid bump value `{}`",
+                    d.project,
+                    other
+                ));
+            }
+        };
+        info!("bump-source decision: {} -> {}", d.project, choice.as_str());
+        p.chosen_bump = Some(choice);
+    }
+    Ok(())
 }
 
 fn apply_project_overrides_to_items(

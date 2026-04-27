@@ -22,6 +22,9 @@ pub mod syntax {
 
         #[serde(default, rename = "group", skip_serializing_if = "Vec::is_empty")]
         pub groups: Vec<GroupConfig>,
+
+        #[serde(default, rename = "bump_source", skip_serializing_if = "Vec::is_empty")]
+        pub bump_sources: Vec<BumpSourceConfig>,
     }
 
     /// `[[group]]` table: bundles projects that must release together.
@@ -32,6 +35,22 @@ pub mod syntax {
     pub struct GroupConfig {
         pub id: String,
         pub members: Vec<String>,
+    }
+
+    /// `[[bump_source]]` table: a subprocess belaf runs by default to
+    /// gather externally-computed bump decisions (e.g. `graphql-inspector
+    /// diff`). At least one of `cmd` is required; `project` / `group` are
+    /// pure diagnostic labels (the JSON output's own `project` field is
+    /// what wires decisions to projects).
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    pub struct BumpSourceConfig {
+        pub cmd: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub project: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub group: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub timeout_sec: Option<u64>,
     }
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -212,6 +231,7 @@ pub struct ConfigurationFile {
     pub commit_attribution: syntax::CommitAttributionConfiguration,
     pub projects: HashMap<String, syntax::ProjectConfiguration>,
     pub groups: Vec<syntax::GroupConfig>,
+    pub bump_sources: Vec<syntax::BumpSourceConfig>,
 }
 
 impl ConfigurationFile {
@@ -240,6 +260,7 @@ impl ConfigurationFile {
             commit_attribution: cfg.commit_attribution,
             projects: cfg.projects,
             groups: cfg.groups,
+            bump_sources: cfg.bump_sources,
         })
     }
 
@@ -251,6 +272,7 @@ impl ConfigurationFile {
             commit_attribution: self.commit_attribution,
             projects: self.projects,
             groups: self.groups,
+            bump_sources: self.bump_sources,
         };
         Ok(atry!(
             toml::to_string_pretty(&cfg);

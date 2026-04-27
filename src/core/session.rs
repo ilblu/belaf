@@ -201,6 +201,7 @@ impl AppBuilder {
             npm_config: NpmConfig::default(),
             changelog_config: config.changelog,
             bump_config: config.bump,
+            bump_sources: config.bump_sources,
             is_ci: self.is_ci,
         })
     }
@@ -218,6 +219,9 @@ pub struct AppSession {
     pub npm_config: NpmConfig,
     pub changelog_config: ChangelogConfiguration,
     pub bump_config: super::config::syntax::BumpConfiguration,
+    /// `[[bump_source]]` entries from `belaf/config.toml`. Resolved at
+    /// CI/wizard entry by [`crate::cmd::prepare`].
+    bump_sources: Vec<super::config::syntax::BumpSourceConfig>,
     graph: ProjectGraph,
     is_ci: bool,
 }
@@ -269,6 +273,11 @@ impl AppSession {
     }
 
     /// Get the graph of projects inside this app session.
+    /// `[[bump_source]]` entries declared in `belaf/config.toml`.
+    pub fn config_bump_sources(&self) -> &[super::config::syntax::BumpSourceConfig] {
+        &self.bump_sources
+    }
+
     pub fn graph(&self) -> &ProjectGraph {
         &self.graph
     }

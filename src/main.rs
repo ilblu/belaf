@@ -43,7 +43,7 @@ async fn main() -> Result<()> {
                 use belaf::cmd::dashboard::DashboardAction;
                 match action {
                     DashboardAction::Prepare => {
-                        let exit_code = belaf::cmd::prepare::run(false, None)?;
+                        let exit_code = belaf::cmd::prepare::run(false, None, None, None)?;
                         if exit_code != 0 {
                             std::process::exit(exit_code);
                         }
