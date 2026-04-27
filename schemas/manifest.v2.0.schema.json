@@ -1,0 +1,202 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://belaf.dev/schemas/manifest.v2.0.schema.json",
+  "title": "Belaf Release Manifest",
+  "description": "Wire format produced by the belaf CLI and consumed by the belaf GitHub App. Version 2.0. Belaf is the schema-owner; downstream consumers vendor a copy of this file.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "manifest_id",
+    "created_at",
+    "created_by",
+    "base_branch",
+    "releases"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "description": "Manifest schema version. The producer (CLI) emits the version it wrote; the consumer (App) dispatches to the matching parser. Bump only on breaking changes.",
+      "type": "string",
+      "const": "2.0"
+    },
+    "manifest_id": {
+      "description": "UUID v7 identifying this manifest. Sortable. The on-disk filename is `belaf/releases/<manifest_id>.json`.",
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "created_at": {
+      "description": "RFC 3339 timestamp when this manifest was generated. (No `format: date-time` keyword: belaf uses the `time` crate, not `chrono`. Validation happens in producer code.)",
+      "type": "string",
+      "minLength": 1
+    },
+    "created_by": {
+      "description": "Username (typically GitHub login) of the person or service that triggered the release.",
+      "type": "string",
+      "minLength": 1
+    },
+    "base_branch": {
+      "description": "Git branch the release will target on merge.",
+      "type": "string",
+      "minLength": 1
+    },
+    "groups": {
+      "description": "Logical groupings of releases that must ship together with synchronised versions. Each group's members refer to entries in `releases[]` by name. Groups are optional; a manifest with no groups is just a flat release list.",
+      "type": "array",
+      "default": [],
+      "items": { "$ref": "#/$defs/group" }
+    },
+    "releases": {
+      "description": "Per-project release entries. The CLI populates one entry per ecosystem-specific manifest file that needs a version bump. Members of a group share `group_id`.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/release" }
+    },
+    "x": {
+      "description": "Vendor-extension namespace. Strict: must be an object; content is unstructured and explicitly unsupported. Use to ship experimental fields ahead of a schema bump.",
+      "type": "object",
+      "default": {}
+    }
+  },
+  "$defs": {
+    "group": {
+      "type": "object",
+      "required": ["id", "members"],
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "description": "Group identifier. Lower-case ASCII, digits, and hyphens only; must start with a letter or digit. Max 64 characters. Used as `release.group_id` and may appear in `tag_format` templates.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "maxLength": 64
+        },
+        "members": {
+          "description": "Names of the releases that belong to this group. Each must equal a `release.name` value present in `releases[]`. All members of one group share the same bump and resulting version.",
+          "type": "array",
+          "minItems": 1,
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "x": { "type": "object" }
+      }
+    },
+    "release": {
+      "type": "object",
+      "required": [
+        "name",
+        "ecosystem",
+        "previous_version",
+        "new_version",
+        "bump_type",
+        "tag_name"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "Project name as known to the ecosystem (e.g. `@org/foo` for npm, `com.org:foo` for Maven, `cargo-crate-name` for Rust).",
+          "type": "string",
+          "minLength": 1
+        },
+        "ecosystem": {
+          "description": "Ecosystem identifier. Stored as a free-form string in the wire format; consumers classify against a hand-maintained whitelist (`KNOWN_ECOSYSTEMS`) into Known/Unknown variants. Adding a new ecosystem does not require a schema bump.",
+          "type": "string",
+          "minLength": 1
+        },
+        "group_id": {
+          "description": "Optional foreign key into `groups[].id`. When set, this release is one member of a synchronised release group.",
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*$",
+          "maxLength": 64
+        },
+        "previous_version": {
+          "description": "Version this project shipped before the bump. Empty string for first-time releases.",
+          "type": "string"
+        },
+        "new_version": {
+          "description": "Version being released.",
+          "type": "string",
+          "minLength": 1
+        },
+        "bump_type": {
+          "description": "Stored as a free-form string; consumers classify against a hand-maintained whitelist (Known/Unknown). Standard values: `major`, `minor`, `patch`, `prerelease`.",
+          "type": "string",
+          "minLength": 1
+        },
+        "tag_name": {
+          "description": "Git tag name to be created on release. The CLI is responsible for generating this and validating it against `git check-ref-format --allow-onelevel`. No default generator on the consumer side.",
+          "type": "string",
+          "minLength": 1
+        },
+        "previous_tag": {
+          "description": "Git tag of the previous release, if one exists in the repository. Used by consumers to render a compare URL.",
+          "type": ["string", "null"]
+        },
+        "compare_url": {
+          "description": "Pre-built compare URL between `previous_tag` and `tag_name`, or null if this is a first-time release.",
+          "type": ["string", "null"]
+        },
+        "is_prerelease": {
+          "description": "Whether `new_version` carries a prerelease suffix (alpha/beta/rc/etc).",
+          "type": "boolean",
+          "default": false
+        },
+        "changelog": {
+          "description": "Markdown changelog body for this release. May be empty for first-time or no-content releases.",
+          "type": "string",
+          "default": ""
+        },
+        "contributors": {
+          "description": "GitHub usernames of contributors whose commits are included in this release.",
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" }
+        },
+        "first_time_contributors": {
+          "description": "Subset of `contributors` who are appearing in a release for the first time.",
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" }
+        },
+        "statistics": {
+          "description": "Optional release statistics block. Stability suffix `_v1alpha1` may be added in future to subsystems within statistics that aren't yet stable.",
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/release_statistics" }
+          ]
+        },
+        "x": { "type": "object" }
+      }
+    },
+    "release_statistics": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "commit_count": {
+          "description": "Number of commits between `previous_tag` and the release commit.",
+          "type": "integer",
+          "minimum": 0
+        },
+        "days_since_last_release": {
+          "description": "Days between `previous_tag` and `created_at`. Null for first-time releases.",
+          "type": ["integer", "null"]
+        },
+        "breaking_changes_count": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "features_count": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "fixes_count": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "pr_count": {
+          "type": ["integer", "null"]
+        },
+        "x": { "type": "object" }
+      }
+    }
+  }
+}

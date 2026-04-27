@@ -19,6 +19,7 @@ fn main() {
     println!("cargo:rustc-env=RUSTC_VERSION={}", rustc);
 
     generate_api_client();
+    generate_manifest_types();
 }
 
 /// Generate Rust types + client stub from `api-spec/openapi.cli.json`.
@@ -46,6 +47,44 @@ fn generate_api_client() {
 
     let out =
         Path::new(&env::var("OUT_DIR").expect("OUT_DIR not set")).join("belaf_api_codegen.rs");
+    std::fs::write(&out, content)
+        .unwrap_or_else(|e| panic!("failed to write {}: {e}", out.display()));
+}
+
+/// Generate Rust types from `schemas/manifest.v2.0.schema.json` via typify.
+///
+/// The JSON Schema is the canonical wire format for the belaf release
+/// manifest. belaf is the schema-owner; github-app vendors a copy. Generated
+/// types live in the `types` module of the produced file and are re-exported
+/// through `src/core/wire/`.
+fn generate_manifest_types() {
+    let schema_path =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/manifest.v2.0.schema.json");
+    println!("cargo:rerun-if-changed={}", schema_path.display());
+
+    let text = std::fs::read_to_string(&schema_path)
+        .unwrap_or_else(|e| panic!("failed to read {}: {e}", schema_path.display()));
+
+    let schema: schemars::schema::RootSchema = serde_json::from_str(&text).unwrap_or_else(|e| {
+        panic!(
+            "failed to parse {} as JSON Schema: {e}",
+            schema_path.display()
+        )
+    });
+
+    let mut settings = typify::TypeSpaceSettings::default();
+    settings.with_struct_builder(true);
+    let mut type_space = typify::TypeSpace::new(&settings);
+    type_space
+        .add_root_schema(schema)
+        .expect("typify failed to ingest manifest.v2.0.schema.json");
+
+    let tokens = type_space.to_stream();
+    let ast = syn::parse2(tokens).expect("failed to parse typify TokenStream");
+    let content = prettyplease::unparse(&ast);
+
+    let out =
+        Path::new(&env::var("OUT_DIR").expect("OUT_DIR not set")).join("manifest_v2_codegen.rs");
     std::fs::write(&out, content)
         .unwrap_or_else(|e| panic!("failed to write {}: {e}", out.display()));
 }
