@@ -1213,6 +1213,62 @@ mod tests {
     }
 
     #[test]
+    fn resolves_sha1_property() {
+        let r = resolve(
+            r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>lib</artifactId>
+  <version>${sha1}</version>
+  <properties><sha1>3.1.0</sha1></properties>
+</project>"#,
+        );
+        assert_eq!(r.version, "3.1.0");
+    }
+
+    #[test]
+    fn resolves_changelist_property() {
+        let r = resolve(
+            r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>lib</artifactId>
+  <version>${changelist}</version>
+  <properties><changelist>4.5.6</changelist></properties>
+</project>"#,
+        );
+        assert_eq!(r.version, "4.5.6");
+    }
+
+    #[test]
+    fn project_version_self_ref_in_top_level_version_does_not_converge() {
+        // `${project.version}` is meaningful in inter-module deps where
+        // it expands to the depending project's own version. Used as the
+        // top-level `<version>` field it self-references and the resolver
+        // can't converge — this asserts the documented failure mode.
+        let p = parse(
+            r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>lib</artifactId>
+  <version>${project.version}</version>
+</project>"#,
+        );
+        let mut coords = HashMap::new();
+        coords.insert((p.group_id.clone().unwrap(), p.artifact_id.clone()), 0);
+        let stack = vec![p];
+        let err = resolve_pom(0, &stack, &coords).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("did not converge"),
+            "expected non-convergence message; got: {msg}"
+        );
+    }
+
+    #[test]
     fn rejects_unsupported_property() {
         let p = parse(
             r#"<?xml version="1.0"?>

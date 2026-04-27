@@ -92,6 +92,126 @@ fn resolves_revision_property() {
 }
 
 #[test]
+fn resolves_sha1_property() {
+    let repo = TestRepo::new();
+    repo.write_file(
+        "pom.xml",
+        r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>lib</artifactId>
+  <version>${sha1}</version>
+  <properties>
+    <sha1>3.1.0</sha1>
+  </properties>
+</project>
+"#,
+    );
+    repo.commit("init");
+
+    let init = repo.run_belaf_command(&["init", "--force"]);
+    assert!(init.status.success());
+
+    repo.write_file("src/main/java/S.java", "class S {}\n");
+    repo.commit("feat: add S");
+
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
+
+    let manifest = read_manifest_json(&repo);
+    let releases = manifest["releases"].as_array().unwrap();
+    assert_eq!(releases.len(), 1);
+    assert_eq!(
+        releases[0]["previous_version"], "3.1.0",
+        "previous_version must reflect the resolved ${{sha1}} value"
+    );
+    assert_eq!(releases[0]["new_version"], "3.2.0");
+}
+
+#[test]
+fn resolves_changelist_property() {
+    let repo = TestRepo::new();
+    repo.write_file(
+        "pom.xml",
+        r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>lib</artifactId>
+  <version>${changelist}</version>
+  <properties>
+    <changelist>4.5.6</changelist>
+  </properties>
+</project>
+"#,
+    );
+    repo.commit("init");
+
+    let init = repo.run_belaf_command(&["init", "--force"]);
+    assert!(init.status.success());
+
+    repo.write_file("src/main/java/C.java", "class C {}\n");
+    repo.commit("fix: typo");
+
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
+
+    let manifest = read_manifest_json(&repo);
+    let releases = manifest["releases"].as_array().unwrap();
+    assert_eq!(releases.len(), 1);
+    assert_eq!(
+        releases[0]["previous_version"], "4.5.6",
+        "previous_version must reflect the resolved ${{changelist}} value"
+    );
+    assert_eq!(releases[0]["new_version"], "4.5.7");
+}
+
+#[test]
+fn resolves_revision_concatenated_with_sha1_and_changelist() {
+    // Maven CI-friendly versions canonical pattern:
+    // `<version>${revision}${sha1}${changelist}</version>`. Exercises all
+    // three properties in the same field so a regression in any one of
+    // them breaks the test.
+    let repo = TestRepo::new();
+    repo.write_file(
+        "pom.xml",
+        r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>lib</artifactId>
+  <version>${revision}${sha1}${changelist}</version>
+  <properties>
+    <revision>1.2.3</revision>
+    <sha1></sha1>
+    <changelist>-SNAPSHOT</changelist>
+  </properties>
+</project>
+"#,
+    );
+    repo.commit("init");
+
+    let init = repo.run_belaf_command(&["init", "--force"]);
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    repo.write_file("src/main/java/M.java", "class M {}\n");
+    repo.commit("feat: add M");
+
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
+
+    let manifest = read_manifest_json(&repo);
+    let releases = manifest["releases"].as_array().unwrap();
+    assert_eq!(releases.len(), 1);
+    assert_eq!(
+        releases[0]["previous_version"], "1.2.3-SNAPSHOT",
+        "all three properties must concatenate in resolution order"
+    );
+}
+
+#[test]
 fn unsupported_property_in_version_is_hard_error() {
     let repo = TestRepo::new();
     repo.write_file(
