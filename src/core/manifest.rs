@@ -99,6 +99,11 @@ impl ProjectRelease {
         }
     }
 
+    pub fn with_group_id(mut self, group_id: impl Into<String>) -> Self {
+        self.group_id = Some(group_id.into());
+        self
+    }
+
     pub fn with_compare_url<F>(mut self, base_url: &str, tag_exists: F) -> Self
     where
         F: Fn(&str) -> bool,

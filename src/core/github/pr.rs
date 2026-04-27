@@ -176,6 +176,7 @@ mod tests {
 
     fn make_project(name: &str, old: &str, new: &str, bump: &str) -> SelectedProject {
         SelectedProject {
+            ident: 0,
             name: name.to_string(),
             prefix: String::new(),
             old_version: old.to_string(),

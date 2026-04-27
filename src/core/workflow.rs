@@ -282,6 +282,7 @@ impl<'a> PrepareContext<'a> {
             );
 
             prepared.push(SelectedProject {
+                ident: selection.candidate.ident,
                 name: proj_mut.user_facing_name.clone(),
                 prefix: selection.candidate.prefix.clone(),
                 old_version,
@@ -304,6 +305,7 @@ impl<'a> PrepareContext<'a> {
 
 #[derive(Debug, Clone)]
 pub struct SelectedProject {
+    pub ident: ProjectId,
     pub name: String,
     pub prefix: String,
     pub old_version: String,
@@ -455,6 +457,32 @@ impl<'a> ReleasePipeline<'a> {
 
         let mut manifest = ReleaseManifest::new(self.base_branch.clone(), git_user);
 
+        // Emit `groups[]` entries for any group that has at least one
+        // member in this release set. The github-app reads this to drive
+        // atomic group releases (G6) — releases sharing a `group_id` are
+        // tagged + published as one transaction.
+        let groups = self.sess.graph().groups();
+        let mut emitted_groups: HashMap<String, Vec<String>> = HashMap::new();
+        for project in projects {
+            if let Some(g) = groups.group_of(project.ident) {
+                emitted_groups
+                    .entry(g.id.as_str().to_string())
+                    .or_default()
+                    .push(project.name.clone());
+            }
+        }
+        // Stable order so the manifest diff is deterministic.
+        let mut emitted_keys: Vec<&String> = emitted_groups.keys().collect();
+        emitted_keys.sort();
+        for key in emitted_keys {
+            let members = &emitted_groups[key];
+            manifest.add_group(crate::core::manifest::Group {
+                id: key.clone(),
+                members: members.clone(),
+                x: serde_json::Map::new(),
+            });
+        }
+
         for project in projects {
             let changelog_content = changelog_contents
                 .get(&project.name)
@@ -482,6 +510,10 @@ impl<'a> ReleasePipeline<'a> {
             .with_contributors(contributors)
             .with_first_time_contributors(first_time_contributors)
             .with_statistics(statistics);
+
+            if let Some(g) = groups.group_of(project.ident) {
+                release = release.with_group_id(g.id.as_str());
+            }
 
             if let Some(base_url) = &github_base_url {
                 release = release.with_compare_url(base_url, |tag| self.sess.repo.tag_exists(tag));

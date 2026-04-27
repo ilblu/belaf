@@ -17,9 +17,10 @@ use std::collections::{HashMap, HashSet};
 use thiserror::Error as ThisError;
 
 use crate::core::{
-    config::syntax::ProjectConfiguration,
+    config::syntax::{GroupConfig, ProjectConfiguration},
     errors::Result,
     git::repository::{RepoHistory, Repository},
+    group::{Group, GroupId, GroupSet},
     project::{
         DepRequirement, Dependency, DependencyBuilder, DependencyTarget, Project, ProjectBuilder,
         ProjectId,
@@ -45,6 +46,10 @@ pub struct ProjectGraph {
 
     /// Project IDs in a topologically sorted order.
     toposorted_ids: Vec<ProjectId>,
+
+    /// Groups: bundles of projects that release together. Sourced from
+    /// `[[group]]` entries in `belaf/config.toml`. See `core::group`.
+    groups: GroupSet,
 }
 
 /// An error returned when an input has requested a project with a certain name,
@@ -148,6 +153,11 @@ impl ProjectGraph {
         Ok(RepoHistories {
             histories: repo.analyze_histories(&self.projects[..])?,
         })
+    }
+
+    /// Read-only access to the configured project groups.
+    pub fn groups(&self) -> &GroupSet {
+        &self.groups
     }
 }
 
@@ -307,7 +317,17 @@ impl ProjectGraphBuilder {
     ///
     /// If the internal project graph turns out to have a dependecy cycle, an
     /// error downcastable to DependencyCycleError.
-    pub fn complete_loading(mut self) -> Result<ProjectGraph> {
+    pub fn complete_loading(self) -> Result<ProjectGraph> {
+        self.complete_loading_with_groups(&[])
+    }
+
+    /// Like [`complete_loading`], but binds `[[group]]` config entries to
+    /// the resulting `ProjectGraph`. Member names are resolved against the
+    /// graph's user-facing names; an unknown name is a hard error.
+    pub fn complete_loading_with_groups(
+        mut self,
+        group_configs: &[GroupConfig],
+    ) -> Result<ProjectGraph> {
         // The first order of business is to determine every project's
         // user-facing name using progressive disambiguation with qualified names.
 
@@ -513,13 +533,34 @@ impl ProjectGraphBuilder {
             }
         }
 
-        // All done
+        // Bind groups against the now-finalized name_to_id map.
+        let mut groups = GroupSet::new();
+        for gc in group_configs {
+            let id = atry!(
+                GroupId::new(&gc.id);
+                ["invalid `[[group]]` id `{}` in belaf/config.toml", gc.id]
+            );
+            let mut members = Vec::with_capacity(gc.members.len());
+            for member_name in &gc.members {
+                let pid = a_ok_or!(
+                    name_to_id.get(member_name).copied();
+                    ["group `{}` lists unknown member project `{}` (no such project in repo)",
+                     id, member_name]
+                );
+                members.push(pid);
+            }
+            atry!(
+                groups.add(Group { id: id.clone(), members });
+                ["failed to register group `{}`", id]
+            );
+        }
 
         Ok(ProjectGraph {
             projects,
             name_to_id,
             graph: self.graph,
             toposorted_ids,
+            groups,
         })
     }
 }

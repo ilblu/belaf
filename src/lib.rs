@@ -21,6 +21,7 @@ pub mod core {
     pub mod env;
     pub mod errors;
     pub mod graph;
+    pub mod group;
     pub mod manifest;
     pub mod project;
     pub mod rewriters;

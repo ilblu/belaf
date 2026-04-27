@@ -193,7 +193,7 @@ impl AppBuilder {
 
         // Apply project config and compile the graph.
 
-        let graph = self.graph.complete_loading()?;
+        let graph = self.graph.complete_loading_with_groups(&config.groups)?;
 
         Ok(AppSession {
             repo: self.repo,

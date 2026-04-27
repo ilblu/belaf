@@ -19,6 +19,19 @@ pub mod syntax {
 
         #[serde(default)]
         pub projects: HashMap<String, ProjectConfiguration>,
+
+        #[serde(default, rename = "group", skip_serializing_if = "Vec::is_empty")]
+        pub groups: Vec<GroupConfig>,
+    }
+
+    /// `[[group]]` table: bundles projects that must release together.
+    /// `id` is the wire-format group id (lowercased pattern); `members`
+    /// are user-facing project names (resolved to `ProjectId`s after the
+    /// graph is built).
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    pub struct GroupConfig {
+        pub id: String,
+        pub members: Vec<String>,
     }
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -198,6 +211,7 @@ pub struct ConfigurationFile {
     pub bump: syntax::BumpConfiguration,
     pub commit_attribution: syntax::CommitAttributionConfiguration,
     pub projects: HashMap<String, syntax::ProjectConfiguration>,
+    pub groups: Vec<syntax::GroupConfig>,
 }
 
 impl ConfigurationFile {
@@ -225,6 +239,7 @@ impl ConfigurationFile {
             bump: cfg.bump,
             commit_attribution: cfg.commit_attribution,
             projects: cfg.projects,
+            groups: cfg.groups,
         })
     }
 
@@ -235,6 +250,7 @@ impl ConfigurationFile {
             bump: self.bump,
             commit_attribution: self.commit_attribution,
             projects: self.projects,
+            groups: self.groups,
         };
         Ok(atry!(
             toml::to_string_pretty(&cfg);
