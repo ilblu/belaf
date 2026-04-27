@@ -227,6 +227,87 @@ edition = "2021"
 }
 
 #[test]
+fn intra_group_cyclic_deps_are_filtered_not_rejected() {
+    // Plan §5 / Gap #6: members of one release group are atomic — they
+    // share a bump and ship together — so circular deps between them
+    // must NOT be flagged as a graph cycle. A schema-bundle where
+    // both the npm package and the Maven artifact reference each other
+    // in their dep manifests should still build cleanly.
+    let repo = TestRepo::new();
+
+    repo.write_file(
+        "packages/npm/package.json",
+        r#"{
+  "name": "@org/schema",
+  "version": "0.1.0",
+  "main": "index.js",
+  "dependencies": { "schema-rs": "0.1.0" }
+}
+"#,
+    );
+    repo.write_file("packages/npm/index.js", "module.exports = {};\n");
+
+    // schema-rs in turn depends on @org/schema — circular within the
+    // group. (We can't actually express an npm dep target from
+    // Cargo.toml, but the cargo loader walks `[dependencies]`
+    // unconditionally — we use a dep on another local crate that is
+    // itself in the same group.)
+    repo.write_file(
+        "packages/cargo/Cargo.toml",
+        r#"[package]
+name = "schema-rs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+schema-rs-helper = { path = "../cargo-helper", version = "0.1.0" }
+"#,
+    );
+    repo.write_file("packages/cargo/src/lib.rs", "pub fn schema() {}\n");
+
+    repo.write_file(
+        "packages/cargo-helper/Cargo.toml",
+        r#"[package]
+name = "schema-rs-helper"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+schema-rs = { path = "../cargo", version = "0.1.0" }
+"#,
+    );
+    repo.write_file("packages/cargo-helper/src/lib.rs", "pub fn helper() {}\n");
+    repo.commit("init");
+
+    let init = repo.run_belaf_command(&["init", "--force"]);
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let cfg = repo.read_file("belaf/config.toml");
+    let cfg_with_group = format!(
+        "{cfg}\n[[group]]\nid = \"schema\"\nmembers = [\"schema-rs\", \"schema-rs-helper\"]\n"
+    );
+    repo.write_file("belaf/config.toml", &cfg_with_group);
+
+    repo.write_file("packages/cargo/src/feat.rs", "pub fn next() {}\n");
+    repo.commit("feat: shared schema feature");
+
+    let out = repo.run_belaf_command(&["prepare", "--ci"]);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // The intra-group cycle between schema-rs ↔ schema-rs-helper must
+    // NOT trip cycle-detection. (The release itself may still fail
+    // later because no GitHub App is installed — we only assert the
+    // graph build succeeded by checking we got past cycle detection.)
+    assert!(
+        !stderr.contains("dependency cycle"),
+        "intra-group dep cycle should be filtered, not rejected; got stderr:\n{stderr}"
+    );
+}
+
+#[test]
 fn unknown_group_member_rejected_at_load_time() {
     let repo = TestRepo::new();
 

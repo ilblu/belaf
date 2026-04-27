@@ -495,9 +495,57 @@ impl ProjectGraphBuilder {
             projects.push(proj);
         }
 
-        // Now that we've done that and compiled all of the interdependencies,
-        // we can verify that the graph has no cycles. We compute the
-        // topological sorting once and just reuse it later.
+        // Bind groups against the now-finalized name_to_id map. We do
+        // this BEFORE toposort so intra-group edges can be filtered out
+        // first — see plan §5: "internal_deps zwischen Group-Mitgliedern
+        // → automatisch gefiltert vom Graph". Without the filter, two
+        // grouped members that depend on each other look like a cycle
+        // and break the whole graph build, even though they're meant to
+        // ship as one atomic release.
+        let mut groups = GroupSet::new();
+        for gc in group_configs {
+            let id = atry!(
+                GroupId::new(&gc.id);
+                ["invalid `[[group]]` id `{}` in belaf/config.toml", gc.id]
+            );
+            let mut members = Vec::with_capacity(gc.members.len());
+            for member_name in &gc.members {
+                let pid = a_ok_or!(
+                    name_to_id.get(member_name).copied();
+                    ["group `{}` lists unknown member project `{}` (no such project in repo)",
+                     id, member_name]
+                );
+                members.push(pid);
+            }
+            atry!(
+                groups.add(Group { id: id.clone(), members, tag_format: gc.tag_format.clone() });
+                ["failed to register group `{}`", id]
+            );
+        }
+
+        // Filter intra-group edges. Members of the same release group
+        // share one bump and one release moment, so any topological
+        // ordering between them is meaningless — and a cycle between
+        // them is OK by construction (e.g. a GraphQL schema published
+        // as both an npm package and a Maven artifact, where both can
+        // reference each other in their respective dep manifests).
+        if !groups.is_empty() {
+            self.graph.retain_edges(|g, e| {
+                let (src_nix, dst_nix) = g.edge_endpoints(e).expect("edge exists");
+                let src_pid = g[src_nix];
+                let dst_pid = g[dst_nix];
+                let src_group = groups.group_of(src_pid).map(|gr| gr.id.as_str());
+                let dst_group = groups.group_of(dst_pid).map(|gr| gr.id.as_str());
+                match (src_group, dst_group) {
+                    (Some(a), Some(b)) if a == b => false, // intra-group → drop
+                    _ => true,
+                }
+            });
+        }
+
+        // Now that intra-group edges are gone, we can verify the graph
+        // has no remaining cycles and compute the topological sorting
+        // once for reuse.
 
         let sorted_nixs = atry!(
             toposort(&self.graph, None).map_err(|cycle| {
@@ -533,31 +581,9 @@ impl ProjectGraphBuilder {
             }
         }
 
-        // Bind groups against the now-finalized name_to_id map.
-        let mut groups = GroupSet::new();
-        for gc in group_configs {
-            let id = atry!(
-                GroupId::new(&gc.id);
-                ["invalid `[[group]]` id `{}` in belaf/config.toml", gc.id]
-            );
-            let mut members = Vec::with_capacity(gc.members.len());
-            for member_name in &gc.members {
-                let pid = a_ok_or!(
-                    name_to_id.get(member_name).copied();
-                    ["group `{}` lists unknown member project `{}` (no such project in repo)",
-                     id, member_name]
-                );
-                members.push(pid);
-            }
-            atry!(
-                groups.add(Group {
-                    id: id.clone(),
-                    members,
-                    tag_format: gc.tag_format.clone(),
-                });
-                ["failed to register group `{}`", id]
-            );
-        }
+        // (Groups were bound earlier — before the intra-group edge
+        // filter — so the toposort step above sees the post-filter
+        // graph.)
 
         Ok(ProjectGraph {
             projects,
