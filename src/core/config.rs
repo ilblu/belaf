@@ -39,7 +39,11 @@ pub mod syntax {
         ///
         /// Both forms produce the same `Vec<GroupConfig>` after
         /// normalisation in `ConfigurationFile::get`.
-        #[serde(default, rename = "group", skip_serializing_if = "GroupsForm::is_empty")]
+        #[serde(
+            default,
+            rename = "group",
+            skip_serializing_if = "GroupsForm::is_empty"
+        )]
         pub groups: GroupsForm,
 
         #[serde(default, rename = "bump_source", skip_serializing_if = "Vec::is_empty")]
@@ -401,10 +405,10 @@ members = ["@org/schema", "com.org:schema"]
 tag_format = "schema-v{version}"
 "#;
 
-        let from_array: GroupsOnly = toml::from_str(array_form)
-            .expect("array-of-tables form should parse");
-        let from_named: GroupsOnly = toml::from_str(named_form)
-            .expect("named-entry form should parse");
+        let from_array: GroupsOnly =
+            toml::from_str(array_form).expect("array-of-tables form should parse");
+        let from_named: GroupsOnly =
+            toml::from_str(named_form).expect("named-entry form should parse");
 
         let arr = from_array.groups.into_normalised();
         let nam = from_named.groups.into_normalised();

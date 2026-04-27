@@ -827,9 +827,7 @@ where
                         p.as_deref(),
                         Some("project/parent")
                             | Some("project/dependencies/dependency")
-                            | Some(
-                                "project/dependencyManagement/dependencies/dependency",
-                            )
+                            | Some("project/dependencyManagement/dependencies/dependency",)
                     )
                 {
                     buffered_scope = p.clone();
@@ -860,8 +858,7 @@ where
                         // Closing the buffered scope. Apply rewrite and
                         // flush all buffered events.
                         buffered.push(Event::End(e.clone()).into_owned());
-                        let rewritten =
-                            rewrite_buffered_block(&buffered, coord_lookup)?;
+                        let rewritten = rewrite_buffered_block(&buffered, coord_lookup)?;
                         for ev in rewritten {
                             writer
                                 .write_event(ev)
@@ -1034,9 +1031,7 @@ where
                     if original.trim().is_empty() {
                         out.push(Event::Text(t.clone()).into_owned());
                     } else if !wrote_replacement {
-                        out.push(
-                            Event::Text(BytesText::new(&new_version)).into_owned(),
-                        );
+                        out.push(Event::Text(BytesText::new(&new_version)).into_owned());
                         wrote_replacement = true;
                     }
                     // Drop subsequent text inside <version>.

@@ -102,16 +102,14 @@ fn golden_manifest_canonical_form_is_stable() {
 #[test]
 fn golden_manifest_validates_against_schema() {
     use serde_json::Value;
-    let schema_raw = fs::read_to_string("schemas/manifest.v2.0.schema.json")
-        .expect("read schema");
+    let schema_raw = fs::read_to_string("schemas/manifest.v2.0.schema.json").expect("read schema");
     let schema_json: Value = serde_json::from_str(&schema_raw).expect("parse schema");
     let golden_raw = fs::read_to_string(GOLDEN_PATH).expect("read golden");
     let golden_json: Value = serde_json::from_str(&golden_raw).expect("parse golden");
 
     // Compile + validate. jsonschema 0.34 supports Draft 2020-12 which
     // is what our schema declares.
-    let validator =
-        jsonschema::draft202012::new(&schema_json).expect("compile schema");
+    let validator = jsonschema::draft202012::new(&schema_json).expect("compile schema");
     let result = validator.validate(&golden_json);
     if let Err(err) = result {
         panic!("golden manifest fails schema validation: {err}");

@@ -473,8 +473,7 @@ impl WizardState {
                     // Toggle all projects backed by this display row —
                     // group rows flip every member at once.
                     let indices = self.projects_for_display_row(selected);
-                    let all_currently_on =
-                        indices.iter().all(|&i| self.projects[i].selected);
+                    let all_currently_on = indices.iter().all(|&i| self.projects[i].selected);
                     for i in indices {
                         self.projects[i].selected = !all_currently_on;
                     }
@@ -912,10 +911,9 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
                     let project = &state.projects[*project_idx];
                     render_solo_row(project, is_current)
                 }
-                DisplayRow::Group {
-                    id,
-                    member_indices,
-                } => render_group_row(id, member_indices, &state.projects, is_current),
+                DisplayRow::Group { id, member_indices } => {
+                    render_group_row(id, member_indices, &state.projects, is_current)
+                }
             }
         })
         .collect();
@@ -956,8 +954,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
 /// row per group with member indices in original-order. Plan §5.
 fn compute_display_rows(projects: &[ProjectItem]) -> Vec<DisplayRow> {
     let mut out: Vec<DisplayRow> = Vec::new();
-    let mut group_pos: std::collections::HashMap<String, usize> =
-        std::collections::HashMap::new();
+    let mut group_pos: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for (i, p) in projects.iter().enumerate() {
         match p.group_id() {
             Some(gid) => {
@@ -1102,14 +1099,15 @@ fn render_group_row(
     let mut lines = vec![header];
     for (i, m) in members.iter().enumerate() {
         let is_last = i == members.len() - 1;
-        let connector = if is_last { "    └─ " } else { "    ├─ " };
+        let connector = if is_last {
+            "    └─ "
+        } else {
+            "    ├─ "
+        };
         let eco_label = m.project_type().display_name();
         lines.push(Line::from(vec![
             Span::styled(connector, Style::default().fg(Color::DarkGray)),
-            Span::styled(
-                m.name().to_string(),
-                Style::default().fg(Color::Gray),
-            ),
+            Span::styled(m.name().to_string(), Style::default().fg(Color::Gray)),
             Span::styled(
                 format!("  ({})", eco_label),
                 Style::default().fg(Color::DarkGray),

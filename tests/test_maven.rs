@@ -354,7 +354,11 @@ fn multi_module_parent_version_propagates_to_children() {
     repo.commit("init");
 
     let init = repo.run_belaf_command(&["init", "--force"]);
-    assert!(init.status.success(), "init failed: {}", String::from_utf8_lossy(&init.stderr));
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
 
     // Touch the parent so it gets bumped (feature commit on the parent dir).
     repo.write_file("README.md", "# parent\n");
@@ -418,7 +422,11 @@ fn inter_module_dependency_version_propagates() {
     repo.commit("init");
 
     let init = repo.run_belaf_command(&["init", "--force"]);
-    assert!(init.status.success(), "init failed: {}", String::from_utf8_lossy(&init.stderr));
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
 
     // Touch the lib so it gets a feat bump. App should follow because of the dep.
     repo.write_file("modules/lib/feat.java", "class F {}\n");
