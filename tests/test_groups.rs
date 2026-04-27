@@ -198,9 +198,8 @@ edition = "2021"
     assert!(init.status.success());
 
     let cfg = repo.read_file("belaf/config.toml");
-    let cfg_with_group = format!(
-        "{cfg}\n[[group]]\nid = \"schema\"\nmembers = [\"@org/schema\", \"schema-rs\"]\n"
-    );
+    let cfg_with_group =
+        format!("{cfg}\n[[group]]\nid = \"schema\"\nmembers = [\"@org/schema\", \"schema-rs\"]\n");
     repo.write_file("belaf/config.toml", &cfg_with_group);
 
     repo.write_file(

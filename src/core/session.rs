@@ -283,9 +283,7 @@ impl AppSession {
     }
 
     /// `[project."<name>"]` entries declared in `belaf/config.toml`.
-    pub fn project_configs(
-        &self,
-    ) -> &HashMap<String, super::config::syntax::ProjectConfiguration> {
+    pub fn project_configs(&self) -> &HashMap<String, super::config::syntax::ProjectConfiguration> {
         &self.project_configs
     }
 

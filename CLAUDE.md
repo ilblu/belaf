@@ -56,17 +56,28 @@ src/
 │   ├── session.rs      AppBuilder/AppSession — wires repo + project graph + config
 │   ├── root.rs         pre_execute hook (update check)
 │   ├── config.rs       belaf/config.toml schema (syntax::* types)
-│   ├── manifest.rs     ReleaseManifest schema (belaf/releases/*.json)
-│   ├── ecosystem/      one file per language (cargo, npm, pypa, go, elixir, swift, csproj)
+│   ├── manifest.rs     v2 thin shim re-exporting wire/domain types under historical names
+│   ├── wire/           v2 manifest plumbing
+│   │   ├── codegen.rs    typify-generated wire types (`include!`d from $OUT_DIR)
+│   │   ├── domain.rs     Manifest, Group, Release with ergonomic API
+│   │   └── known.rs      KnownEcosystem/BumpType/ReleaseStatus + classify()
+│   ├── ecosystem/      one file per language; new ones implement Ecosystem trait
+│   │   ├── registry.rs   trait + EcosystemRegistry::with_defaults()
+│   │   └── cargo|npm|pypa|go|elixir|swift|csproj|maven.rs
+│   ├── group.rs        GroupId + Group + GroupSet
+│   ├── tag_format.rs   per-ecosystem tag templating + git-ref-format validation
+│   ├── bump_source.rs  external bump-decision sources (--bump-source, [[bump_source]])
 │   ├── changelog/      git-cliff-style template engine (Tera-based)
 │   ├── git/            libgit2 wrapper around the working repo
-│   ├── github/         octocrab client + PR creation
+│   ├── github/         PR creation (no octocrab — uses belaf API)
 │   ├── api/            client for api.belaf.dev (auth, releases)
 │   ├── auth/token.rs   keyring-backed token storage
-│   ├── graph.rs        petgraph DAG of inter-project dependencies
+│   ├── graph.rs        petgraph DAG of inter-project dependencies; owns GroupSet
 │   ├── bump.rs         conventional-commit → semver bump inference
 │   └── ui/             shared Ratatui components
 └── utils/              theme, file_io, version_check
+schemas/
+└── manifest.v2.0.schema.json  canonical wire format (belaf-owned)
 ```
 
 ### Release pipeline (the core flow)
@@ -85,7 +96,64 @@ The manifest is the contract: a downstream GitHub App consumes it to publish tag
 
 ### Ecosystem abstraction
 
-Adding language support means implementing the `Ecosystem` interface in `core/ecosystem/<lang>.rs` and registering its `EcosystemType` variant in `core/ecosystem/types.rs`. Each ecosystem owns: manifest detection, version reading, version writing, and dependency extraction. Tests live alongside in the same file (unit tests) plus broader scenarios in `tests/test_ecosystem_edge_cases.rs`.
+Adding language support is **two lines of editing**:
+
+1. New file `src/core/ecosystem/<lang>.rs` with a `FooLoader` struct that
+   `impl Ecosystem for FooLoader` (in `ecosystem/registry.rs`).
+2. One `register(Box::new(FooLoader::default()))` line in
+   `EcosystemRegistry::with_defaults()`.
+
+The trait surface (`name`, `display_name`, `version_file`,
+`tag_format_default`, `tag_template_vars`, `process_index_item`,
+`finalize`) is the contract. There is no central `match` to widen — the
+v1.x closed `EcosystemType` enum (which silently dropped Swift) is gone.
+For per-language identity in flowing types like manifests, use
+`wire::known::Ecosystem`'s discriminated `Known | Unknown` form so
+unknown wire strings round-trip without coercion.
+
+Tests live alongside in the same file (unit tests) plus broader
+scenarios in `tests/test_ecosystem_edge_cases.rs`.
+
+### Manifest schema is the wire format
+
+belaf is the owner of `belaf/schemas/manifest.v2.0.schema.json`
+(JSON Schema Draft 2020-12). `build.rs` runs `typify` against it to
+produce `$OUT_DIR/manifest_v2_codegen.rs`, which is `include!`d by
+`core::wire::codegen` and wrapped by hand-written domain types in
+`core::wire::domain`. The github-app vendors a copy (mirror of the
+OpenAPI direction): drift between producer + consumer is a build error
+on either side.
+
+Strict schema with explicit escape: every object is
+`additionalProperties: false`, plus an explicit `x` field for
+forward-compatible vendor extensions (OpenAPI `x-*` pattern).
+Variant fields (`ecosystem`, `bump_type`, `release_status`) are
+free-form strings in the schema; the closed-set whitelist lives in
+`wire::known.rs` and is one-line-extendable for new values without a
+schema bump.
+
+### Groups and tag formats
+
+`[[group]]` in `belaf/config.toml` bundles projects that release
+together (e.g. one schema published as both an npm and a Maven
+artifact). The graph carries a `GroupSet` alongside `petgraph`'s
+project graph. Manifest emission stamps every group member's release
+with `group_id`, and the github-app uses that to drive atomic
+two-phase-commit releases. Group atomicity (one bump for the whole
+group) is enforced both interactively (wizard auto-syncs siblings) and
+in `--ci` (validator at finalize, hard error on conflict).
+
+Tag templating per ecosystem (`tag_format_default()` on the trait):
+
+- npm: `{name}@v{version}`
+- cargo: `{name}-v{version}`
+- maven: `{groupId}/{artifactId}@v{version}` (slash, not colon)
+- pypa: `{name}-{version}`
+- go: `{module}/v{version}`
+
+Override per-project with `[projects."<name>".tag_format]` or
+per-group with `[group.<id>].tag_format`. Two layers of validation:
+ecosystem variable whitelist + `git check-ref-format --allow-onelevel`.
 
 ### TUI and CI modes
 

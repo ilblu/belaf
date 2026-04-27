@@ -112,7 +112,9 @@ pub fn validate_git_ref_format(tag: &str) -> Result<()> {
     let out = Command::new("git")
         .args(["check-ref-format", "--allow-onelevel", tag])
         .output()
-        .map_err(|e| anyhow!("failed to invoke `git check-ref-format` to validate tag `{tag}`: {e}"))?;
+        .map_err(|e| {
+            anyhow!("failed to invoke `git check-ref-format` to validate tag `{tag}`: {e}")
+        })?;
     if out.status.success() {
         return Ok(());
     }
@@ -187,7 +189,10 @@ mod tests {
         inputs.override_template = Some("{groupId}-{name}@v{version}");
         let err = format_tag(&inputs).unwrap_err();
         let msg = format!("{err:#}");
-        assert!(msg.contains("groupId"), "should name the offender; got: {msg}");
+        assert!(
+            msg.contains("groupId"),
+            "should name the offender; got: {msg}"
+        );
         assert!(msg.contains("npm"), "should name the ecosystem; got: {msg}");
     }
 

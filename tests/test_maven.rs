@@ -260,7 +260,10 @@ fn maven_tag_format_uses_slash_not_colon() {
     let _ = repo.run_belaf_command(&["prepare", "--ci"]);
 
     let manifest_files = repo.list_files_in_dir("belaf/releases");
-    let manifest_file = manifest_files.iter().find(|f| f.ends_with(".json")).unwrap();
+    let manifest_file = manifest_files
+        .iter()
+        .find(|f| f.ends_with(".json"))
+        .unwrap();
     let content = repo.read_file(&format!("belaf/releases/{manifest_file}"));
     let manifest: serde_json::Value = serde_json::from_str(&content).unwrap();
     let releases = manifest["releases"].as_array().unwrap();
@@ -269,10 +272,7 @@ fn maven_tag_format_uses_slash_not_colon() {
         "Maven tag must use `/` instead of `:` so it survives git ref-format"
     );
     assert!(
-        !releases[0]["tag_name"]
-            .as_str()
-            .unwrap()
-            .contains(':'),
+        !releases[0]["tag_name"].as_str().unwrap().contains(':'),
         "Maven tag must not contain `:` (git ref-format rejects it)"
     );
 }

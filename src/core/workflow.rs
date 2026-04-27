@@ -527,10 +527,11 @@ impl<'a> ReleasePipeline<'a> {
             // old version textually. This is best-effort — if it doesn't
             // produce a real tag, `with_compare_url` will catch it below
             // and clear `previous_tag` again.
-            release.previous_tag = release
-                .previous_tag
-                .as_ref()
-                .map(|_| release.tag_name.replacen(&project.new_version, &project.old_version, 1));
+            release.previous_tag = release.previous_tag.as_ref().map(|_| {
+                release
+                    .tag_name
+                    .replacen(&project.new_version, &project.old_version, 1)
+            });
 
             if let Some(g) = groups.group_of(project.ident) {
                 release = release.with_group_id(g.id.as_str());
@@ -900,7 +901,11 @@ fn build_tag_name(
         allowed_vars: eco.tag_template_vars(),
         override_template: template,
         maven_coords,
-        module_path: if eco_name == "go" { Some(&project.name) } else { None },
+        module_path: if eco_name == "go" {
+            Some(&project.name)
+        } else {
+            None
+        },
     };
     format_tag(&inputs)
 }

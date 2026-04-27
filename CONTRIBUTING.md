@@ -10,8 +10,10 @@ Please be respectful and constructive in all interactions. We welcome contributo
 
 ### Prerequisites
 
-- Rust 1.75 or later
-- Git
+- Rust 1.91 (pinned by `rust-toolchain.toml`)
+- [`just`](https://github.com/casey/just) for the task runner
+- `git` ≥ 2.40 (the Maven tag-format validator shells out to
+  `git check-ref-format`)
 
 ### Setup
 
@@ -23,8 +25,9 @@ cd belaf
 # Build
 cargo build
 
-# Run tests
-cargo test
+# Run tests (BELAF_NO_KEYRING=1 is required — the keyring crate hangs
+# in headless test environments)
+just test
 
 # Run with debug output
 RUST_LOG=debug cargo run -- --help
@@ -32,30 +35,38 @@ RUST_LOG=debug cargo run -- --help
 
 ## Development Workflow
 
-### Running Tests
+### `just` recipes
+
+The `justfile` is the source of truth for development commands:
 
 ```bash
-# All tests
-cargo test
-
-# Specific test
-cargo test test_name
-
-# With output
-cargo test -- --nocapture
+just              # list all recipes
+just check        # cargo check --all-features
+just test         # BELAF_NO_KEYRING=1 cargo test --all-features
+just lint         # cargo clippy --all-targets --all-features -- -D warnings
+just format       # cargo fmt
+just format-check # cargo fmt -- --check
+just audit        # cargo audit
+just ci           # check + test + lint + format-check + audit
 ```
 
-### Code Style
-
-We use standard Rust formatting and linting:
+### Single test file or test name
 
 ```bash
-# Format code
-cargo fmt
-
-# Run clippy
-cargo clippy -- -D warnings
+BELAF_NO_KEYRING=1 cargo test --all-features test_name
+BELAF_NO_KEYRING=1 cargo test --test test_groups   # one integration file
 ```
+
+### Code style enforced as errors
+
+Lint config (in `Cargo.toml`):
+
+- **deny**: `mod_module_files` (no `mod.rs` files), `wildcard_imports`,
+  `enum_glob_use`, `allow_attributes` (use `#[expect]` with a reason).
+- **warn**: `todo`, `dbg_macro`, `unsafe_code`.
+
+`#[allow]` attributes won't compile through `just lint` — replace with
+`#[expect(lint, reason = "…")]` or fix the underlying issue.
 
 ### Commit Messages
 
@@ -107,34 +118,43 @@ BREAKING CHANGE: The `prepare` command now requires explicit confirmation.
 
 ## Project Structure
 
-```
-src/
-├── cli.rs              # CLI argument parsing (clap)
-├── cmd/                # Command implementations
-│   ├── auth.rs         # Authentication commands
-│   ├── init.rs         # Repository initialization
-│   ├── prepare.rs      # Release preparation
-│   ├── status.rs       # Status display
-│   └── graph.rs        # Dependency graph
-├── core/
-│   ├── ai/             # Claude AI integration
-│   ├── auth/           # GitHub/Anthropic auth
-│   ├── ecosystem/      # Language-specific parsers
-│   ├── git/            # Git operations
-│   ├── release/        # Release logic
-│   └── ui/             # TUI components
-└── utils/              # Shared utilities
-```
+See `CLAUDE.md` for the canonical module map. High-level:
+
+- `src/cli.rs` — clap definitions
+- `src/cmd/` — one file per subcommand
+- `src/core/` — domain logic
+  - `wire/` — typify-generated v2 manifest types + ergonomic domain wrappers
+  - `ecosystem/` — one file per language plus the `Ecosystem` trait + registry
+  - `group.rs`, `tag_format.rs`, `bump_source.rs` — v2 release-shape primitives
+  - `workflow.rs` — orchestrator (`ReleasePipeline`)
+- `schemas/manifest.v2.0.schema.json` — canonical wire format
 
 ## Adding Language Support
 
-To add support for a new language:
+belaf 2.0 makes this **two lines of editing** plus the loader file
+itself. There is no central enum to widen.
 
-1. Create a new file in `src/core/ecosystem/`
-2. Implement the `Ecosystem` trait
-3. Add detection logic in `src/core/ecosystem/types.rs`
-4. Add tests in the same file
-5. Update documentation
+1. Create `src/core/ecosystem/<lang>.rs` with a `FooLoader` struct.
+2. Implement two inherent helpers — `record_path(&mut self, dirname, basename)`
+   for the index scan and `into_projects(self, app, pconfig)` for graph
+   registration — so unit tests can drive the loader without standing up
+   a real `Repository`/`ProjectGraphBuilder`.
+3. Add an `impl Ecosystem for FooLoader` block (in
+   `src/core/ecosystem/registry.rs`) supplying `name`, `display_name`,
+   `version_file`, `tag_format_default`, `tag_template_vars`, and trait
+   shims that delegate to the inherent helpers.
+4. Add `r.register(Box::new(FooLoader::default()))` to
+   `EcosystemRegistry::with_defaults()`.
+5. Add the wire string to `KNOWN_ECOSYSTEMS` in
+   `src/core/wire/known.rs` (one line) so manifests classify it as
+   `Known(...)` rather than `Unknown(...)`.
+6. Add the per-ecosystem display info on `KnownEcosystem::display_name`
+   and `version_file`.
+7. Tests: unit tests live alongside in the same file; integration
+   scenarios go in `tests/test_<lang>.rs` if the loader has interesting
+   behaviour worth covering through `belaf init` + `prepare --ci`.
+
+No schema bump, no DB migration, no central match-arm to update.
 
 ## Modifying the API client
 
