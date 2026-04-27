@@ -175,6 +175,59 @@ edition = "2021"
 }
 
 #[test]
+fn conflicting_project_overrides_within_group_rejected() {
+    let repo = TestRepo::new();
+    repo.write_file(
+        "packages/npm/package.json",
+        r#"{ "name": "@org/schema", "version": "0.1.0", "main": "index.js" }
+"#,
+    );
+    repo.write_file("packages/npm/index.js", "module.exports = {};\n");
+    repo.write_file(
+        "packages/cargo/Cargo.toml",
+        r#"[package]
+name = "schema-rs"
+version = "0.1.0"
+edition = "2021"
+"#,
+    );
+    repo.write_file("packages/cargo/src/lib.rs", "pub fn schema() {}\n");
+    repo.commit("init");
+
+    let init = repo.run_belaf_command(&["init", "--force"]);
+    assert!(init.status.success());
+
+    let cfg = repo.read_file("belaf/config.toml");
+    let cfg_with_group = format!(
+        "{cfg}\n[[group]]\nid = \"schema\"\nmembers = [\"@org/schema\", \"schema-rs\"]\n"
+    );
+    repo.write_file("belaf/config.toml", &cfg_with_group);
+
+    repo.write_file(
+        "packages/npm/feat.js",
+        "module.exports.next = () => null;\n",
+    );
+    repo.write_file("packages/cargo/src/feat.rs", "pub fn next() {}\n");
+    repo.commit("feat: drift");
+
+    let out = repo.run_belaf_command(&[
+        "prepare",
+        "--ci",
+        "--project",
+        "@org/schema:major,schema-rs:patch",
+    ]);
+    assert!(
+        !out.status.success(),
+        "prepare must fail when --project flags push group members in different directions"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("schema") && stderr.contains("must share one bump"),
+        "stderr must explain the group-bump conflict; got:\n{stderr}"
+    );
+}
+
+#[test]
 fn unknown_group_member_rejected_at_load_time() {
     let repo = TestRepo::new();
 

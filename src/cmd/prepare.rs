@@ -5,6 +5,7 @@ use tracing::info;
 use crate::core::{
     bump_source::{self, BumpSourceInput, DEFAULT_TIMEOUT_SEC},
     config::syntax::BumpSourceConfig,
+    group::GroupSet,
     session::AppSession,
     workflow::{BumpChoice, PrepareContext, ProjectSelection},
 };
@@ -77,6 +78,10 @@ fn run_ci_mode(
 
     let mut sess = AppSession::initialize_default()?;
     let config_bump_sources = sess.config_bump_sources().to_vec();
+    // Snapshot groups before ctx takes a mutable borrow on sess. The
+    // GroupSet is cloneable and we only read from it during validation, so
+    // there's no consistency risk vs. the live graph.
+    let groups = sess.graph().groups().clone();
 
     let mut ctx = PrepareContext::initialize(&mut sess, false)?;
     ctx.discover_projects()?;
@@ -109,6 +114,12 @@ fn run_ci_mode(
     if let Some(overrides) = project_overrides {
         apply_project_overrides(&mut selections, &overrides)?;
     }
+
+    // Group atomicity: every member of a group must end up with the same
+    // bump. If two `--project` overrides disagree, or a bump-source decision
+    // contradicts a `--project` override on a sibling, fail loudly here
+    // instead of silently emitting an inconsistent manifest.
+    validate_group_consistency(&selections, &groups)?;
 
     let has_actionable_bumps = selections.iter().any(|s| {
         let bump_text = s.bump_choice.resolve(s.candidate.suggested_bump);
@@ -216,6 +227,62 @@ fn collect_cli_decisions(
     } else {
         Ok(Some(all))
     }
+}
+
+/// Enforce that every group's members share one resolved bump. The
+/// resolved bump is `bump_choice.resolve(suggested_bump)` — i.e. the same
+/// string the manifest will end up carrying. Members in `Auto` mode whose
+/// inferred bump differs from a sibling's explicit choice are also a
+/// conflict (otherwise the conv-commits inference would silently win).
+pub(super) fn validate_group_consistency(
+    selections: &[ProjectSelection],
+    groups: &GroupSet,
+) -> Result<()> {
+    if groups.is_empty() {
+        return Ok(());
+    }
+    use std::collections::HashMap;
+    // Map: group_id -> Vec<(member_name, resolved_bump)>
+    let mut by_group: HashMap<&str, Vec<(&str, &'static str)>> = HashMap::new();
+    for sel in selections {
+        let Some(g) = groups.group_of(sel.candidate.ident) else {
+            continue;
+        };
+        let resolved = sel.bump_choice.resolve(sel.candidate.suggested_bump);
+        by_group
+            .entry(g.id.as_str())
+            .or_default()
+            .push((sel.candidate.name.as_str(), resolved));
+    }
+    for (group_id, members) in &by_group {
+        // "no bump" is the silent default for projects with no commits
+        // since the last release. Filter those out so a group of 5 where
+        // 3 members are quiescent still validates against the 2 active
+        // members' shared bump.
+        let active: Vec<_> = members
+            .iter()
+            .filter(|(_, bump)| *bump != "no bump")
+            .copied()
+            .collect();
+        if active.len() < 2 {
+            continue;
+        }
+        let first_bump = active[0].1;
+        if active.iter().any(|(_, b)| *b != first_bump) {
+            let detail = active
+                .iter()
+                .map(|(name, bump)| format!("`{name}` bump={bump}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(anyhow::anyhow!(
+                "group `{group_id}`: members disagree on bump ({detail}) — \
+                 all members of a group must share one bump. Reconcile via \
+                 `--project name:bump` for each member, or fix the \
+                 [[bump_source]] output."
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn apply_decisions(

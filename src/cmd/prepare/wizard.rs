@@ -50,6 +50,10 @@ struct ProjectItem {
     chosen_bump: Option<BumpChoice>,
     cached_changelog: Option<String>,
     existing_changelog: String,
+    /// Resolved group id, if this project is a member of a `[[group]]`.
+    /// Rendered as a "[group: <id>]" badge in the project list so users
+    /// know an interactive bump-edit will propagate to siblings.
+    group_id: Option<String>,
 }
 
 impl ProjectItem {
@@ -60,7 +64,12 @@ impl ProjectItem {
             chosen_bump: None,
             cached_changelog: None,
             existing_changelog,
+            group_id: None,
         }
+    }
+
+    fn group_id(&self) -> Option<&str> {
+        self.group_id.as_deref()
     }
 
     fn name(&self) -> &str {
@@ -332,8 +341,23 @@ impl WizardState {
             WizardStep::ProjectConfig { project_index } => {
                 if !self.show_changelog {
                     if let Some(selected) = self.bump_list_state.selected() {
-                        if let Some(project) = self.get_current_project_mut() {
-                            project.chosen_bump = Some(BumpChoice::all()[selected]);
+                        let choice = BumpChoice::all()[selected];
+                        // Group atomicity: changing one member's bump
+                        // propagates to every sibling so the user can't
+                        // accidentally desync the group through the UI.
+                        // Validation at finalize is the safety net; this is
+                        // the friendlier path where it just stays consistent.
+                        if let Some(project) = self.get_current_project() {
+                            let group_id = project.group_id().map(str::to_string);
+                            if let Some(gid) = group_id {
+                                for p in &mut self.projects {
+                                    if p.group_id() == Some(gid.as_str()) {
+                                        p.chosen_bump = Some(choice);
+                                    }
+                                }
+                            } else if let Some(p) = self.get_current_project_mut() {
+                                p.chosen_bump = Some(choice);
+                            }
                         }
                     }
                     self.loading_changelog = true;
@@ -507,6 +531,8 @@ pub fn run_with_overrides_and_decisions(
 
     let mut sess =
         AppSession::initialize_default().context("could not initialize app and project graph")?;
+    // Snapshot groups before ctx takes a mutable borrow on sess.
+    let groups = sess.graph().groups().clone();
 
     let mut ctx = PrepareContext::initialize(&mut sess, true)?;
     ctx.discover_projects()?;
@@ -530,7 +556,11 @@ pub fn run_with_overrides_and_decisions(
             let changelog_repo_path = RepoPathBuf::new(changelog_rel_path.as_bytes());
             let changelog_path = ctx.resolve_workdir(changelog_repo_path.as_ref());
             let existing_changelog = parse_existing_changelog(&changelog_path).unwrap_or_default();
-            ProjectItem::from_candidate(candidate.clone(), existing_changelog)
+            let mut item = ProjectItem::from_candidate(candidate.clone(), existing_changelog);
+            item.group_id = groups
+                .group_of(candidate.ident)
+                .map(|g| g.id.as_str().to_string());
+            item
         })
         .collect();
 
@@ -575,6 +605,15 @@ pub fn run_with_overrides_and_decisions(
             cached_changelog: item.cached_changelog,
         })
         .collect();
+
+    // Group atomicity: same check as CI mode. The wizard already auto-syncs
+    // bumps when the user edits one group member (see `WizardState::set_bump_choice`),
+    // so this should only fire when the user *also* passed --project flags
+    // that point in different directions.
+    if let Err(e) = super::validate_group_consistency(&selections, &groups) {
+        ctx.cleanup();
+        return Err(e);
+    }
 
     println!();
     let mut spinner = spinoff::Spinner::new(
@@ -828,7 +867,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
                 BumpRecommendation::None => ("", Color::Gray),
             };
 
-            let lines = vec![Line::from(vec![
+            let mut spans = vec![
                 Span::styled(format!(" {} ", checkbox), Style::default()),
                 Span::styled(
                     project.name(),
@@ -842,19 +881,26 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
                         Style::default().fg(Color::White)
                     },
                 ),
-                Span::styled(
-                    format!(" ({} commits)", project.commit_count()),
-                    Style::default().fg(Color::Gray),
-                ),
-                if !suggestion_text.is_empty() {
-                    Span::styled(
-                        format!("  → {}", suggestion_text),
-                        Style::default().fg(suggestion_color),
-                    )
-                } else {
-                    Span::raw("")
-                },
-            ])];
+            ];
+            if let Some(gid) = project.group_id() {
+                spans.push(Span::styled(
+                    format!(" [group: {}]", gid),
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::ITALIC),
+                ));
+            }
+            spans.push(Span::styled(
+                format!(" ({} commits)", project.commit_count()),
+                Style::default().fg(Color::Gray),
+            ));
+            if !suggestion_text.is_empty() {
+                spans.push(Span::styled(
+                    format!("  → {}", suggestion_text),
+                    Style::default().fg(suggestion_color),
+                ));
+            }
+            let lines = vec![Line::from(spans)];
 
             let style = if is_current {
                 Style::default().bg(Color::Rgb(40, 40, 50))
