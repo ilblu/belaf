@@ -95,9 +95,16 @@ DB migration.
   documented in the schema for unstable subsystem fields (Kubernetes
   pattern). Mature fields move to unsuffixed names without a schema
   bump.
-* **pluggable hooks (planned)** — server-side; the CLI manifest is
-  group-id-shaped to support the github-app's atomic two-phase-commit
-  release path.
+* **pluggable post-release hooks** — server-side only. Hook
+  configuration (event filter, target URL, signing-secret reference)
+  lives in the github-app's database and is managed through the
+  dashboard, **not** through `belaf/config.toml`. Hooks fire after a
+  manifest is processed by the GitHub App and the CLI is uninvolved at
+  that point — putting hook config in the user-repo would just be a
+  redundant copy of state the App already owns. The CLI's contribution
+  is shaping the manifest so the App can drive atomic, group-aware
+  delivery (`group_id`, `manifest_id`, `tag_name`, `is_prerelease`
+  fields are all consumed by the hook event payload).
 
 ### Code Refactoring
 
