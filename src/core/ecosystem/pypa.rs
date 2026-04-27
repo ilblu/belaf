@@ -63,7 +63,8 @@ impl PypaLoader {
         for dirname in &self.dirs_of_interest {
             let mut name = None;
             let mut version = None;
-            let mut main_version_file = None;
+            let mut main_version_file: Option<String> = None;
+            let mut version_from_pep621 = false;
 
             let dir_desc = if dirname.is_empty() {
                 "the toplevel directory".to_owned()
@@ -109,14 +110,22 @@ impl PypaLoader {
                     })
                     .transpose()?;
 
-                let data = data.and_then(|d| d.tool).and_then(|t| t.belaf);
+                if let Some(ref f) = data {
+                    name = f.project_name();
+                    main_version_file = f.tool_belaf().and_then(|b| b.main_version_file.clone());
 
-                if let Some(ref data) = data {
-                    name = data.name.clone();
-                    main_version_file = data.main_version_file.clone();
+                    if let Some(v) = f.project_version() {
+                        version = Some(atry!(
+                            v.parse();
+                            ["failed to parse `[project] version = \"{}\"` in `{}`",
+                             v, toml_repopath.escaped()]
+                            (note "PEP 621 versions must be PEP 440-compliant (e.g. `1.2.3`, `1.0.0a1`, `2.0.dev0`)")
+                        ));
+                        version_from_pep621 = true;
+                    }
                 }
 
-                data
+                data.and_then(|d| d.tool).and_then(|t| t.belaf)
             };
 
             // Parse setup.cfg for metadata if available.
@@ -172,8 +181,27 @@ impl PypaLoader {
                 }
             }
 
-            let main_version_file = main_version_file.unwrap_or_else(|| "setup.py".to_owned());
-            let main_version_in_setup = main_version_file == "setup.py";
+            // Decide where this project's version is going to live for both
+            // *reading* (during scan, when no explicit value was found) and
+            // *writing* (which Rewriter to register on the project). Priority:
+            //
+            //   1. `[tool.belaf] main_version_file` — explicit override.
+            //   2. PEP 621 `[project] version` — modern default.
+            //   3. `setup.py` — legacy default for old-style projects.
+            //
+            // The first form keeps version in some `*.py` file (handled by
+            // `PythonRewriter`); the second writes back to `pyproject.toml`
+            // (handled by `PyProjectVersionRewriter`).
+            let version_loc = match (main_version_file.take(), version_from_pep621) {
+                (Some(path), _) => PypaVersionLocation::PyFile(path),
+                (None, true) => PypaVersionLocation::PyProjectToml,
+                (None, false) => PypaVersionLocation::PyFile("setup.py".to_owned()),
+            };
+            let py_version_file = match &version_loc {
+                PypaVersionLocation::PyFile(p) => Some(p.clone()),
+                PypaVersionLocation::PyProjectToml => None,
+            };
+            let main_version_in_setup = matches!(&py_version_file, Some(p) if p == "setup.py");
 
             // Finally, how about setup.py?
 
@@ -236,10 +264,14 @@ impl PypaLoader {
             }
 
             // Do we need to look in yet another file to pull out the version?
+            // Only relevant for `PypaVersionLocation::PyFile(non-setup.py)` —
+            // setup.py was already handled above, and PEP 621 versions live
+            // inline in pyproject.toml (already read).
 
-            if !main_version_in_setup {
+            if !main_version_in_setup && py_version_file.is_some() {
+                let main_version_file = py_version_file.as_deref().unwrap();
                 let mut version_path = dirname.clone();
-                version_path.push(&main_version_file);
+                version_path.push(main_version_file);
                 let version_path = app.repo.resolve_workdir(&version_path);
 
                 let f = atry!(
@@ -293,10 +325,19 @@ impl PypaLoader {
                     proj.version = Some(Version::Pep440(version));
                     proj.prefix = Some(dirname.to_owned());
 
-                    let mut rw_path = dirname.clone();
-                    rw_path.push(main_version_file.as_bytes());
-                    let rw = PythonRewriter::new(ident, rw_path);
-                    proj.rewriters.push(Box::new(rw));
+                    let rw: Box<dyn Rewriter> = match &version_loc {
+                        PypaVersionLocation::PyFile(p) => {
+                            let mut rw_path = dirname.clone();
+                            rw_path.push(p.as_bytes());
+                            Box::new(PythonRewriter::new(ident, rw_path))
+                        }
+                        PypaVersionLocation::PyProjectToml => {
+                            let mut rw_path = dirname.clone();
+                            rw_path.push(b"pyproject.toml");
+                            Box::new(PyProjectVersionRewriter::new(ident, rw_path))
+                        }
+                    };
+                    proj.rewriters.push(rw);
                 }
 
                 // Handle the other annotated files. Besides registering them for
@@ -583,7 +624,42 @@ pub(crate) mod simple_py_parse {
 /// Toplevel `pyproject.toml` deserialization container.
 #[derive(Debug, Deserialize)]
 struct PyProjectFile {
+    /// Standard PEP 621 project metadata (`[project]` section). Used as the
+    /// canonical source for `name` and `version`; `[tool.belaf]` may
+    /// override either if explicitly set.
+    pub project: Option<PyProjectMetadata>,
     pub tool: Option<PyProjectTool>,
+}
+
+impl PyProjectFile {
+    /// Resolved project name, with `[tool.belaf] name` taking precedence
+    /// over PEP 621 `[project] name`.
+    fn project_name(&self) -> Option<String> {
+        self.tool_belaf()
+            .and_then(|b| b.name.clone())
+            .or_else(|| self.project.as_ref().and_then(|p| p.name.clone()))
+    }
+
+    /// Project version as it appears in PEP 621 `[project] version`.
+    /// `[tool.belaf]` has no `version` field — versions live in source
+    /// files for the rewriters to manage, or here in `[project]`.
+    fn project_version(&self) -> Option<&str> {
+        self.project.as_ref().and_then(|p| p.version.as_deref())
+    }
+
+    fn tool_belaf(&self) -> Option<&PyProjectBelaf> {
+        self.tool.as_ref().and_then(|t| t.belaf.as_ref())
+    }
+}
+
+/// PEP 621 `[project]` table — the modern, build-system-agnostic location
+/// for Python project metadata. Both `name` and `version` are optional in
+/// PEP 621 (a build backend may compute them dynamically), so we keep them
+/// as `Option`s and only use static, present values as a source.
+#[derive(Debug, Deserialize)]
+struct PyProjectMetadata {
+    pub name: Option<String>,
+    pub version: Option<String>,
 }
 
 /// `pyproject.toml` section `tool` deserialization container.
@@ -821,6 +897,81 @@ impl InstallTokenCommand {
         );
 
         Ok(0)
+    }
+}
+
+/// Where this PyPA project's authoritative version string lives — both for
+/// reading during scan and for writing during a release.
+#[derive(Debug)]
+enum PypaVersionLocation {
+    /// A `.py` file (e.g. `setup.py`, or a `_version.py` set explicitly via
+    /// `[tool.belaf] main_version_file`). Handled by `PythonRewriter`.
+    PyFile(String),
+    /// PEP 621 `[project] version` in `pyproject.toml`. Handled by
+    /// `PyProjectVersionRewriter`.
+    PyProjectToml,
+}
+
+/// Rewrite `[project] version = "..."` in a PEP 621 `pyproject.toml`.
+///
+/// Used for projects that declare their version via the modern PEP 621
+/// `[project]` table and have no setup.py / `*_version.py` file. Mirrors
+/// the structure of `CargoRewriter` for `Cargo.toml`.
+#[derive(Debug)]
+pub struct PyProjectVersionRewriter {
+    proj_id: ProjectId,
+    toml_path: RepoPathBuf,
+}
+
+impl PyProjectVersionRewriter {
+    pub fn new(proj_id: ProjectId, toml_path: RepoPathBuf) -> Self {
+        PyProjectVersionRewriter { proj_id, toml_path }
+    }
+}
+
+impl Rewriter for PyProjectVersionRewriter {
+    fn rewrite(&self, app: &AppSession, changes: &mut ChangeList) -> Result<()> {
+        use toml_edit::{value, DocumentMut};
+
+        let toml_path = app.repo.resolve_workdir(&self.toml_path);
+
+        let mut text = String::new();
+        let mut f = atry!(
+            File::open(&toml_path);
+            ["failed to open file `{}` for reading", toml_path.display()]
+        );
+        atry!(
+            f.read_to_string(&mut text);
+            ["failed to read file `{}`", toml_path.display()]
+        );
+
+        let mut doc: DocumentMut = atry!(
+            text.parse();
+            ["could not parse file `{}` as TOML", toml_path.display()]
+        );
+
+        let proj = app.graph().lookup(self.proj_id);
+        let new_version = proj.version.to_string();
+
+        let project_table = a_ok_or!(
+            doc.get_mut("project").and_then(|p| p.as_table_mut());
+            ["expected a `[project]` section in `{}`", self.toml_path.escaped()]
+            (note "PEP 621 requires `[project]` for project metadata; if you've removed it, set `[tool.belaf] main_version_file` to a different file instead")
+        );
+        project_table["version"] = value(new_version);
+
+        // Atomic write back.
+        let new_af = atomicwrites::AtomicFile::new(
+            &toml_path,
+            atomicwrites::OverwriteBehavior::AllowOverwrite,
+        );
+        atry!(
+            new_af.write(|f| f.write_all(doc.to_string().as_bytes()));
+            ["failed to rewrite file `{}`", toml_path.display()]
+        );
+
+        changes.add_path(&self.toml_path);
+        Ok(())
     }
 }
 

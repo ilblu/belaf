@@ -1,6 +1,76 @@
 mod common;
 use common::TestRepo;
 
+/// PEP 621 (`[project]` table) projects with no `setup.py` and no
+/// `setup.cfg` should be detected — both name and version. Modern
+/// uv/hatch/poetry-style layouts.
+#[test]
+fn test_pypa_pep621_only_pyproject() {
+    let repo = TestRepo::new();
+    let pyproject = r#"[project]
+name = "modern-pkg"
+version = "1.4.2"
+description = "PEP 621-only project"
+requires-python = ">=3.11"
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+"#;
+    repo.write_file("pyproject.toml", pyproject);
+    repo.commit("initial commit");
+
+    let output = repo.run_belaf_command(&["init", "--force"]);
+    assert!(
+        output.status.success(),
+        "PEP 621-only project should init cleanly: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bootstrap = repo.read_file("belaf/bootstrap.toml");
+    assert!(
+        bootstrap.contains("modern-pkg"),
+        "PEP 621 [project] name should be picked up"
+    );
+    assert!(
+        bootstrap.contains("1.4.2"),
+        "PEP 621 [project] version should be picked up"
+    );
+}
+
+/// `[tool.belaf] name` should override PEP 621 `[project] name` when both
+/// are present.
+#[test]
+fn test_pypa_tool_belaf_overrides_pep621() {
+    let repo = TestRepo::new();
+    let pyproject = r#"[project]
+name = "pypi-name"
+version = "0.5.0"
+
+[tool.belaf]
+name = "internal-name"
+"#;
+    repo.write_file("pyproject.toml", pyproject);
+    repo.commit("initial commit");
+
+    let output = repo.run_belaf_command(&["init", "--force"]);
+    assert!(
+        output.status.success(),
+        "Override scenario should init: {:?}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let bootstrap = repo.read_file("belaf/bootstrap.toml");
+    assert!(
+        bootstrap.contains("internal-name"),
+        "[tool.belaf] name should win over [project] name"
+    );
+    assert!(
+        !bootstrap.contains("\"pypi-name\""),
+        "[project] name should be shadowed when [tool.belaf] sets name"
+    );
+}
+
 #[test]
 fn test_elixir_prerelease_version() {
     let repo = TestRepo::new();

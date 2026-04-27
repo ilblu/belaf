@@ -266,8 +266,39 @@ jobs:
           # Remove the granular manifests
           rm -f artifacts/*-dist-manifest.json
       - name: Upload Assets to Release
+        # `dist host --steps=upload --steps=release` reports success but
+        # the GitHub Release isn't always queryable straight away
+        # (https://github.com/cli/cli/issues/6599 — `gh release create`
+        # returns before the release is fully replicated by GitHub's
+        # backend). Belaf hit this twice in a row on v1.3.4 and v1.3.5.
+        #
+        # We work around it in two steps:
+        #   1. Make the release exist for sure (idempotent — `--clobber`-style
+        #      semantics via `|| true`; if it's already there, fine).
+        #   2. Retry `gh release upload` with backoff to absorb any further
+        #      replication lag.
         run: |
-          gh release upload "${{ needs.plan.outputs.tag }}" artifacts/* --clobber
+          TAG="${{ needs.plan.outputs.tag }}"
+          # Ensure the release exists. If `dist host` already created it,
+          # this is a no-op error we ignore. We use the dist-manifest's
+          # generated body so the release notes match what `dist` produced.
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            BODY="$(jq -r .announcement_github_body dist-manifest.json 2>/dev/null || echo '')"
+            TITLE="$(jq -r .announcement_title dist-manifest.json 2>/dev/null || echo "$TAG")"
+            gh release create "$TAG" --title "$TITLE" --notes "$BODY" || true
+          fi
+          # Now upload, with retry for cross-region replication delay.
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" artifacts/* --clobber; then
+              echo "uploaded on attempt $attempt"
+              exit 0
+            fi
+            sleep_secs=$((attempt * 3))
+            echo "upload attempt $attempt failed, sleeping ${sleep_secs}s" >&2
+            sleep "$sleep_secs"
+          done
+          echo "upload failed after 5 attempts" >&2
+          exit 1
 
   publish-homebrew-formula:
     needs:

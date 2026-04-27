@@ -1,3 +1,22 @@
+## [1.3.6](https://github.com/ilblu/belaf/compare/v1.3.5...v1.3.6) (2026-04-27)
+
+
+### Bug Fixes
+
+* **pypa:** detect PEP 621 `[project]` table in `pyproject.toml`. Previously belaf only looked at `[tool.belaf]` and the legacy `setup.cfg`/`setup.py` markers, which forced users on modern Python layouts (uv, hatch, poetry, plain setuptools >=61) to duplicate `name` and `version` in `[tool.belaf]` even though they were already in `[project]`. Now `[project] name` and `[project] version` are picked up natively; `[tool.belaf]` remains as an explicit override. ([commit](https://github.com/ilblu/belaf/commit/HEAD))
+* **pypa:** add `PyProjectVersionRewriter` to write back `[project] version = "..."` in `pyproject.toml` for PEP 621-only projects (no setup.py, no setup.cfg). Fixes `failed to open file '...setup.py' for reading` during `belaf prepare` on modern Python projects. ([commit](https://github.com/ilblu/belaf/commit/HEAD))
+
+
+### Tests
+
+* **pypa:** integration tests for two new scenarios — PEP 621-only projects and `[tool.belaf] name` overriding `[project] name`. ([commit](https://github.com/ilblu/belaf/commit/HEAD))
+
+
+### Build System
+
+* **release:** bump cargo-dist 0.30.3 → 0.31.0 and harden the host job's `gh release upload` step. The previous releases (1.3.4, 1.3.5) needed a manual `gh release create` + `--failed` rerun because GitHub's release backend wasn't always queryable immediately after `dist host` reported success ([cli/cli#6599](https://github.com/cli/cli/issues/6599)). The step now (a) ensures the release exists with the dist-manifest body if missing and (b) retries `gh release upload` 5× with backoff. ([commit](https://github.com/ilblu/belaf/commit/HEAD))
+
+
 ## [1.3.5](https://github.com/ilblu/belaf/compare/v1.3.4...v1.3.5) (2026-04-27)
 
 
