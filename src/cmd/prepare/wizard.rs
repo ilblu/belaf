@@ -51,9 +51,26 @@ struct ProjectItem {
     cached_changelog: Option<String>,
     existing_changelog: String,
     /// Resolved group id, if this project is a member of a `[[group]]`.
-    /// Rendered as a "[group: <id>]" badge in the project list so users
-    /// know an interactive bump-edit will propagate to siblings.
+    /// Group members render as a collapsed tree under one group-header
+    /// row instead of as separate rows — see `WizardState::display_rows`
+    /// (plan §5).
     group_id: Option<String>,
+}
+
+/// One renderable row in the Step 1 project list. Solo (ungrouped)
+/// projects are one row each; grouped projects collapse into a single
+/// `Group` row whose `member_indices` point into `WizardState::projects`.
+/// The cursor moves through `Vec<DisplayRow>`, not the underlying
+/// projects, so a 5-member group still navigates as one stop.
+#[derive(Debug, Clone)]
+enum DisplayRow {
+    Solo {
+        project_idx: usize,
+    },
+    Group {
+        id: String,
+        member_indices: Vec<usize>,
+    },
 }
 
 impl ProjectItem {
@@ -319,6 +336,24 @@ impl WizardState {
         self.projects.iter().filter(|p| p.selected).count()
     }
 
+    /// Compute the per-render display rows. Delegates to the free
+    /// `compute_display_rows` so tests can exercise the layout
+    /// algorithm without standing up a full WizardState.
+    fn display_rows(&self) -> Vec<DisplayRow> {
+        compute_display_rows(&self.projects)
+    }
+
+    /// Project indices the row at `display_idx` represents — one for
+    /// solo, all members for a group.
+    fn projects_for_display_row(&self, display_idx: usize) -> Vec<usize> {
+        let rows = self.display_rows();
+        match rows.get(display_idx) {
+            Some(DisplayRow::Solo { project_idx }) => vec![*project_idx],
+            Some(DisplayRow::Group { member_indices, .. }) => member_indices.clone(),
+            None => Vec::new(),
+        }
+    }
+
     fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
     }
@@ -415,6 +450,9 @@ impl WizardState {
     }
 
     fn handle_key_project_selection(&mut self, key: KeyCode) -> bool {
+        // Cursor is in **display-row** space, not project space (plan §5).
+        // A 5-member group is one row, so Up/Down skips past members.
+        let row_count = self.display_rows().len();
         match key {
             KeyCode::Up => {
                 if let Some(selected) = self.project_list_state.selected() {
@@ -425,14 +463,21 @@ impl WizardState {
             }
             KeyCode::Down => {
                 if let Some(selected) = self.project_list_state.selected() {
-                    if selected < self.projects.len() - 1 {
+                    if selected + 1 < row_count {
                         self.project_list_state.select(Some(selected + 1));
                     }
                 }
             }
             KeyCode::Char(' ') => {
                 if let Some(selected) = self.project_list_state.selected() {
-                    self.projects[selected].selected = !self.projects[selected].selected;
+                    // Toggle all projects backed by this display row —
+                    // group rows flip every member at once.
+                    let indices = self.projects_for_display_row(selected);
+                    let all_currently_on =
+                        indices.iter().all(|&i| self.projects[i].selected);
+                    for i in indices {
+                        self.projects[i].selected = !all_currently_on;
+                    }
                 }
             }
             KeyCode::Char('a') => {
@@ -853,61 +898,25 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
     let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(header, chunks[0]);
 
-    let items: Vec<ListItem> = state
-        .projects
+    // Plan §5: render groups as a single header row with members shown
+    // as a read-only tree below. Cursor lands on the header row only.
+    let display_rows = state.display_rows();
+    let items: Vec<ListItem> = display_rows
         .iter()
         .enumerate()
-        .map(|(idx, project)| {
-            let is_current = state.project_list_state.selected() == Some(idx);
-            let checkbox = if project.selected { "✅" } else { "⬜" };
-            let (suggestion_text, suggestion_color) = match project.suggested_bump() {
-                BumpRecommendation::Major => ("MAJOR", Color::Red),
-                BumpRecommendation::Minor => ("MINOR", Color::Yellow),
-                BumpRecommendation::Patch => ("PATCH", Color::Green),
-                BumpRecommendation::None => ("", Color::Gray),
-            };
+        .map(|(row_idx, row)| {
+            let is_current = state.project_list_state.selected() == Some(row_idx);
 
-            let mut spans = vec![
-                Span::styled(format!(" {} ", checkbox), Style::default()),
-                Span::styled(
-                    project.name(),
-                    if is_current {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                    } else if project.selected {
-                        Style::default().fg(Color::Green)
-                    } else {
-                        Style::default().fg(Color::White)
-                    },
-                ),
-            ];
-            if let Some(gid) = project.group_id() {
-                spans.push(Span::styled(
-                    format!(" [group: {}]", gid),
-                    Style::default()
-                        .fg(Color::Magenta)
-                        .add_modifier(Modifier::ITALIC),
-                ));
+            match row {
+                DisplayRow::Solo { project_idx } => {
+                    let project = &state.projects[*project_idx];
+                    render_solo_row(project, is_current)
+                }
+                DisplayRow::Group {
+                    id,
+                    member_indices,
+                } => render_group_row(id, member_indices, &state.projects, is_current),
             }
-            spans.push(Span::styled(
-                format!(" ({} commits)", project.commit_count()),
-                Style::default().fg(Color::Gray),
-            ));
-            if !suggestion_text.is_empty() {
-                spans.push(Span::styled(
-                    format!("  → {}", suggestion_text),
-                    Style::default().fg(suggestion_color),
-                ));
-            }
-            let lines = vec![Line::from(spans)];
-
-            let style = if is_current {
-                Style::default().bg(Color::Rgb(40, 40, 50))
-            } else {
-                Style::default()
-            };
-            ListItem::new(lines).style(style)
         })
         .collect();
 
@@ -941,6 +950,179 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
     ]);
     let hints_para = Paragraph::new(hints).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(hints_para, chunks[2]);
+}
+
+/// Solo projects are one row each; grouped projects collapse into one
+/// row per group with member indices in original-order. Plan §5.
+fn compute_display_rows(projects: &[ProjectItem]) -> Vec<DisplayRow> {
+    let mut out: Vec<DisplayRow> = Vec::new();
+    let mut group_pos: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for (i, p) in projects.iter().enumerate() {
+        match p.group_id() {
+            Some(gid) => {
+                if let Some(&pos) = group_pos.get(gid) {
+                    if let DisplayRow::Group { member_indices, .. } = &mut out[pos] {
+                        member_indices.push(i);
+                    }
+                } else {
+                    group_pos.insert(gid.to_string(), out.len());
+                    out.push(DisplayRow::Group {
+                        id: gid.to_string(),
+                        member_indices: vec![i],
+                    });
+                }
+            }
+            None => out.push(DisplayRow::Solo { project_idx: i }),
+        }
+    }
+    out
+}
+
+/// Render one ungrouped project as a single list row.
+fn render_solo_row(project: &ProjectItem, is_current: bool) -> ListItem<'_> {
+    let checkbox = if project.selected { "✅" } else { "⬜" };
+    let (suggestion_text, suggestion_color) = match project.suggested_bump() {
+        BumpRecommendation::Major => ("MAJOR", Color::Red),
+        BumpRecommendation::Minor => ("MINOR", Color::Yellow),
+        BumpRecommendation::Patch => ("PATCH", Color::Green),
+        BumpRecommendation::None => ("", Color::Gray),
+    };
+
+    let mut spans = vec![
+        Span::styled(format!(" {} ", checkbox), Style::default()),
+        Span::styled(
+            project.name(),
+            if is_current {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else if project.selected {
+                Style::default().fg(Color::Green)
+            } else {
+                Style::default().fg(Color::White)
+            },
+        ),
+        Span::styled(
+            format!(" ({} commits)", project.commit_count()),
+            Style::default().fg(Color::Gray),
+        ),
+    ];
+    if !suggestion_text.is_empty() {
+        spans.push(Span::styled(
+            format!("  → {}", suggestion_text),
+            Style::default().fg(suggestion_color),
+        ));
+    }
+    let style = if is_current {
+        Style::default().bg(Color::Rgb(40, 40, 50))
+    } else {
+        Style::default()
+    };
+    ListItem::new(vec![Line::from(spans)]).style(style)
+}
+
+/// Render one group as a header row + a tree of read-only member rows
+/// below. Plan §5 reference layout:
+///
+/// ```text
+/// [✅] schema (group, 2 members)            minor
+///      ├─ @org/schema           (npm)
+///      └─ com.org:schema        (maven)
+/// ```
+///
+/// Member ecosystems are pulled off the underlying `ProjectItem` via
+/// `project_type().as_str()` so the dashboard's display name matches
+/// the wire format.
+fn render_group_row(
+    group_id: &str,
+    member_indices: &[usize],
+    projects: &[ProjectItem],
+    is_current: bool,
+) -> ListItem<'static> {
+    let members: Vec<&ProjectItem> = member_indices.iter().map(|i| &projects[*i]).collect();
+    if members.is_empty() {
+        return ListItem::new(Line::from(""));
+    }
+
+    // Group selection-state: all/some/none of the members selected.
+    let all_selected = members.iter().all(|m| m.selected);
+    let any_selected = members.iter().any(|m| m.selected);
+    let checkbox = if all_selected {
+        "✅"
+    } else if any_selected {
+        "🟨" // partial
+    } else {
+        "⬜"
+    };
+
+    // Members of one group share a bump (validated CLI-side); pick the
+    // first one's suggestion as the row's overall hint.
+    let (suggestion_text, suggestion_color) = match members[0].suggested_bump() {
+        BumpRecommendation::Major => ("MAJOR", Color::Red),
+        BumpRecommendation::Minor => ("MINOR", Color::Yellow),
+        BumpRecommendation::Patch => ("PATCH", Color::Green),
+        BumpRecommendation::None => ("", Color::Gray),
+    };
+
+    let header_label_color = if is_current {
+        Color::Cyan
+    } else if all_selected {
+        Color::Green
+    } else if any_selected {
+        Color::Yellow
+    } else {
+        Color::White
+    };
+
+    let header = Line::from(vec![
+        Span::styled(format!(" {} ", checkbox), Style::default()),
+        Span::styled(
+            group_id.to_string(),
+            Style::default()
+                .fg(header_label_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" (group, {} members)", members.len()),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::ITALIC),
+        ),
+        Span::styled(
+            if !suggestion_text.is_empty() {
+                format!("  → {}", suggestion_text)
+            } else {
+                String::new()
+            },
+            Style::default().fg(suggestion_color),
+        ),
+    ]);
+
+    let mut lines = vec![header];
+    for (i, m) in members.iter().enumerate() {
+        let is_last = i == members.len() - 1;
+        let connector = if is_last { "    └─ " } else { "    ├─ " };
+        let eco_label = m.project_type().display_name();
+        lines.push(Line::from(vec![
+            Span::styled(connector, Style::default().fg(Color::DarkGray)),
+            Span::styled(
+                m.name().to_string(),
+                Style::default().fg(Color::Gray),
+            ),
+            Span::styled(
+                format!("  ({})", eco_label),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
+
+    let style = if is_current {
+        Style::default().bg(Color::Rgb(40, 40, 50))
+    } else {
+        Style::default()
+    };
+    ListItem::new(lines).style(style)
 }
 
 fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardState) {
@@ -1837,4 +2019,117 @@ fn apply_project_overrides_to_items(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::bump::BumpRecommendation;
+    use crate::core::wire::known::Ecosystem;
+
+    /// Build a minimal `ProjectItem` for layout tests. We don't need
+    /// realistic Commit / config state — the layout algorithm only
+    /// reads `group_id()`.
+    fn item(name: &str, group_id: Option<&str>) -> ProjectItem {
+        ProjectItem {
+            candidate: ProjectCandidate {
+                ident: 0,
+                name: name.into(),
+                prefix: String::new(),
+                current_version: "0.1.0".into(),
+                commits: Vec::new(),
+                commit_count: 0,
+                suggested_bump: BumpRecommendation::Patch,
+                ecosystem: Ecosystem::classify("npm"),
+            },
+            selected: true,
+            chosen_bump: None,
+            cached_changelog: None,
+            existing_changelog: String::new(),
+            group_id: group_id.map(str::to_string),
+        }
+    }
+
+    /// Plan §5: solo + group projects collapse correctly into display
+    /// rows. Two grouped npm + maven members render as ONE row;
+    /// other solos each get their own.
+    #[test]
+    fn compute_display_rows_collapses_grouped_into_one_row() {
+        let projects = vec![
+            item("@org/utils", None),
+            item("@org/schema", Some("schema-bundle")),
+            item("com.org:schema", Some("schema-bundle")),
+            item("cli", None),
+        ];
+        let rows = compute_display_rows(&projects);
+        assert_eq!(
+            rows.len(),
+            3,
+            "expected 3 display rows (utils + schema-bundle + cli), got {}",
+            rows.len(),
+        );
+        match &rows[0] {
+            DisplayRow::Solo { project_idx } => assert_eq!(*project_idx, 0),
+            other => panic!("row 0 should be Solo, got {other:?}"),
+        }
+        match &rows[1] {
+            DisplayRow::Group { id, member_indices } => {
+                assert_eq!(id, "schema-bundle");
+                assert_eq!(member_indices, &vec![1, 2]);
+            }
+            other => panic!("row 1 should be Group(schema-bundle), got {other:?}"),
+        }
+        match &rows[2] {
+            DisplayRow::Solo { project_idx } => assert_eq!(*project_idx, 3),
+            other => panic!("row 2 should be Solo(cli), got {other:?}"),
+        }
+    }
+
+    /// Non-adjacent group members still collapse — the parser walks in
+    /// project order but the layout keys by group id, not by adjacency.
+    #[test]
+    fn compute_display_rows_handles_non_adjacent_group_members() {
+        let projects = vec![
+            item("@org/schema", Some("schema-bundle")),
+            item("@org/utils", None), // unrelated solo between members
+            item("com.org:schema", Some("schema-bundle")),
+        ];
+        let rows = compute_display_rows(&projects);
+        assert_eq!(rows.len(), 2, "got {rows:?}");
+        match &rows[0] {
+            DisplayRow::Group { id, member_indices } => {
+                assert_eq!(id, "schema-bundle");
+                assert_eq!(member_indices, &vec![0, 2]);
+            }
+            other => panic!("expected Group first, got {other:?}"),
+        }
+    }
+
+    /// Two distinct groups in the same project list each get one row.
+    #[test]
+    fn compute_display_rows_separates_distinct_groups() {
+        let projects = vec![
+            item("@org/a", Some("group-a")),
+            item("@org/b", Some("group-b")),
+            item("@org/a-helper", Some("group-a")),
+        ];
+        let rows = compute_display_rows(&projects);
+        assert_eq!(rows.len(), 2);
+        let group_ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| match r {
+                DisplayRow::Group { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(group_ids, vec!["group-a", "group-b"]);
+    }
+
+    /// Empty input → empty rows. Edge case for `belaf prepare` against
+    /// a freshly-released repo with no candidates.
+    #[test]
+    fn compute_display_rows_empty_input() {
+        let rows = compute_display_rows(&[]);
+        assert!(rows.is_empty());
+    }
 }
