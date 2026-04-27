@@ -308,6 +308,83 @@ schema-rs = { path = "../cargo", version = "0.1.0" }
 }
 
 #[test]
+fn divergent_commit_bumps_in_group_rejected_with_diagnostic() {
+    // Plan §5: every member of one group ships with one shared bump.
+    // When commits naturally suggest different levels per member (one
+    // feat:, another fix:), the system must NOT silently pick a side or
+    // auto-promote — it hard-errors with a diagnostic naming both
+    // members and their conflicting bumps, telling the user how to
+    // reconcile. Complements
+    // `conflicting_project_overrides_within_group_rejected` (which
+    // covers the *explicit* --project conflict path) by pinning the
+    // *implicit* conventional-commits path through the same gate.
+    let repo = TestRepo::new();
+
+    repo.write_file(
+        "packages/npm/package.json",
+        r#"{
+  "name": "@org/schema",
+  "version": "0.1.0",
+  "main": "index.js"
+}
+"#,
+    );
+    repo.write_file("packages/npm/index.js", "module.exports = {};\n");
+    repo.write_file(
+        "packages/cargo/Cargo.toml",
+        r#"[package]
+name = "schema-rs"
+version = "0.1.0"
+edition = "2021"
+"#,
+    );
+    repo.write_file("packages/cargo/src/lib.rs", "pub fn schema() {}\n");
+    repo.commit("init");
+
+    let init = repo.run_belaf_command(&["init", "--force"]);
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+
+    let cfg = repo.read_file("belaf/config.toml");
+    let cfg_with_group =
+        format!("{cfg}\n[[group]]\nid = \"schema\"\nmembers = [\"@org/schema\", \"schema-rs\"]\n");
+    repo.write_file("belaf/config.toml", &cfg_with_group);
+    repo.commit("chore: bind schema group");
+
+    // Member A: feat: → would be minor in isolation.
+    // Member B: fix: → would be patch in isolation.
+    repo.write_file(
+        "packages/npm/feature.js",
+        "module.exports.next = () => null;\n",
+    );
+    repo.commit("feat(schema): add npm feature");
+    repo.write_file("packages/cargo/src/fix.rs", "pub fn fix() {}\n");
+    repo.commit("fix(schema-rs): patch a typo");
+
+    let out = repo.run_belaf_command(&["prepare", "--ci"]);
+    assert!(
+        !out.status.success(),
+        "prepare must fail when commit-driven bumps within a group diverge"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("schema") && stderr.contains("must share one bump"),
+        "stderr must explain the group-bump conflict; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("minor") && stderr.contains("patch"),
+        "diagnostic must name both conflicting bump levels; got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("@org/schema") && stderr.contains("schema-rs"),
+        "diagnostic must name both conflicting members; got:\n{stderr}"
+    );
+}
+
+#[test]
 fn unknown_group_member_rejected_at_load_time() {
     let repo = TestRepo::new();
 
