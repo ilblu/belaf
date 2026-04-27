@@ -751,8 +751,23 @@ impl Rewriter for MavenRewriter {
         let proj = app.graph().lookup(self.proj_id);
         let new_version = proj.version.to_string();
 
+        // Build the coord-to-version lookup. For each inter-project dep
+        // we look up the target's bumped version via the graph, keyed
+        // by Maven `groupId:artifactId` (which is also the sibling
+        // project's user-facing name).
+        let graph = app.graph();
+        let coord_lookup = |group_id: &str, artifact_id: &str| -> Option<String> {
+            let user_name = format!("{group_id}:{artifact_id}");
+            let pid = graph.lookup_ident(&user_name)?;
+            // Skip self — the top-level <version> path handles it.
+            if pid == self.proj_id {
+                return None;
+            }
+            Some(graph.lookup(pid).version.to_string())
+        };
+
         let new_content = atry!(
-            rewrite_pom_version(&content, &new_version);
+            rewrite_pom(&content, &new_version, &coord_lookup);
             ["failed to rewrite POM `{}`", fs_path.display()]
         );
 
@@ -766,21 +781,25 @@ impl Rewriter for MavenRewriter {
         );
         changes.add_path(&self.pom_path);
 
-        // Inter-project deps that point at a sibling project should also
-        // get their `<version>` bumped. Skipped for v2.0 if no resolved
-        // version is recorded — Maven projects in this repo would just
-        // not see their parent or dep version updated. The rewriter will
-        // be tightened in a follow-up once `internal_deps` carries
-        // resolved versions for non-Cargo ecosystems.
-        let _ = app;
         Ok(())
     }
 }
 
-/// Rewrite the POM's top-level `<version>` element, preserving every other
-/// byte of the document (including comments, whitespace, namespaces, and
-/// the parent block).
-fn rewrite_pom_version(content: &str, new_version: &str) -> Result<String> {
+/// Rewrite a POM's top-level `<version>`, plus any `<parent><version>` and
+/// `<dependencies>` / `<dependencyManagement>` member versions whose
+/// `groupId:artifactId` resolves to a sibling project that's also being
+/// bumped. Preserves every other byte (comments, whitespace, namespaces,
+/// unrelated tags).
+///
+/// The per-coord lookup decides whether a given `<dependency>` or
+/// `<parent>` block should be rewritten — `None` from the lookup means
+/// "leave alone" (e.g. external deps, third-party libs, the project's
+/// own self-reference). The caller wires `coord_lookup` against the
+/// graph in `MavenRewriter::rewrite`.
+fn rewrite_pom<F>(content: &str, top_level_version: &str, coord_lookup: &F) -> Result<String>
+where
+    F: Fn(&str, &str) -> Option<String>,
+{
     let mut reader = Reader::from_str(content);
     reader.config_mut().trim_text(false);
 
@@ -789,53 +808,104 @@ fn rewrite_pom_version(content: &str, new_version: &str) -> Result<String> {
     let mut stack: Vec<String> = Vec::new();
     let mut in_top_version = false;
     let mut wrote_replacement = false;
+    // Buffered events for the currently-open `<parent>` or
+    // `<dependency>` block. Empty when not in such a block.
+    let mut buffered: Vec<Event<'static>> = Vec::new();
+    // Path of the buffered scope so we know which End event closes it.
+    let mut buffered_scope: Option<String> = None;
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
                 let name = local_name(e.name().as_ref());
                 stack.push(name.clone());
-                if path(&stack).as_deref() == Some("project/version") {
+                let p = path(&stack);
+
+                // Enter a buffered scope on `<parent>` or `<dependency>`.
+                if buffered_scope.is_none()
+                    && matches!(
+                        p.as_deref(),
+                        Some("project/parent")
+                            | Some("project/dependencies/dependency")
+                            | Some(
+                                "project/dependencyManagement/dependencies/dependency",
+                            )
+                    )
+                {
+                    buffered_scope = p.clone();
+                    buffered.push(Event::Start(e.clone()).into_owned());
+                    buf.clear();
+                    continue;
+                }
+
+                if buffered_scope.is_some() {
+                    buffered.push(Event::Start(e.clone()).into_owned());
+                } else if p.as_deref() == Some("project/version") {
                     in_top_version = true;
                     wrote_replacement = false;
+                    writer
+                        .write_event(Event::Start(e.clone()))
+                        .map_err(|err| anyhow!("xml write: {err}"))?;
+                } else {
+                    writer
+                        .write_event(Event::Start(e.clone()))
+                        .map_err(|err| anyhow!("xml write: {err}"))?;
                 }
-                writer
-                    .write_event(Event::Start(e.clone()))
-                    .map_err(|err| anyhow!("xml write: {err}"))?;
             }
             Ok(Event::End(e)) => {
-                if path(&stack).as_deref() == Some("project/version") {
+                let p = path(&stack);
+
+                if let Some(scope) = &buffered_scope {
+                    if p.as_deref() == Some(scope.as_str()) {
+                        // Closing the buffered scope. Apply rewrite and
+                        // flush all buffered events.
+                        buffered.push(Event::End(e.clone()).into_owned());
+                        let rewritten =
+                            rewrite_buffered_block(&buffered, coord_lookup)?;
+                        for ev in rewritten {
+                            writer
+                                .write_event(ev)
+                                .map_err(|err| anyhow!("xml write: {err}"))?;
+                        }
+                        buffered.clear();
+                        buffered_scope = None;
+                    } else {
+                        buffered.push(Event::End(e.clone()).into_owned());
+                    }
+                } else if p.as_deref() == Some("project/version") {
                     if !wrote_replacement {
                         writer
-                            .write_event(Event::Text(BytesText::new(new_version)))
+                            .write_event(Event::Text(BytesText::new(top_level_version)))
                             .map_err(|err| anyhow!("xml write: {err}"))?;
                     }
                     in_top_version = false;
+                    writer
+                        .write_event(Event::End(e.clone()))
+                        .map_err(|err| anyhow!("xml write: {err}"))?;
+                } else {
+                    writer
+                        .write_event(Event::End(e.clone()))
+                        .map_err(|err| anyhow!("xml write: {err}"))?;
                 }
                 stack.pop();
-                writer
-                    .write_event(Event::End(e.clone()))
-                    .map_err(|err| anyhow!("xml write: {err}"))?;
             }
             Ok(Event::Text(t)) => {
-                if in_top_version {
+                if buffered_scope.is_some() {
+                    buffered.push(Event::Text(t.clone()).into_owned());
+                } else if in_top_version {
                     let original = t.decode().unwrap_or_default();
                     if original.trim().is_empty() {
-                        // Preserve whitespace nodes inside <version>...
-                        // </version> on either side of the value, but emit
-                        // the new value once on the first non-empty.
                         writer
                             .write_event(Event::Text(t.clone()))
                             .map_err(|err| anyhow!("xml write: {err}"))?;
                     } else if !wrote_replacement {
                         writer
-                            .write_event(Event::Text(BytesText::new(new_version)))
+                            .write_event(Event::Text(BytesText::new(top_level_version)))
                             .map_err(|err| anyhow!("xml write: {err}"))?;
                         wrote_replacement = true;
                     } else {
-                        // Drop subsequent text inside <version> — there
-                        // shouldn't be any, but a malformed POM could have
-                        // multiple text runs separated by comments.
+                        // Drop subsequent text inside <version> — see
+                        // pre-buffer note about malformed multi-text POMs.
                     }
                 } else {
                     writer
@@ -845,9 +915,13 @@ fn rewrite_pom_version(content: &str, new_version: &str) -> Result<String> {
             }
             Ok(Event::Eof) => break,
             Ok(other) => {
-                writer
-                    .write_event(other_event_owned(&other))
-                    .map_err(|err| anyhow!("xml write: {err}"))?;
+                if buffered_scope.is_some() {
+                    buffered.push(other.into_owned());
+                } else {
+                    writer
+                        .write_event(other_event_owned(&other))
+                        .map_err(|err| anyhow!("xml write: {err}"))?;
+                }
             }
             Err(e) => return Err(anyhow!("xml read error: {e}")),
         }
@@ -861,6 +935,120 @@ fn rewrite_pom_version(content: &str, new_version: &str) -> Result<String> {
 
 fn other_event_owned<'a>(e: &Event<'a>) -> Event<'a> {
     e.clone()
+}
+
+/// Apply the inter-project version-rewrite logic to one buffered
+/// `<parent>` or `<dependency>` block. Returns the events to emit —
+/// either the buffer as-is (when the block doesn't reference a sibling
+/// project, e.g. `org.junit.jupiter:junit-jupiter-api`) or with the
+/// `<version>` text replaced.
+///
+/// We walk the buffer twice: first to extract `groupId` and
+/// `artifactId` (and locate the version text node), then to emit with
+/// optional substitution. Two passes are simpler than threading
+/// "version-not-yet-known" state through one pass — the buffers are
+/// always tiny (3-5 child elements).
+fn rewrite_buffered_block<F>(
+    buffered: &[Event<'static>],
+    coord_lookup: &F,
+) -> Result<Vec<Event<'static>>>
+where
+    F: Fn(&str, &str) -> Option<String>,
+{
+    // First pass: extract coords + figure out whether we'll rewrite.
+    let mut group_id: Option<String> = None;
+    let mut artifact_id: Option<String> = None;
+    let mut local_stack: Vec<String> = Vec::new();
+    let mut last_text: Option<String> = None;
+
+    for ev in buffered {
+        match ev {
+            Event::Start(e) => {
+                local_stack.push(local_name(e.name().as_ref()));
+                last_text = None;
+            }
+            Event::Text(t) => {
+                last_text = Some(t.decode().unwrap_or_default().into_owned());
+            }
+            Event::End(_) => {
+                let depth = local_stack.len();
+                if depth == 2 {
+                    let leaf = &local_stack[depth - 1];
+                    if let Some(text) = last_text.take() {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            if leaf == "groupId" {
+                                group_id = Some(trimmed.to_string());
+                            } else if leaf == "artifactId" {
+                                artifact_id = Some(trimmed.to_string());
+                            }
+                        }
+                    }
+                }
+                local_stack.pop();
+            }
+            _ => {}
+        }
+    }
+
+    let new_version = match (group_id.as_deref(), artifact_id.as_deref()) {
+        (Some(g), Some(a)) => coord_lookup(g, a),
+        _ => None,
+    };
+
+    let Some(new_version) = new_version else {
+        // External dep or self-reference — emit unchanged.
+        return Ok(buffered.to_vec());
+    };
+
+    // Second pass: emit with `<version>` text substituted.
+    let mut out = Vec::with_capacity(buffered.len());
+    let mut local_stack: Vec<String> = Vec::new();
+    let mut in_version = false;
+    let mut wrote_replacement = false;
+
+    for ev in buffered {
+        match ev {
+            Event::Start(e) => {
+                local_stack.push(local_name(e.name().as_ref()));
+                if local_stack.len() == 2 && local_stack[1] == "version" {
+                    in_version = true;
+                    wrote_replacement = false;
+                }
+                out.push(ev.clone());
+            }
+            Event::End(e) => {
+                if in_version && !wrote_replacement {
+                    // <version></version> with no text — inject one.
+                    out.push(Event::Text(BytesText::new(&new_version)).into_owned());
+                }
+                if local_stack.len() == 2 && local_stack[1] == "version" {
+                    in_version = false;
+                }
+                local_stack.pop();
+                out.push(Event::End(e.clone()).into_owned());
+            }
+            Event::Text(t) => {
+                if in_version {
+                    let original = t.decode().unwrap_or_default();
+                    if original.trim().is_empty() {
+                        out.push(Event::Text(t.clone()).into_owned());
+                    } else if !wrote_replacement {
+                        out.push(
+                            Event::Text(BytesText::new(&new_version)).into_owned(),
+                        );
+                        wrote_replacement = true;
+                    }
+                    // Drop subsequent text inside <version>.
+                } else {
+                    out.push(Event::Text(t.clone()).into_owned());
+                }
+            }
+            other => out.push(other.clone()),
+        }
+    }
+
+    Ok(out)
 }
 
 #[cfg(test)]
@@ -1113,19 +1301,18 @@ mod tests {
     </dependency>
   </dependencies>
 </project>"#;
-        let rewritten = rewrite_pom_version(original, "2.0.0").expect("rewrite");
+        let no_lookup = |_: &str, _: &str| -> Option<String> { None };
+        let rewritten = rewrite_pom(original, "2.0.0", &no_lookup).expect("rewrite");
         // Top-level project version replaced.
         assert!(
             rewritten.contains("<version>2.0.0</version>"),
             "expected new top-level version 2.0.0; got:\n{rewritten}"
         );
-        // Inner dependency version untouched.
+        // External dep version untouched (lookup returned None).
         assert!(
             rewritten.contains("<version>9.9.9</version>"),
-            "dependency version must not be rewritten; got:\n{rewritten}"
+            "external dep version must not be rewritten; got:\n{rewritten}"
         );
-        // Top-level 1.0.0 must be gone (only dep version remains as a
-        // version-string in the document).
         assert_eq!(
             rewritten.matches("<version>").count(),
             2,
@@ -1145,9 +1332,139 @@ mod tests {
   <version>1.0.0</version>
 </project>
 "#;
-        let rewritten = rewrite_pom_version(original, "1.0.1").expect("rewrite");
+        let no_lookup = |_: &str, _: &str| -> Option<String> { None };
+        let rewritten = rewrite_pom(original, "1.0.1", &no_lookup).expect("rewrite");
         assert!(rewritten.contains("<!-- top-level comment -->"));
         assert!(rewritten.contains("<!-- coordinates -->"));
         assert!(rewritten.contains("<version>1.0.1</version>"));
+    }
+
+    /// Plan §12 / Gap #1. When a sibling project bumps, its <parent>
+    /// reference in a child POM must update to the new version, otherwise
+    /// the child's build is broken on next mvn invocation.
+    #[test]
+    fn rewrites_parent_version_when_lookup_resolves() {
+        let child = r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>parent</artifactId>
+    <version>1.0.0</version>
+  </parent>
+  <artifactId>child</artifactId>
+</project>"#;
+
+        let lookup = |g: &str, a: &str| -> Option<String> {
+            if g == "com.example" && a == "parent" {
+                Some("1.1.0".to_string())
+            } else {
+                None
+            }
+        };
+        // Child's own version inherits from parent (no project/version
+        // tag in this POM); we still need a `top_level_version` for the
+        // signature, but since `project/version` is absent it never gets
+        // applied.
+        let rewritten = rewrite_pom(child, "1.1.0", &lookup).expect("rewrite");
+        assert!(
+            rewritten.contains("<version>1.1.0</version>"),
+            "<parent> version should now be 1.1.0; got:\n{rewritten}"
+        );
+        assert!(
+            !rewritten.contains("<version>1.0.0</version>"),
+            "<parent> version 1.0.0 should be gone; got:\n{rewritten}"
+        );
+    }
+
+    /// Inter-module dep with explicit version: when the target sibling
+    /// is bumped, the dep's <version> must follow.
+    #[test]
+    fn rewrites_dependency_version_when_lookup_resolves() {
+        let pom = r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>app</artifactId>
+  <version>1.0.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>lib</artifactId>
+      <version>1.0.0</version>
+    </dependency>
+    <dependency>
+      <groupId>org.junit.jupiter</groupId>
+      <artifactId>junit-jupiter-api</artifactId>
+      <version>5.10.0</version>
+    </dependency>
+  </dependencies>
+</project>"#;
+
+        // Lookup only resolves the sibling, not the third-party JUnit dep.
+        let lookup = |g: &str, a: &str| -> Option<String> {
+            if g == "com.example" && a == "lib" {
+                Some("2.0.0".to_string())
+            } else {
+                None
+            }
+        };
+        let rewritten = rewrite_pom(pom, "1.1.0", &lookup).expect("rewrite");
+
+        // Top-level was bumped to 1.1.0.
+        assert!(
+            rewritten.contains("<artifactId>app</artifactId>\n  <version>1.1.0</version>"),
+            "top-level project version should be 1.1.0; got:\n{rewritten}"
+        );
+        // Sibling dep now 2.0.0.
+        let lib_block_idx = rewritten.find("<artifactId>lib</artifactId>").unwrap();
+        let after_lib = &rewritten[lib_block_idx..];
+        assert!(
+            after_lib.contains("<version>2.0.0</version>"),
+            "sibling dep `lib` should be 2.0.0; got after lib block:\n{after_lib}"
+        );
+        // Third-party JUnit dep untouched.
+        assert!(
+            rewritten.contains("<version>5.10.0</version>"),
+            "external JUnit dep version must be preserved; got:\n{rewritten}"
+        );
+    }
+
+    /// dependencyManagement entries follow the same rule — a sibling
+    /// dep declared there gets the same version-bump treatment.
+    #[test]
+    fn rewrites_dependency_management_version() {
+        let pom = r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>parent</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <dependencyManagement>
+    <dependencies>
+      <dependency>
+        <groupId>com.example</groupId>
+        <artifactId>lib</artifactId>
+        <version>1.0.0</version>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+</project>"#;
+
+        let lookup = |g: &str, a: &str| -> Option<String> {
+            if g == "com.example" && a == "lib" {
+                Some("2.0.0".to_string())
+            } else {
+                None
+            }
+        };
+        let rewritten = rewrite_pom(pom, "1.1.0", &lookup).expect("rewrite");
+        let lib_block_idx = rewritten.find("<artifactId>lib</artifactId>").unwrap();
+        let after_lib = &rewritten[lib_block_idx..];
+        assert!(
+            after_lib.contains("<version>2.0.0</version>"),
+            "dependencyManagement entry should be 2.0.0; got:\n{after_lib}"
+        );
     }
 }

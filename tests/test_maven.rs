@@ -315,6 +315,129 @@ edition = "2021"
     );
 }
 
+/// Plan §12 / Gap #1. Multi-module repo: aggregator (parent) + child
+/// where the child has a `<parent>` ref. When the parent gets bumped,
+/// the child's `<parent><version>` must follow, otherwise the child's
+/// build is broken on next mvn invocation.
+#[test]
+fn multi_module_parent_version_propagates_to_children() {
+    let repo = TestRepo::new();
+    repo.write_file(
+        "pom.xml",
+        r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>parent</artifactId>
+  <version>1.0.0</version>
+  <packaging>pom</packaging>
+  <modules>
+    <module>child1</module>
+  </modules>
+</project>
+"#,
+    );
+    repo.write_file(
+        "child1/pom.xml",
+        r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <parent>
+    <groupId>com.example</groupId>
+    <artifactId>parent</artifactId>
+    <version>1.0.0</version>
+  </parent>
+  <artifactId>child1</artifactId>
+</project>
+"#,
+    );
+    repo.commit("init");
+
+    let init = repo.run_belaf_command(&["init", "--force"]);
+    assert!(init.status.success(), "init failed: {}", String::from_utf8_lossy(&init.stderr));
+
+    // Touch the parent so it gets bumped (feature commit on the parent dir).
+    repo.write_file("README.md", "# parent\n");
+    repo.commit("feat: parent change");
+
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
+
+    let parent_after = repo.read_file("pom.xml");
+    let child_after = repo.read_file("child1/pom.xml");
+
+    assert!(
+        parent_after.contains("<artifactId>parent</artifactId>")
+            && parent_after.contains("<version>1.1.0</version>"),
+        "parent POM should be at 1.1.0; got:\n{parent_after}"
+    );
+    assert!(
+        child_after.contains("<artifactId>parent</artifactId>")
+            && child_after.contains("<version>1.1.0</version>"),
+        "child's <parent><version> should follow the parent bump to 1.1.0; got:\n{child_after}"
+    );
+    assert!(
+        !child_after.contains("<version>1.0.0</version>"),
+        "stale parent version 1.0.0 must not remain in child; got:\n{child_after}"
+    );
+}
+
+/// Inter-module dep with explicit version: when the target sibling
+/// is bumped, the dep's `<version>` in the depending POM follows.
+#[test]
+fn inter_module_dependency_version_propagates() {
+    let repo = TestRepo::new();
+    repo.write_file(
+        "modules/lib/pom.xml",
+        r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>lib</artifactId>
+  <version>1.0.0</version>
+</project>
+"#,
+    );
+    repo.write_file(
+        "modules/app/pom.xml",
+        r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>app</artifactId>
+  <version>1.0.0</version>
+  <dependencies>
+    <dependency>
+      <groupId>com.example</groupId>
+      <artifactId>lib</artifactId>
+      <version>1.0.0</version>
+    </dependency>
+  </dependencies>
+</project>
+"#,
+    );
+    repo.commit("init");
+
+    let init = repo.run_belaf_command(&["init", "--force"]);
+    assert!(init.status.success(), "init failed: {}", String::from_utf8_lossy(&init.stderr));
+
+    // Touch the lib so it gets a feat bump. App should follow because of the dep.
+    repo.write_file("modules/lib/feat.java", "class F {}\n");
+    repo.commit("feat: bump lib");
+
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
+
+    let app_after = repo.read_file("modules/app/pom.xml");
+    // The dep's <version> should now point at 1.1.0.
+    let lib_dep_idx = app_after
+        .find("<artifactId>lib</artifactId>")
+        .expect("app POM should still reference lib");
+    let after_lib_dep = &app_after[lib_dep_idx..];
+    assert!(
+        after_lib_dep.contains("<version>1.1.0</version>"),
+        "app's dep on `lib` should follow lib's bump to 1.1.0; got after lib block:\n{after_lib_dep}"
+    );
+}
+
 #[test]
 fn rewriter_preserves_comments() {
     let repo = TestRepo::new();
