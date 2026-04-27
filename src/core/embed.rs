@@ -37,7 +37,7 @@ impl EmbeddedConfig {
             bump: cfg.bump,
             commit_attribution: cfg.commit_attribution,
             projects: cfg.projects,
-            groups: cfg.groups,
+            groups: cfg.groups.into_normalised(),
             bump_sources: cfg.bump_sources,
         })
     }

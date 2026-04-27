@@ -20,8 +20,27 @@ pub mod syntax {
         #[serde(default)]
         pub projects: HashMap<String, ProjectConfiguration>,
 
-        #[serde(default, rename = "group", skip_serializing_if = "Vec::is_empty")]
-        pub groups: Vec<GroupConfig>,
+        /// Two TOML surfaces, one Rust shape. Either:
+        ///
+        /// ```toml
+        /// [[group]]
+        /// id = "schema"
+        /// members = ["@org/schema", "com.org:schema"]
+        /// tag_format = "schema-v{version}"
+        /// ```
+        ///
+        /// or named-entry form (plan §8):
+        ///
+        /// ```toml
+        /// [group.schema]
+        /// members = ["@org/schema", "com.org:schema"]
+        /// tag_format = "schema-v{version}"
+        /// ```
+        ///
+        /// Both forms produce the same `Vec<GroupConfig>` after
+        /// normalisation in `ConfigurationFile::get`.
+        #[serde(default, rename = "group", skip_serializing_if = "GroupsForm::is_empty")]
+        pub groups: GroupsForm,
 
         #[serde(default, rename = "bump_source", skip_serializing_if = "Vec::is_empty")]
         pub bump_sources: Vec<BumpSourceConfig>,
@@ -42,6 +61,58 @@ pub mod syntax {
         /// (e.g. `schema-v{version}` for a multi-ecosystem schema bundle).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub tag_format: Option<String>,
+    }
+
+    /// Named-entry form of `GroupConfig` — same fields without `id`,
+    /// because the TOML key `[group.<id>]` carries it.
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    pub struct GroupNamedConfig {
+        pub members: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tag_format: Option<String>,
+    }
+
+    /// Either array-of-tables (`[[group]]`) or named-entry
+    /// (`[group.<id>]`). Both deserialize through this `untagged` enum
+    /// and are normalised to a single `Vec<GroupConfig>` by the
+    /// `into_normalised` helper before the rest of the codebase sees
+    /// them. Plan §8.
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[serde(untagged)]
+    pub enum GroupsForm {
+        Array(Vec<GroupConfig>),
+        Named(HashMap<String, GroupNamedConfig>),
+    }
+
+    impl Default for GroupsForm {
+        fn default() -> Self {
+            Self::Array(Vec::new())
+        }
+    }
+
+    impl GroupsForm {
+        pub fn is_empty(&self) -> bool {
+            match self {
+                Self::Array(v) => v.is_empty(),
+                Self::Named(m) => m.is_empty(),
+            }
+        }
+
+        /// Collapse both forms into a single `Vec<GroupConfig>`. Named
+        /// entries get their key promoted to `GroupConfig::id`.
+        pub fn into_normalised(self) -> Vec<GroupConfig> {
+            match self {
+                Self::Array(v) => v,
+                Self::Named(m) => m
+                    .into_iter()
+                    .map(|(id, named)| GroupConfig {
+                        id,
+                        members: named.members,
+                        tag_format: named.tag_format,
+                    })
+                    .collect(),
+            }
+        }
     }
 
     /// `[[bump_source]]` table: a subprocess belaf runs by default to
@@ -274,7 +345,7 @@ impl ConfigurationFile {
             bump: cfg.bump,
             commit_attribution: cfg.commit_attribution,
             projects: cfg.projects,
-            groups: cfg.groups,
+            groups: cfg.groups.into_normalised(),
             bump_sources: cfg.bump_sources,
         })
     }
@@ -286,12 +357,73 @@ impl ConfigurationFile {
             bump: self.bump,
             commit_attribution: self.commit_attribution,
             projects: self.projects,
-            groups: self.groups,
+            // Always serialise back as the array-of-tables form so the
+            // canonical written-out config matches `belaf init`'s output.
+            groups: syntax::GroupsForm::Array(self.groups),
             bump_sources: self.bump_sources,
         };
         Ok(atry!(
             toml::to_string_pretty(&cfg);
             ["could not serialize configuration into TOML format"]
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::syntax::GroupsForm;
+    use serde::Deserialize;
+
+    /// Tight harness around just the `[group]` surface — avoids dragging
+    /// the full `ReleaseConfiguration` schema into the test, which has
+    /// dozens of unrelated required fields.
+    #[derive(Debug, Deserialize)]
+    struct GroupsOnly {
+        #[serde(default, rename = "group")]
+        groups: GroupsForm,
+    }
+
+    /// Both TOML surfaces — array-of-tables `[[group]]` and
+    /// named-entry `[group.<id>]` — must produce identical
+    /// `Vec<GroupConfig>` after `into_normalised()`. Plan §8.
+    #[test]
+    fn group_config_array_and_named_forms_roundtrip_to_same_shape() {
+        let array_form = r#"
+[[group]]
+id = "schema"
+members = ["@org/schema", "com.org:schema"]
+tag_format = "schema-v{version}"
+"#;
+
+        let named_form = r#"
+[group.schema]
+members = ["@org/schema", "com.org:schema"]
+tag_format = "schema-v{version}"
+"#;
+
+        let from_array: GroupsOnly = toml::from_str(array_form)
+            .expect("array-of-tables form should parse");
+        let from_named: GroupsOnly = toml::from_str(named_form)
+            .expect("named-entry form should parse");
+
+        let arr = from_array.groups.into_normalised();
+        let nam = from_named.groups.into_normalised();
+
+        assert_eq!(arr.len(), 1);
+        assert_eq!(nam.len(), 1);
+        assert_eq!(arr[0].id, "schema");
+        assert_eq!(nam[0].id, "schema");
+        assert_eq!(arr[0].members, nam[0].members);
+        assert_eq!(arr[0].tag_format, nam[0].tag_format);
+        assert_eq!(arr[0].tag_format.as_deref(), Some("schema-v{version}"));
+    }
+
+    #[test]
+    fn empty_groups_roundtrip_through_either_default() {
+        // Default `GroupsForm::Array(vec![])` is the only possible
+        // empty state — the parser sees no `[group]` key at all.
+        let g = GroupsForm::default();
+        assert!(g.is_empty());
+        assert_eq!(g.into_normalised().len(), 0);
     }
 }
