@@ -22,12 +22,15 @@ use crate::core::{
     bump::{self, BumpConfig, BumpRecommendation},
     changelog::{Changelog, ChangelogConfig, Commit, GitConfig, Release},
     config::syntax::{BumpConfiguration, ChangelogConfiguration},
+    ecosystem::registry::EcosystemRegistry,
     git::repository::{ChangeList, RepoPathBuf, Repository},
     github::{client::GitHubInformation, pr},
     graph::GraphQueryBuilder,
+    group::GroupSet,
     manifest::{ProjectRelease, ReleaseManifest, ReleaseStatistics, MANIFEST_DIR},
     project::ProjectId,
     session::AppSession,
+    tag_format::{format_tag, split_maven_coords, TagFormatInputs},
     wire::known::Ecosystem,
 };
 
@@ -511,6 +514,24 @@ impl<'a> ReleasePipeline<'a> {
             .with_first_time_contributors(first_time_contributors)
             .with_statistics(statistics);
 
+            // B10: per-ecosystem tag_format with project / group overrides.
+            // Precedence: [project."<name>".tag_format] > [group.<id>.tag_format]
+            // > ecosystem default. Validation errors fail the whole prepare —
+            // we'd rather catch a bad template here than surprise users with
+            // a github-app rollback when it tries to push the broken tag.
+            let tag_name = build_tag_name(self.sess, project, groups)?;
+            release.tag_name = tag_name;
+            // The previous_tag default uses the same prefix-based scheme,
+            // which doesn't compose with the new tag_format. Recompute it
+            // from the new tag's "shape": replace the new version with the
+            // old version textually. This is best-effort — if it doesn't
+            // produce a real tag, `with_compare_url` will catch it below
+            // and clear `previous_tag` again.
+            release.previous_tag = release
+                .previous_tag
+                .as_ref()
+                .map(|_| release.tag_name.replacen(&project.new_version, &project.old_version, 1));
+
             if let Some(g) = groups.group_of(project.ident) {
                 release = release.with_group_id(g.id.as_str());
             }
@@ -835,6 +856,53 @@ pub fn generate_changelog_entry(
     changelog.generate(&mut output)?;
 
     String::from_utf8(output).context("changelog contains invalid UTF-8")
+}
+
+/// Resolve the per-release tag name using the precedence chain:
+/// `[project."name".tag_format]` > `[group.<id>.tag_format]` > the
+/// ecosystem trait's `tag_format_default()`. The ecosystem registry is
+/// instantiated fresh here (the Loader instances are stateless once
+/// `finalize` has run).
+fn build_tag_name(
+    sess: &AppSession,
+    project: &SelectedProject,
+    groups: &GroupSet,
+) -> Result<String> {
+    let registry = EcosystemRegistry::with_defaults();
+    let eco_name = project.ecosystem.as_str();
+    let eco = registry.lookup(eco_name).ok_or_else(|| {
+        anyhow::anyhow!(
+            "no ecosystem `{eco_name}` registered — cannot build tag for project `{}`",
+            project.name
+        )
+    })?;
+
+    let project_override = sess
+        .project_configs()
+        .get(&project.name)
+        .and_then(|c| c.tag_format.as_deref());
+    let group_override = groups
+        .group_of(project.ident)
+        .and_then(|g| g.tag_format.as_deref());
+    let template = project_override.or(group_override);
+
+    let maven_coords = if eco_name == "maven" {
+        split_maven_coords(&project.name)
+    } else {
+        None
+    };
+
+    let inputs = TagFormatInputs {
+        project_name: &project.name,
+        version: &project.new_version,
+        ecosystem: eco_name,
+        ecosystem_default: eco.tag_format_default(),
+        allowed_vars: eco.tag_template_vars(),
+        override_template: template,
+        maven_coords,
+        module_path: if eco_name == "go" { Some(&project.name) } else { None },
+    };
+    format_tag(&inputs)
 }
 
 pub struct GitHubRemoteInfo {

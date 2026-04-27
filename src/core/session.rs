@@ -202,6 +202,7 @@ impl AppBuilder {
             changelog_config: config.changelog,
             bump_config: config.bump,
             bump_sources: config.bump_sources,
+            project_configs: proj_config,
             is_ci: self.is_ci,
         })
     }
@@ -222,6 +223,9 @@ pub struct AppSession {
     /// `[[bump_source]]` entries from `belaf/config.toml`. Resolved at
     /// CI/wizard entry by [`crate::cmd::prepare`].
     bump_sources: Vec<super::config::syntax::BumpSourceConfig>,
+    /// `[project."<name>"]` entries from `belaf/config.toml`. Read at
+    /// manifest-emission time for `tag_format` overrides (B10).
+    project_configs: HashMap<String, super::config::syntax::ProjectConfiguration>,
     graph: ProjectGraph,
     is_ci: bool,
 }
@@ -276,6 +280,13 @@ impl AppSession {
     /// `[[bump_source]]` entries declared in `belaf/config.toml`.
     pub fn config_bump_sources(&self) -> &[super::config::syntax::BumpSourceConfig] {
         &self.bump_sources
+    }
+
+    /// `[project."<name>"]` entries declared in `belaf/config.toml`.
+    pub fn project_configs(
+        &self,
+    ) -> &HashMap<String, super::config::syntax::ProjectConfiguration> {
+        &self.project_configs
     }
 
     pub fn graph(&self) -> &ProjectGraph {

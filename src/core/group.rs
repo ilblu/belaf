@@ -86,6 +86,10 @@ impl std::fmt::Display for GroupId {
 pub struct Group {
     pub id: GroupId,
     pub members: Vec<ProjectId>,
+    /// Optional group-level `tag_format` override (B10). When present
+    /// every member release uses this template instead of the per-
+    /// ecosystem default. Per-project overrides still win over this.
+    pub tag_format: Option<String>,
 }
 
 /// Index of every group in the repo, plus the reverse map `ProjectId →
@@ -205,14 +209,18 @@ mod tests {
         assert!(matches!(err, GroupIdError::Empty));
     }
 
+    fn mkgroup(id: &str, members: Vec<ProjectId>) -> Group {
+        Group {
+            id: GroupId::new(id).unwrap(),
+            members,
+            tag_format: None,
+        }
+    }
+
     #[test]
     fn group_set_indexes_member_to_group() {
         let mut s = GroupSet::new();
-        s.add(Group {
-            id: GroupId::new("schema").unwrap(),
-            members: vec![0, 2, 5],
-        })
-        .unwrap();
+        s.add(mkgroup("schema", vec![0, 2, 5])).unwrap();
         assert_eq!(s.group_of(0).unwrap().id.as_str(), "schema");
         assert_eq!(s.group_of(5).unwrap().id.as_str(), "schema");
         assert!(s.group_of(1).is_none());
@@ -221,17 +229,8 @@ mod tests {
     #[test]
     fn group_set_rejects_overlapping_members() {
         let mut s = GroupSet::new();
-        s.add(Group {
-            id: GroupId::new("a").unwrap(),
-            members: vec![0, 1],
-        })
-        .unwrap();
-        let err = s
-            .add(Group {
-                id: GroupId::new("b").unwrap(),
-                members: vec![1, 2],
-            })
-            .unwrap_err();
+        s.add(mkgroup("a", vec![0, 1])).unwrap();
+        let err = s.add(mkgroup("b", vec![1, 2])).unwrap_err();
         assert!(matches!(
             err,
             GroupSetError::MemberInMultipleGroups { project: 1, .. }
@@ -241,17 +240,8 @@ mod tests {
     #[test]
     fn group_set_rejects_duplicate_id() {
         let mut s = GroupSet::new();
-        s.add(Group {
-            id: GroupId::new("a").unwrap(),
-            members: vec![0],
-        })
-        .unwrap();
-        let err = s
-            .add(Group {
-                id: GroupId::new("a").unwrap(),
-                members: vec![1],
-            })
-            .unwrap_err();
+        s.add(mkgroup("a", vec![0])).unwrap();
+        let err = s.add(mkgroup("a", vec![1])).unwrap_err();
         assert!(matches!(err, GroupSetError::DuplicateId(_)));
     }
 }

@@ -235,6 +235,87 @@ fn parent_cycle_is_hard_error() {
 }
 
 #[test]
+fn maven_tag_format_uses_slash_not_colon() {
+    // Regression for the v1 default (`name@v<version>` with `name` =
+    // "groupId:artifactId") which produced un-pushable git tags. The v2
+    // default for Maven is `{groupId}/{artifactId}@v{version}`.
+    let repo = TestRepo::new();
+    repo.write_file(
+        "pom.xml",
+        r#"<?xml version="1.0"?>
+<project>
+  <modelVersion>4.0.0</modelVersion>
+  <groupId>com.example</groupId>
+  <artifactId>lib</artifactId>
+  <version>1.0.0</version>
+</project>
+"#,
+    );
+    repo.commit("init");
+    let init = repo.run_belaf_command(&["init", "--force"]);
+    assert!(init.status.success());
+    repo.write_file("src/main/java/F.java", "class F {}\n");
+    repo.commit("feat: F");
+
+    let _ = repo.run_belaf_command(&["prepare", "--ci"]);
+
+    let manifest_files = repo.list_files_in_dir("belaf/releases");
+    let manifest_file = manifest_files.iter().find(|f| f.ends_with(".json")).unwrap();
+    let content = repo.read_file(&format!("belaf/releases/{manifest_file}"));
+    let manifest: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let releases = manifest["releases"].as_array().unwrap();
+    assert_eq!(
+        releases[0]["tag_name"], "com.example/lib@v1.1.0",
+        "Maven tag must use `/` instead of `:` so it survives git ref-format"
+    );
+    assert!(
+        !releases[0]["tag_name"]
+            .as_str()
+            .unwrap()
+            .contains(':'),
+        "Maven tag must not contain `:` (git ref-format rejects it)"
+    );
+}
+
+#[test]
+fn project_tag_format_override_with_invalid_var_is_hard_error() {
+    let repo = TestRepo::new();
+    repo.write_file(
+        "Cargo.toml",
+        r#"[package]
+name = "my-crate"
+version = "1.0.0"
+edition = "2021"
+"#,
+    );
+    repo.write_file("src/lib.rs", "pub fn x() {}\n");
+    repo.commit("init");
+    let init = repo.run_belaf_command(&["init", "--force"]);
+    assert!(init.status.success());
+
+    // npm has no {groupId} variable. Using it on a Cargo project must
+    // hard-error with the offending var named.
+    let cfg = repo.read_file("belaf/config.toml");
+    let bad = format!(
+        "{cfg}\n[projects.\"my-crate\"]\ntag_format = \"{{groupId}}-{{name}}-{{version}}\"\n"
+    );
+    repo.write_file("belaf/config.toml", &bad);
+    repo.write_file("src/feat.rs", "pub fn feat() {}\n");
+    repo.commit("feat: drift");
+
+    let out = repo.run_belaf_command(&["prepare", "--ci"]);
+    assert!(
+        !out.status.success(),
+        "prepare must reject a tag_format using a variable not allowed for the ecosystem"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("groupId") && stderr.contains("cargo"),
+        "stderr must name the offending variable + ecosystem; got:\n{stderr}"
+    );
+}
+
+#[test]
 fn rewriter_preserves_comments() {
     let repo = TestRepo::new();
     let pom = r#"<?xml version="1.0"?>

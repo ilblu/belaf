@@ -550,7 +550,11 @@ impl ProjectGraphBuilder {
                 members.push(pid);
             }
             atry!(
-                groups.add(Group { id: id.clone(), members });
+                groups.add(Group {
+                    id: id.clone(),
+                    members,
+                    tag_format: gc.tag_format.clone(),
+                });
                 ["failed to register group `{}`", id]
             );
         }

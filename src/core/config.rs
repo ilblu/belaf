@@ -35,6 +35,13 @@ pub mod syntax {
     pub struct GroupConfig {
         pub id: String,
         pub members: Vec<String>,
+
+        /// Group-level tag-format override. Wins over the ecosystem
+        /// default but loses to per-project overrides. Useful when every
+        /// member of a synchronised group should ship under one tag
+        /// (e.g. `schema-v{version}` for a multi-ecosystem schema bundle).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tag_format: Option<String>,
     }
 
     /// `[[bump_source]]` table: a subprocess belaf runs by default to
@@ -199,6 +206,14 @@ pub mod syntax {
     pub struct ProjectConfiguration {
         #[serde(default)]
         pub ignore: bool,
+
+        /// Per-project tag-format override. Wins over the group default
+        /// and the ecosystem default. Variables: `{name}`, `{version}`,
+        /// `{ecosystem}` everywhere, plus `{groupId}` / `{artifactId}`
+        /// for Maven and `{module}` for Go. An unsupported variable for
+        /// the project's ecosystem is a hard error at release time.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub tag_format: Option<String>,
 
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub npm: Option<NpmProjectConfig>,

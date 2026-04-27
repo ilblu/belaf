@@ -27,6 +27,7 @@ pub mod core {
     pub mod project;
     pub mod rewriters;
     pub mod session;
+    pub mod tag_format;
     pub mod version;
     pub mod workflow;
 
