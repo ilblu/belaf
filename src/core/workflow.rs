@@ -497,7 +497,7 @@ impl<'a> ReleasePipeline<'a> {
         std::fs::create_dir_all(&manifest_dir)
             .context(format!("failed to create {} directory", MANIFEST_DIR))?;
 
-        let manifest_filename = ReleaseManifest::generate_filename();
+        let manifest_filename = manifest.generate_filename();
         let manifest_path = manifest_dir.join(&manifest_filename);
 
         manifest
@@ -695,13 +695,13 @@ impl<'a> ReleasePipeline<'a> {
             .count();
 
         ReleaseStatistics {
-            commit_count,
+            commit_count: commit_count as u64,
             days_since_last_release: None,
-            breaking_changes_count,
-            features_count,
-            fixes_count,
+            breaking_changes_count: breaking_changes_count as u64,
+            features_count: features_count as u64,
+            fixes_count: fixes_count as u64,
             pr_count: if pr_count_value > 0 {
-                Some(pr_count_value)
+                Some(pr_count_value as u64)
             } else {
                 None
             },

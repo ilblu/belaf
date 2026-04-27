@@ -580,9 +580,22 @@ edition = "2021"
     );
 
     let manifest_file = &manifest_files[0];
+    // 2.0: filename is `<manifest_id>.json` where manifest_id is a UUID v7
+    // (sortable). Format: 8-4-4-4-12 hex with `7` as the 13th nibble.
     assert!(
-        manifest_file.starts_with("release-") && manifest_file.ends_with(".json"),
-        "Manifest filename should match pattern release-*.json, got: {manifest_file}"
+        manifest_file.ends_with(".json"),
+        "Manifest filename should end in .json, got: {manifest_file}"
+    );
+    let stem = manifest_file.strip_suffix(".json").unwrap();
+    let parts: Vec<&str> = stem.split('-').collect();
+    assert_eq!(
+        parts.len(),
+        5,
+        "expected UUID v7 5-part filename, got: {manifest_file}"
+    );
+    assert!(
+        parts[2].starts_with('7'),
+        "expected UUID v7 (third group starts with 7), got: {manifest_file}"
     );
 }
 
@@ -620,8 +633,8 @@ edition = "2021"
         serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
 
     assert_eq!(
-        manifest["schema_version"], "1.2",
-        "Schema version should be 1.2"
+        manifest["schema_version"], "2.0",
+        "Schema version should be 2.0"
     );
     assert!(
         manifest["created_at"].is_string(),
