@@ -50,6 +50,7 @@ pub mod core {
         pub mod csproj;
         pub mod elixir;
         pub mod go;
+        pub mod maven;
         pub mod npm;
         pub mod pypa;
         pub mod registry;

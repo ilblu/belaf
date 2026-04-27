@@ -112,6 +112,7 @@ impl EcosystemRegistry {
         // silently dropped Swift. The registry-based approach fixes it
         // structurally — Swift is right here in the default set.
         r.register(Box::new(super::swift::SwiftLoader::default()));
+        r.register(Box::new(super::maven::MavenLoader::default()));
         #[cfg(feature = "csharp")]
         r.register(Box::new(super::csproj::CsProjLoader::default()));
         r
