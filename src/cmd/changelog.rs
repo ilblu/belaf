@@ -29,11 +29,10 @@ pub fn run(
         );
     }
 
-    let sess =
-        AppSession::initialize_default().context("could not initialize app and project graph")?;
+    let sess = AppSession::initialize_default()?;
 
     let q = GraphQueryBuilder::default();
-    let idents = sess.graph().query(q).context("could not query projects")?;
+    let idents = sess.graph().query(q)?;
 
     if idents.is_empty() {
         if !ci {

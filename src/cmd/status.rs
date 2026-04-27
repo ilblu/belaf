@@ -16,7 +16,6 @@ use ratatui::{
 };
 use tracing::info;
 
-use crate::atry;
 use crate::cli::ReleaseOutputFormat;
 use crate::core::ui::components::table::Table;
 use crate::core::{graph::GraphQueryBuilder, session::AppSession};
@@ -572,10 +571,7 @@ pub fn run(format: Option<ReleaseOutputFormat>, ci: bool) -> Result<i32> {
         env!("CARGO_PKG_VERSION")
     );
 
-    let sess = atry!(
-        AppSession::initialize_default();
-        ["could not initialize app and project graph"]
-    );
+    let sess = AppSession::initialize_default()?;
 
     let q = GraphQueryBuilder::default();
     let idents = sess

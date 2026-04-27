@@ -433,6 +433,7 @@ impl InstallTokenCommand {
         let token = atry!(
             env::var("NPM_TOKEN");
             ["missing or non-textual environment variable NPM_TOKEN"]
+            (note "set NPM_TOKEN in your CI environment to publish to npm")
         );
 
         let mut p =

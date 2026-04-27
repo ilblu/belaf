@@ -211,13 +211,15 @@ pub async fn whoami() -> Result<i32> {
                 Ok(0)
             }
             Err(ApiError::Unauthorized) => {
-                eprintln!("{} Not authenticated", "error:".red());
+                crate::core::errors::display_diagnostic(&anyhow::Error::from(
+                    ApiError::Unauthorized,
+                ));
                 Ok(1)
             }
             Err(e) => Err(e.into()),
         },
         _ => {
-            eprintln!("{} Not authenticated", "error:".red());
+            crate::core::errors::display_diagnostic(&anyhow::Error::from(ApiError::Unauthorized));
             Ok(1)
         }
     }

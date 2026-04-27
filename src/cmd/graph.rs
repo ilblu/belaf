@@ -1,8 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tracing::info;
 
 use crate::{
-    atry,
     cli::GraphOutputFormat,
     core::{graph::GraphQueryBuilder, session::AppSession},
 };
@@ -34,13 +33,10 @@ pub fn run(
         env!("CARGO_PKG_VERSION")
     );
 
-    let sess = atry!(
-        AppSession::initialize_default();
-        ["could not initialize app and project graph"]
-    );
+    let sess = AppSession::initialize_default()?;
 
     let q = GraphQueryBuilder::default();
-    let idents = sess.graph().query(q).context("could not select projects")?;
+    let idents = sess.graph().query(q)?;
 
     if idents.is_empty() {
         println!("No projects found in repository");

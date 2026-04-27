@@ -1,6 +1,5 @@
 use anyhow::Result;
 use clap::Parser;
-use owo_colors::OwoColorize;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -10,6 +9,7 @@ async fn main() -> Result<()> {
 
     if cli.no_color {
         owo_colors::set_override(false);
+        belaf::core::errors::set_no_color(true);
     }
 
     if cli.version {
@@ -77,7 +77,7 @@ async fn main() -> Result<()> {
                         let url = std::env::var("BELAF_WEB_URL")
                             .unwrap_or_else(|_| "https://belaf.dev/dashboard".to_string());
                         if let Err(e) = open::that(&url) {
-                            eprintln!("Failed to open browser: {}", e);
+                            print_error(&anyhow::anyhow!("failed to open browser: {}", e));
                             std::process::exit(1);
                         }
                     }
@@ -99,7 +99,7 @@ async fn main() -> Result<()> {
 }
 
 fn print_error(error: &anyhow::Error) {
-    eprintln!("{} {}", "Error:".red().bold(), error);
+    belaf::core::errors::display_diagnostic(error);
 }
 
 fn init_logging(verbosity: u8) {

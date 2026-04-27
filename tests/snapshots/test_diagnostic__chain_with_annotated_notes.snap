@@ -1,0 +1,8 @@
+---
+source: tests/test_diagnostic.rs
+expression: display_diagnostic_to_string(&err)
+---
+error: init step failed
+  |
+  = note: × could not load embedded default configuration
+help: this is a packaging bug — please report at https://github.com/ilblu/belaf/issues

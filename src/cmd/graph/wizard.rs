@@ -14,10 +14,7 @@ use ratatui::{
 use std::collections::HashMap;
 use std::io::stdout;
 
-use crate::{
-    atry,
-    core::{graph::GraphQueryBuilder, session::AppSession},
-};
+use crate::core::{graph::GraphQueryBuilder, session::AppSession};
 
 use super::browser;
 
@@ -141,10 +138,7 @@ impl App {
 }
 
 pub fn run() -> Result<i32> {
-    let sess = atry!(
-        AppSession::initialize_default();
-        ["could not initialize app and project graph"]
-    );
+    let sess = AppSession::initialize_default()?;
 
     let q = GraphQueryBuilder::default();
     let idents = sess

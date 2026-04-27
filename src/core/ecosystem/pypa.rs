@@ -796,6 +796,7 @@ impl InstallTokenCommand {
         let token = atry!(
             env::var("PYPI_TOKEN");
             ["missing or non-textual environment variable PYPI_TOKEN"]
+            (note "set PYPI_TOKEN in your CI environment to publish to PyPI")
         );
 
         let mut p =

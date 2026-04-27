@@ -1,3 +1,30 @@
+## [1.3.5](https://github.com/ilblu/belaf/compare/v1.3.4...v1.3.5) (2026-04-27)
+
+
+### Bug Fixes
+
+* **errors:** error output now shows the full caused-by chain and surfaces actionable hints instead of dropping the real reason. Previously, running `belaf init` in a dirty repo printed only `Error: could not initialize app and project graph` while the actual cause (`refusing to proceed (use --force to override)`) was discarded. Migrated to [`annotate-snippets`](https://github.com/rust-lang/annotate-snippets-rs) (the same renderer rustc uses), so errors now look like:
+
+  ```
+  error: refusing to proceed
+    |
+  help: pass `--force` to override, or commit/stash your changes first
+  ```
+
+  Plus context-aware hints for typed errors (`ApiError::RateLimited` shows the retry duration; `ApiError::Unauthorized` suggests `belaf install`; `DirtyRepositoryError` suggests `--force`; `BareRepositoryError` explains the working-tree requirement). ([5d766db](https://github.com/ilblu/belaf/commit/5d766db))
+
+
+### Code Refactoring
+
+* **errors:** consolidate the user-facing error renderer in `core::errors::display_diagnostic`. Removed the parallel dead `errors::report` path and 9 redundant `atry!` wraps (`could not initialize app and project graph` etc.) where the inner error was already specific. Inner errors now speak directly. ([5d766db](https://github.com/ilblu/belaf/commit/5d766db))
+* **deps:** add `annotate-snippets = "0.12"` for diagnostic rendering. Honors `NO_COLOR` env, `--no-color` flag, and stderr-is-a-TTY for color decisions. ([5d766db](https://github.com/ilblu/belaf/commit/5d766db))
+
+
+### Tests
+
+* **diagnostic:** add `tests/test_diagnostic.rs` with insta snapshot tests pinning the rendered output for 6 representative error cases (dirty repo, bare repo, rate-limit, unauthorized, annotated notes, plain error). Format changes are now reviewed via committed `.snap` files in PRs. ([5d766db](https://github.com/ilblu/belaf/commit/5d766db))
+
+
 ## [1.3.4](https://github.com/ilblu/belaf/compare/v1.3.3...v1.3.4) (2026-04-27)
 
 

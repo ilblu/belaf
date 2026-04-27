@@ -136,6 +136,7 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
     let repo = atry!(
         Repository::open_from_env();
         ["belaf is not being run from a Git working directory"]
+        (note "run `belaf init` inside the Git work tree you wish to bootstrap")
     );
 
     let mut config_path = repo.resolve_config_dir();
@@ -163,10 +164,7 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
         state.upstream_url = url;
     }
 
-    let sess = atry!(
-        AppBuilder::new()?.with_progress(true).initialize();
-        ["could not initialize app and project graph"]
-    );
+    let sess = AppBuilder::new()?.with_progress(true).initialize()?;
 
     for ident in sess.graph().toposorted() {
         let proj = sess.graph().lookup(ident);

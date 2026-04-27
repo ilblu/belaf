@@ -2,10 +2,7 @@ use anyhow::Result;
 use serde::Serialize;
 use std::io::Write;
 
-use crate::{
-    atry,
-    core::{graph::GraphQueryBuilder, session::AppSession},
-};
+use crate::core::{graph::GraphQueryBuilder, session::AppSession};
 
 const HTML_TEMPLATE: &str = include_str!("templates/graph.html");
 
@@ -32,10 +29,7 @@ struct GraphEdge {
 }
 
 pub fn open_browser(output_path: Option<&str>) -> Result<i32> {
-    let sess = atry!(
-        AppSession::initialize_default();
-        ["could not initialize app and project graph"]
-    );
+    let sess = AppSession::initialize_default()?;
 
     let q = GraphQueryBuilder::default();
     let idents = sess

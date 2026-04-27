@@ -110,7 +110,12 @@ impl BootstrapCommand {
                 dirty.escaped()
             );
             if !self.force {
-                bail!("refusing to proceed (use `--force` to override)");
+                let mut report = crate::core::errors::AnnotatedReport::default();
+                report.set_message("refusing to proceed".to_string());
+                report.add_note(
+                    "pass `--force` to override, or commit/stash your changes first".to_string(),
+                );
+                return Err(Error::new(report));
             }
         }
 
@@ -129,6 +134,7 @@ impl BootstrapCommand {
                     atry!(
                         crate::core::embed::EmbeddedConfig::get_config_string();
                         ["could not load embedded default configuration"]
+                        (note "this is a packaging bug — please report at https://github.com/ilblu/belaf/issues")
                     )
                 }
             };
@@ -176,10 +182,7 @@ impl BootstrapCommand {
             }
         }
 
-        let mut sess = atry!(
-            AppBuilder::new()?.with_progress(true).initialize();
-            ["could not initialize app and project graph"]
-        );
+        let mut sess = AppBuilder::new()?.with_progress(true).initialize()?;
 
         let mut seen_any = false;
 
@@ -322,6 +325,7 @@ impl BootstrapCommand {
         atry!(
             repo.create_baseline_tag();
             ["failed to create baseline tag"]
+            (note "ensure your Git config has both `user.email` and `user.name` set")
         );
 
         info!("modifications complete!");

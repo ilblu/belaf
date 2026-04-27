@@ -209,10 +209,7 @@ impl AppBuilder {
 
         // Apply project config and compile the graph.
 
-        let graph = atry!(
-            self.graph.complete_loading();
-            ["the project graph is invalid"]
-        );
+        let graph = self.graph.complete_loading()?;
 
         Ok(AppSession {
             repo: self.repo,

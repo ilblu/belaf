@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use owo_colors::OwoColorize;
 use tracing::info;
 
@@ -57,8 +57,7 @@ pub fn run(ci: bool, project_overrides: Option<Vec<String>>) -> Result<i32> {
 fn run_ci_mode(project_overrides: Option<Vec<String>>) -> Result<i32> {
     info!("running in CI mode (PR-based workflow)");
 
-    let mut sess =
-        AppSession::initialize_default().context("could not initialize app and project graph")?;
+    let mut sess = AppSession::initialize_default()?;
 
     let mut ctx = PrepareContext::initialize(&mut sess, false)?;
     ctx.discover_projects()?;

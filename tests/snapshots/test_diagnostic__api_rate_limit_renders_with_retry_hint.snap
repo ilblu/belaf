@@ -1,0 +1,7 @@
+---
+source: tests/test_diagnostic.rs
+expression: display_diagnostic_to_string(&err)
+---
+error: Rate limited (429). Retry after 12 seconds.
+  |
+help: re-run after 12 seconds
