@@ -142,14 +142,7 @@ impl AppBuilder {
         // Now auto-detect everything in the repo index.
 
         if self.populate_graph {
-            let mut cargo = crate::core::ecosystem::cargo::CargoLoader::default();
-            #[cfg(feature = "csharp")]
-            let mut csproj = crate::core::ecosystem::csproj::CsProjLoader::default();
-            let mut npm = crate::core::ecosystem::npm::NpmLoader::default();
-            let mut pypa = crate::core::ecosystem::pypa::PypaLoader::default();
-            let mut go = crate::core::ecosystem::go::GoLoader::default();
-            let mut elixir = crate::core::ecosystem::elixir::ElixirLoader::default();
-            let mut swift = crate::core::ecosystem::swift::SwiftLoader::default();
+            let mut registry = crate::core::ecosystem::registry::EcosystemRegistry::with_defaults();
 
             // Dumb hack around the borrowchecker to allow mutable reference to
             // the graph while iterating over the repo:
@@ -164,30 +157,28 @@ impl AppBuilder {
                 repo.scan_paths_with_progress(|p, current, _total| {
                     progress.update(current);
                     let (dirname, basename) = p.split_basename();
-                    cargo.process_index_item(dirname, basename);
-                    #[cfg(feature = "csharp")]
-                    csproj.process_index_item(&repo, p, dirname, basename)?;
-                    npm.process_index_item(&repo, &mut graph, p, dirname, basename, &proj_config)?;
-                    pypa.process_index_item(dirname, basename);
-                    go.process_index_item(dirname, basename);
-                    elixir.process_index_item(dirname, basename);
-                    swift.process_index_item(dirname, basename);
-                    Ok(())
+                    registry.process_index_item(
+                        &repo,
+                        &mut graph,
+                        p,
+                        dirname,
+                        basename,
+                        &proj_config,
+                    )
                 })?;
 
                 progress.finish();
             } else {
                 repo.scan_paths(|p| {
                     let (dirname, basename) = p.split_basename();
-                    cargo.process_index_item(dirname, basename);
-                    #[cfg(feature = "csharp")]
-                    csproj.process_index_item(&repo, p, dirname, basename)?;
-                    npm.process_index_item(&repo, &mut graph, p, dirname, basename, &proj_config)?;
-                    pypa.process_index_item(dirname, basename);
-                    go.process_index_item(dirname, basename);
-                    elixir.process_index_item(dirname, basename);
-                    swift.process_index_item(dirname, basename);
-                    Ok(())
+                    registry.process_index_item(
+                        &repo,
+                        &mut graph,
+                        p,
+                        dirname,
+                        basename,
+                        &proj_config,
+                    )
                 })?;
             }
 
@@ -195,14 +186,7 @@ impl AppBuilder {
             self.graph = graph;
             // End dumb hack.
 
-            cargo.finalize(&mut self, &proj_config)?;
-            #[cfg(feature = "csharp")]
-            csproj.finalize(&mut self, &proj_config)?;
-            npm.finalize(&mut self, &proj_config)?;
-            pypa.finalize(&mut self, &proj_config)?;
-            go.finalize(&mut self, &proj_config)?;
-            elixir.finalize(&mut self, &proj_config)?;
-            swift.finalize(&mut self, &proj_config)?;
+            registry.finalize_all(&mut self, &proj_config)?;
 
             self.resolve_versions_from_tags()?;
         }

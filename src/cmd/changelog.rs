@@ -5,9 +5,9 @@ use tracing::info;
 use crate::core::{
     bump::{self, BumpConfig},
     changelog::{ChangelogConfig, Commit, GitConfig},
-    ecosystem::types::EcosystemType,
     graph::GraphQueryBuilder,
     session::AppSession,
+    wire::known::Ecosystem,
     workflow::{
         extract_github_remote, generate_and_write_project_changelog, load_github_token,
         ChangelogGenerationParams,
@@ -112,8 +112,8 @@ pub fn run(
         let qnames = proj.qualified_names();
         let ecosystem = qnames
             .get(1)
-            .and_then(|s| EcosystemType::from_qname(s))
-            .unwrap_or(EcosystemType::Cargo);
+            .map(|s| Ecosystem::classify(s))
+            .unwrap_or_else(|| Ecosystem::classify("cargo"));
 
         let prefix = proj.prefix().escaped();
         let write_to_file = !preview && !stdout;
@@ -150,7 +150,7 @@ pub fn run(
                 &proj.user_facing_name,
                 &current_version,
                 new_version.as_deref(),
-                ecosystem,
+                &ecosystem,
                 &result.content,
             );
         } else if stdout {
@@ -212,7 +212,7 @@ fn print_changelog_preview(
     project_name: &str,
     current_version: &str,
     new_version: Option<&str>,
-    ecosystem: EcosystemType,
+    ecosystem: &Ecosystem,
     content: &str,
 ) {
     println!();

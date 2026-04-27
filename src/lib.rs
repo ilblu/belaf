@@ -51,8 +51,8 @@ pub mod core {
         pub mod go;
         pub mod npm;
         pub mod pypa;
+        pub mod registry;
         pub mod swift;
-        pub mod types;
     }
 
     pub mod github {

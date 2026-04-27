@@ -14,8 +14,10 @@ use crate::{
     atry,
     core::{
         config::syntax::ProjectConfiguration,
+        ecosystem::registry::Ecosystem,
         errors::Result,
-        git::repository::{RepoPath, RepoPathBuf},
+        git::repository::{RepoPath, RepoPathBuf, Repository},
+        graph::ProjectGraphBuilder,
         session::AppBuilder,
         version::Version,
     },
@@ -27,7 +29,10 @@ pub struct SwiftLoader {
 }
 
 impl SwiftLoader {
-    pub fn process_index_item(&mut self, dirname: &RepoPath, basename: &RepoPath) {
+    /// Inherent helper used by both the [`Ecosystem`] trait impl and the
+    /// loader's unit tests (which can call this without constructing a real
+    /// `Repository`/`ProjectGraphBuilder`).
+    pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
         if basename.as_ref() != b"Package.swift" {
             return;
         }
@@ -37,7 +42,9 @@ impl SwiftLoader {
         self.package_swift_paths.push(path);
     }
 
-    pub fn finalize(
+    /// Drains the loader into the [`AppBuilder`]. The trait's `finalize`
+    /// shim calls this after consuming the `Box<Self>`.
+    pub fn into_projects(
         self,
         app: &mut AppBuilder,
         pconfig: &HashMap<String, ProjectConfiguration>,
@@ -80,6 +87,42 @@ impl SwiftLoader {
         }
 
         Ok(())
+    }
+}
+
+impl Ecosystem for SwiftLoader {
+    fn name(&self) -> &'static str {
+        "swift"
+    }
+    fn display_name(&self) -> &'static str {
+        "Swift"
+    }
+    fn version_file(&self) -> &'static str {
+        "Package.swift"
+    }
+    fn tag_format_default(&self) -> &'static str {
+        "{name}-v{version}"
+    }
+
+    fn process_index_item(
+        &mut self,
+        _repo: &Repository,
+        _graph: &mut ProjectGraphBuilder,
+        _repopath: &RepoPath,
+        dirname: &RepoPath,
+        basename: &RepoPath,
+        _pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        self.record_path(dirname, basename);
+        Ok(())
+    }
+
+    fn finalize(
+        self: Box<Self>,
+        app: &mut AppBuilder,
+        pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        (*self).into_projects(app, pconfig)
     }
 }
 
@@ -127,7 +170,7 @@ mod tests {
         let dirname_buf = RepoPathBuf::new(b"MyLibrary");
         let basename_buf = RepoPathBuf::new(b"Package.swift");
 
-        loader.process_index_item(dirname_buf.as_ref(), basename_buf.as_ref());
+        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
 
         assert_eq!(loader.package_swift_paths.len(), 1);
         assert_eq!(
@@ -142,7 +185,7 @@ mod tests {
         let dirname_buf = RepoPathBuf::new(b"Sources");
         let basename_buf = RepoPathBuf::new(b"main.swift");
 
-        loader.process_index_item(dirname_buf.as_ref(), basename_buf.as_ref());
+        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
 
         assert_eq!(loader.package_swift_paths.len(), 0);
     }
@@ -156,9 +199,9 @@ mod tests {
         let lib3_dir = RepoPathBuf::new(b"packages/LibraryC");
         let package_swift = RepoPathBuf::new(b"Package.swift");
 
-        loader.process_index_item(lib1_dir.as_ref(), package_swift.as_ref());
-        loader.process_index_item(lib2_dir.as_ref(), package_swift.as_ref());
-        loader.process_index_item(lib3_dir.as_ref(), package_swift.as_ref());
+        loader.record_path(lib1_dir.as_ref(), package_swift.as_ref());
+        loader.record_path(lib2_dir.as_ref(), package_swift.as_ref());
+        loader.record_path(lib3_dir.as_ref(), package_swift.as_ref());
 
         assert_eq!(loader.package_swift_paths.len(), 3);
     }

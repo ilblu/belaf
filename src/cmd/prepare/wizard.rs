@@ -28,10 +28,10 @@ use crate::core::{
     bump::{BumpConfig, BumpRecommendation},
     changelog::{ChangelogConfig, Commit, GitConfig},
     config::syntax::{BumpConfiguration, ChangelogConfiguration},
-    ecosystem::types::EcosystemType,
     git::repository::RepoPathBuf,
     session::AppSession,
     ui::{components::toggle_panel::TogglePanel, markdown, utils::centered_rect},
+    wire::known::Ecosystem,
     workflow::{
         generate_changelog_entry, BumpChoice, PrepareContext, ProjectCandidate, ProjectSelection,
     },
@@ -83,8 +83,8 @@ impl ProjectItem {
         &self.candidate.commits
     }
 
-    fn project_type(&self) -> EcosystemType {
-        self.candidate.ecosystem
+    fn project_type(&self) -> &Ecosystem {
+        &self.candidate.ecosystem
     }
 
     fn effective_bump(&self) -> BumpChoice {
@@ -1563,9 +1563,9 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
         Line::from(""),
     ];
 
-    let mut ecosystems: std::collections::HashSet<EcosystemType> = std::collections::HashSet::new();
+    let mut ecosystems: std::collections::HashSet<Ecosystem> = std::collections::HashSet::new();
     for project in &selected_projects {
-        ecosystems.insert(project.project_type());
+        ecosystems.insert(project.project_type().clone());
     }
 
     for ecosystem in &ecosystems {

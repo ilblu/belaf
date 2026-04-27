@@ -45,6 +45,36 @@ impl KnownEcosystem {
         }
     }
 
+    /// Human-facing label for CLI/PR-body output. Must not be used as a
+    /// wire-format value — pass `as_str()` for that.
+    pub fn display_name(&self) -> &'static str {
+        match self {
+            Self::Npm => "Node.js (npm)",
+            Self::Cargo => "Rust (Cargo)",
+            Self::Maven => "Maven",
+            Self::Pypa => "Python (PyPA)",
+            Self::Go => "Go",
+            Self::Csproj => "C# (.NET)",
+            Self::Swift => "Swift",
+            Self::Elixir => "Elixir",
+        }
+    }
+
+    /// Canonical version-bearing file (or glob) the loader scans.
+    /// Used by the wizard's "Files to Modify" preview.
+    pub fn version_file(&self) -> &'static str {
+        match self {
+            Self::Npm => "package.json",
+            Self::Cargo => "Cargo.toml",
+            Self::Maven => "pom.xml",
+            Self::Pypa => "pyproject.toml",
+            Self::Go => "go.mod",
+            Self::Csproj => "*.csproj",
+            Self::Swift => "Package.swift",
+            Self::Elixir => "mix.exs",
+        }
+    }
+
     pub fn from_wire(s: &str) -> Option<Self> {
         match s {
             "npm" => Some(Self::Npm),
@@ -82,6 +112,24 @@ impl Ecosystem {
         match self {
             Self::Known(k) => k.as_str(),
             Self::Unknown(s) => s,
+        }
+    }
+
+    /// Human-facing label. For unknown ecosystems we render the raw wire
+    /// string — same fallback the dashboard uses (grey badge).
+    pub fn display_name(&self) -> &str {
+        match self {
+            Self::Known(k) => k.display_name(),
+            Self::Unknown(s) => s,
+        }
+    }
+
+    /// Canonical version-bearing file. For unknown ecosystems we have no
+    /// way to know — return a placeholder the wizard can render distinctly.
+    pub fn version_file(&self) -> &'static str {
+        match self {
+            Self::Known(k) => k.version_file(),
+            Self::Unknown(_) => "(unknown)",
         }
     }
 }

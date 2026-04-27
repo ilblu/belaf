@@ -10,8 +10,10 @@ use crate::{
     atry,
     core::{
         config::syntax::ProjectConfiguration,
+        ecosystem::registry::Ecosystem,
         errors::Result,
-        git::repository::{ChangeList, RepoPath, RepoPathBuf},
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
+        graph::ProjectGraphBuilder,
         project::ProjectId,
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
@@ -25,7 +27,7 @@ pub struct GoLoader {
 }
 
 impl GoLoader {
-    pub fn process_index_item(&mut self, dirname: &RepoPath, basename: &RepoPath) {
+    pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
         if basename.as_ref() != b"go.mod" {
             return;
         }
@@ -35,7 +37,7 @@ impl GoLoader {
         self.go_mod_paths.push(path);
     }
 
-    pub fn finalize(
+    pub fn into_projects(
         self,
         app: &mut AppBuilder,
         pconfig: &HashMap<String, ProjectConfiguration>,
@@ -83,6 +85,45 @@ impl GoLoader {
         }
 
         Ok(())
+    }
+}
+
+impl Ecosystem for GoLoader {
+    fn name(&self) -> &'static str {
+        "go"
+    }
+    fn display_name(&self) -> &'static str {
+        "Go"
+    }
+    fn version_file(&self) -> &'static str {
+        "go.mod"
+    }
+    fn tag_format_default(&self) -> &'static str {
+        "{module}/v{version}"
+    }
+    fn tag_template_vars(&self) -> &'static [&'static str] {
+        &["name", "version", "ecosystem", "module"]
+    }
+
+    fn process_index_item(
+        &mut self,
+        _repo: &Repository,
+        _graph: &mut ProjectGraphBuilder,
+        _repopath: &RepoPath,
+        dirname: &RepoPath,
+        basename: &RepoPath,
+        _pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        self.record_path(dirname, basename);
+        Ok(())
+    }
+
+    fn finalize(
+        self: Box<Self>,
+        app: &mut AppBuilder,
+        pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        (*self).into_projects(app, pconfig)
     }
 }
 
@@ -147,7 +188,7 @@ mod tests {
         let dirname_buf = RepoPathBuf::new(b"backend");
         let basename_buf = RepoPathBuf::new(b"go.mod");
 
-        loader.process_index_item(dirname_buf.as_ref(), basename_buf.as_ref());
+        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
 
         assert_eq!(loader.go_mod_paths.len(), 1);
         assert_eq!(
@@ -162,7 +203,7 @@ mod tests {
         let dirname_buf = RepoPathBuf::new(b"backend");
         let basename_buf = RepoPathBuf::new(b"main.go");
 
-        loader.process_index_item(dirname_buf.as_ref(), basename_buf.as_ref());
+        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
 
         assert_eq!(loader.go_mod_paths.len(), 0);
     }
@@ -176,9 +217,9 @@ mod tests {
         let api_dir = RepoPathBuf::new(b"api");
         let go_mod = RepoPathBuf::new(b"go.mod");
 
-        loader.process_index_item(backend_dir.as_ref(), go_mod.as_ref());
-        loader.process_index_item(frontend_dir.as_ref(), go_mod.as_ref());
-        loader.process_index_item(api_dir.as_ref(), go_mod.as_ref());
+        loader.record_path(backend_dir.as_ref(), go_mod.as_ref());
+        loader.record_path(frontend_dir.as_ref(), go_mod.as_ref());
+        loader.record_path(api_dir.as_ref(), go_mod.as_ref());
 
         assert_eq!(loader.go_mod_paths.len(), 3);
     }

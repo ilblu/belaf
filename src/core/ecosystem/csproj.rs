@@ -18,8 +18,10 @@ use crate::{
     a_ok_or, atry,
     core::{
         config::syntax::ProjectConfiguration,
+        ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
+        graph::ProjectGraphBuilder,
         project::{DepRequirement, DependencyTarget, ProjectId},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
@@ -42,7 +44,7 @@ struct DirData {
 }
 
 impl CsProjLoader {
-    pub fn process_index_item(
+    pub fn record_path(
         &mut self,
         _repo: &Repository,
         repopath: &RepoPath,
@@ -66,8 +68,8 @@ impl CsProjLoader {
         Ok(())
     }
 
-    /// Finalize autoloading any CsProj projects. Consumes this object.
-    pub fn finalize(
+    /// Drains the loader into the [`AppBuilder`].
+    pub fn into_projects(
         mut self,
         app: &mut AppBuilder,
         pconfig: &HashMap<String, ProjectConfiguration>,
@@ -433,6 +435,41 @@ impl CsProjLoader {
         }
 
         Ok(())
+    }
+}
+
+impl Ecosystem for CsProjLoader {
+    fn name(&self) -> &'static str {
+        "csproj"
+    }
+    fn display_name(&self) -> &'static str {
+        "C# (.NET)"
+    }
+    fn version_file(&self) -> &'static str {
+        "*.csproj"
+    }
+    fn tag_format_default(&self) -> &'static str {
+        "{name}@v{version}"
+    }
+
+    fn process_index_item(
+        &mut self,
+        repo: &Repository,
+        _graph: &mut ProjectGraphBuilder,
+        repopath: &RepoPath,
+        dirname: &RepoPath,
+        basename: &RepoPath,
+        _pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        self.record_path(repo, repopath, dirname, basename)
+    }
+
+    fn finalize(
+        self: Box<Self>,
+        app: &mut AppBuilder,
+        pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        (*self).into_projects(app, pconfig)
     }
 }
 

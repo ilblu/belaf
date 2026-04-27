@@ -658,7 +658,7 @@ edition = "2021"
 
     let release = &releases[0];
     assert_eq!(release["name"], "json-test");
-    assert_eq!(release["ecosystem"], "Rust (Cargo)");
+    assert_eq!(release["ecosystem"], "cargo");
     assert_eq!(release["previous_version"], "2.0.0");
     assert_eq!(release["new_version"], "2.0.1");
     assert_eq!(release["bump_type"], "patch");

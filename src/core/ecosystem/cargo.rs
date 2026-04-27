@@ -19,8 +19,10 @@ use tracing::info;
 
 use crate::core::{
     config::syntax::ProjectConfiguration,
+    ecosystem::registry::Ecosystem,
     errors::Result,
-    git::repository::{ChangeList, RepoPath, RepoPathBuf},
+    git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
+    graph::ProjectGraphBuilder,
     project::{DepRequirement, DependencyTarget, ProjectId},
     rewriters::Rewriter,
     session::{AppBuilder, AppSession},
@@ -36,9 +38,10 @@ pub struct CargoLoader {
 }
 
 impl CargoLoader {
-    /// Process items in the Git index while auto-loading projects.
-    /// Collects ALL Cargo.toml files to detect multiple workspace roots.
-    pub fn process_index_item(&mut self, dirname: &RepoPath, basename: &RepoPath) {
+    /// Stash a `Cargo.toml` path. Collected during the index scan; consumed
+    /// by [`CargoLoader::into_projects`] which resolves workspaces via
+    /// `cargo metadata`.
+    pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
         if basename.as_ref() != b"Cargo.toml" {
             return;
         }
@@ -52,7 +55,7 @@ impl CargoLoader {
     ///
     /// Discovers ALL workspace roots and loads each one separately.
     /// Uses two-phase loading: first register all projects, then resolve dependencies.
-    pub fn finalize(
+    pub fn into_projects(
         self,
         app: &mut AppBuilder,
         pconfig: &HashMap<String, ProjectConfiguration>,
@@ -396,6 +399,42 @@ impl CargoLoader {
         }
 
         Ok(())
+    }
+}
+
+impl Ecosystem for CargoLoader {
+    fn name(&self) -> &'static str {
+        "cargo"
+    }
+    fn display_name(&self) -> &'static str {
+        "Rust (Cargo)"
+    }
+    fn version_file(&self) -> &'static str {
+        "Cargo.toml"
+    }
+    fn tag_format_default(&self) -> &'static str {
+        "{name}-v{version}"
+    }
+
+    fn process_index_item(
+        &mut self,
+        _repo: &Repository,
+        _graph: &mut ProjectGraphBuilder,
+        _repopath: &RepoPath,
+        dirname: &RepoPath,
+        basename: &RepoPath,
+        _pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        self.record_path(dirname, basename);
+        Ok(())
+    }
+
+    fn finalize(
+        self: Box<Self>,
+        app: &mut AppBuilder,
+        pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        (*self).into_projects(app, pconfig)
     }
 }
 

@@ -23,9 +23,10 @@ use crate::{
     atry,
     core::{
         config::syntax::ProjectConfiguration,
+        ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::GraphQueryBuilder,
+        graph::{GraphQueryBuilder, ProjectGraphBuilder},
         project::{DepRequirement, DependencyTarget, ProjectId},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
@@ -49,7 +50,7 @@ struct PackageLoadData {
 }
 
 impl NpmLoader {
-    pub fn process_index_item(
+    pub fn record_path(
         &mut self,
         repo: &Repository,
         graph: &mut crate::core::graph::ProjectGraphBuilder,
@@ -140,7 +141,7 @@ impl NpmLoader {
         Ok(())
     }
 
-    pub fn finalize(
+    pub fn into_projects(
         self,
         app: &mut AppBuilder,
         pconfig: &HashMap<String, ProjectConfiguration>,
@@ -201,6 +202,41 @@ impl NpmLoader {
         }
 
         Ok(())
+    }
+}
+
+impl Ecosystem for NpmLoader {
+    fn name(&self) -> &'static str {
+        "npm"
+    }
+    fn display_name(&self) -> &'static str {
+        "Node.js (npm)"
+    }
+    fn version_file(&self) -> &'static str {
+        "package.json"
+    }
+    fn tag_format_default(&self) -> &'static str {
+        "{name}@v{version}"
+    }
+
+    fn process_index_item(
+        &mut self,
+        repo: &Repository,
+        graph: &mut ProjectGraphBuilder,
+        repopath: &RepoPath,
+        dirname: &RepoPath,
+        basename: &RepoPath,
+        pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        self.record_path(repo, graph, repopath, dirname, basename, pconfig)
+    }
+
+    fn finalize(
+        self: Box<Self>,
+        app: &mut AppBuilder,
+        pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        (*self).into_projects(app, pconfig)
     }
 }
 

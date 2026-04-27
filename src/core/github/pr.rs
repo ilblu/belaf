@@ -172,7 +172,7 @@ fn bump_badge(bump_type: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ecosystem::types::EcosystemType;
+    use crate::core::wire::known::Ecosystem;
 
     fn make_project(name: &str, old: &str, new: &str, bump: &str) -> SelectedProject {
         SelectedProject {
@@ -182,7 +182,7 @@ mod tests {
             new_version: new.to_string(),
             bump_type: bump.to_string(),
             commits: vec![],
-            ecosystem: EcosystemType::Cargo,
+            ecosystem: Ecosystem::classify("cargo"),
             cached_changelog: None,
         }
     }

@@ -21,8 +21,10 @@ use crate::{
     a_ok_or, atry,
     core::{
         config::syntax::ProjectConfiguration,
+        ecosystem::registry::Ecosystem,
         errors::{Error, Result},
-        git::repository::{ChangeList, RepoPath, RepoPathBuf},
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
+        graph::ProjectGraphBuilder,
         project::{DepRequirement, DependencyTarget, ProjectId},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
@@ -42,7 +44,7 @@ pub struct PypaLoader {
 }
 
 impl PypaLoader {
-    pub fn process_index_item(&mut self, dirname: &RepoPath, basename: &RepoPath) {
+    pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
         let b = basename.as_ref();
 
         if b == b"setup.py" || b == b"setup.cfg" || b == b"pyproject.toml" {
@@ -50,8 +52,8 @@ impl PypaLoader {
         }
     }
 
-    /// Finalize autoloading any PyPA projects. Consumes this object.
-    pub fn finalize(
+    /// Drains the loader into the [`AppBuilder`].
+    pub fn into_projects(
         self,
         app: &mut AppBuilder,
         pconfig: &HashMap<String, ProjectConfiguration>,
@@ -426,6 +428,42 @@ impl PypaLoader {
         }
 
         Ok(())
+    }
+}
+
+impl Ecosystem for PypaLoader {
+    fn name(&self) -> &'static str {
+        "pypa"
+    }
+    fn display_name(&self) -> &'static str {
+        "Python (PyPA)"
+    }
+    fn version_file(&self) -> &'static str {
+        "pyproject.toml"
+    }
+    fn tag_format_default(&self) -> &'static str {
+        "{name}-{version}"
+    }
+
+    fn process_index_item(
+        &mut self,
+        _repo: &Repository,
+        _graph: &mut ProjectGraphBuilder,
+        _repopath: &RepoPath,
+        dirname: &RepoPath,
+        basename: &RepoPath,
+        _pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        self.record_path(dirname, basename);
+        Ok(())
+    }
+
+    fn finalize(
+        self: Box<Self>,
+        app: &mut AppBuilder,
+        pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        (*self).into_projects(app, pconfig)
     }
 }
 
@@ -988,7 +1026,7 @@ mod tests {
         let dirname_buf = RepoPathBuf::new(b"python-project");
         let basename_buf = RepoPathBuf::new(b"setup.py");
 
-        loader.process_index_item(dirname_buf.as_ref(), basename_buf.as_ref());
+        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
 
         assert_eq!(loader.dirs_of_interest.len(), 1);
         assert!(loader.dirs_of_interest.contains(&dirname_buf));
@@ -1000,7 +1038,7 @@ mod tests {
         let dirname_buf = RepoPathBuf::new(b"modern-python");
         let basename_buf = RepoPathBuf::new(b"pyproject.toml");
 
-        loader.process_index_item(dirname_buf.as_ref(), basename_buf.as_ref());
+        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
 
         assert_eq!(loader.dirs_of_interest.len(), 1);
         assert!(loader.dirs_of_interest.contains(&dirname_buf));
@@ -1012,7 +1050,7 @@ mod tests {
         let dirname_buf = RepoPathBuf::new(b"src");
         let basename_buf = RepoPathBuf::new(b"main.py");
 
-        loader.process_index_item(dirname_buf.as_ref(), basename_buf.as_ref());
+        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
 
         assert_eq!(loader.dirs_of_interest.len(), 0);
     }
@@ -1023,15 +1061,15 @@ mod tests {
 
         let dirname1_buf = RepoPathBuf::new(b"packages/lib1");
         let basename1_buf = RepoPathBuf::new(b"setup.py");
-        loader.process_index_item(dirname1_buf.as_ref(), basename1_buf.as_ref());
+        loader.record_path(dirname1_buf.as_ref(), basename1_buf.as_ref());
 
         let dirname2_buf = RepoPathBuf::new(b"packages/lib2");
         let basename2_buf = RepoPathBuf::new(b"pyproject.toml");
-        loader.process_index_item(dirname2_buf.as_ref(), basename2_buf.as_ref());
+        loader.record_path(dirname2_buf.as_ref(), basename2_buf.as_ref());
 
         let dirname3_buf = RepoPathBuf::new(b"packages/lib3");
         let basename3_buf = RepoPathBuf::new(b"setup.py");
-        loader.process_index_item(dirname3_buf.as_ref(), basename3_buf.as_ref());
+        loader.record_path(dirname3_buf.as_ref(), basename3_buf.as_ref());
 
         assert_eq!(loader.dirs_of_interest.len(), 3);
         assert!(loader.dirs_of_interest.contains(&dirname1_buf));

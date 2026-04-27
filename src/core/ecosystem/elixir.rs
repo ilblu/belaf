@@ -11,8 +11,10 @@ use crate::{
     atry,
     core::{
         config::syntax::ProjectConfiguration,
+        ecosystem::registry::Ecosystem,
         errors::Result,
-        git::repository::{ChangeList, RepoPath, RepoPathBuf},
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
+        graph::ProjectGraphBuilder,
         project::ProjectId,
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
@@ -26,7 +28,7 @@ pub struct ElixirLoader {
 }
 
 impl ElixirLoader {
-    pub fn process_index_item(&mut self, dirname: &RepoPath, basename: &RepoPath) {
+    pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
         if basename.as_ref() != b"mix.exs" {
             return;
         }
@@ -36,7 +38,7 @@ impl ElixirLoader {
         self.mix_exs_paths.push(path);
     }
 
-    pub fn finalize(
+    pub fn into_projects(
         self,
         app: &mut AppBuilder,
         pconfig: &HashMap<String, ProjectConfiguration>,
@@ -134,6 +136,39 @@ impl ElixirLoader {
     }
 }
 
+impl Ecosystem for ElixirLoader {
+    fn name(&self) -> &'static str {
+        "elixir"
+    }
+    fn display_name(&self) -> &'static str {
+        "Elixir"
+    }
+    fn version_file(&self) -> &'static str {
+        "mix.exs"
+    }
+
+    fn process_index_item(
+        &mut self,
+        _repo: &Repository,
+        _graph: &mut ProjectGraphBuilder,
+        _repopath: &RepoPath,
+        dirname: &RepoPath,
+        basename: &RepoPath,
+        _pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        self.record_path(dirname, basename);
+        Ok(())
+    }
+
+    fn finalize(
+        self: Box<Self>,
+        app: &mut AppBuilder,
+        pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        (*self).into_projects(app, pconfig)
+    }
+}
+
 #[derive(Debug)]
 pub struct MixExsRewriter {
     proj_id: ProjectId,
@@ -210,7 +245,7 @@ mod tests {
         let dirname_buf = RepoPathBuf::new(b"backend");
         let basename_buf = RepoPathBuf::new(b"mix.exs");
 
-        loader.process_index_item(dirname_buf.as_ref(), basename_buf.as_ref());
+        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
 
         assert_eq!(loader.mix_exs_paths.len(), 1);
         assert_eq!(
@@ -225,7 +260,7 @@ mod tests {
         let dirname_buf = RepoPathBuf::new(b"lib");
         let basename_buf = RepoPathBuf::new(b"app.ex");
 
-        loader.process_index_item(dirname_buf.as_ref(), basename_buf.as_ref());
+        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
 
         assert_eq!(loader.mix_exs_paths.len(), 0);
     }
@@ -239,9 +274,9 @@ mod tests {
         let dirname_worker = RepoPathBuf::new(b"apps/worker");
         let basename = RepoPathBuf::new(b"mix.exs");
 
-        loader.process_index_item(dirname_web.as_ref(), basename.as_ref());
-        loader.process_index_item(dirname_api.as_ref(), basename.as_ref());
-        loader.process_index_item(dirname_worker.as_ref(), basename.as_ref());
+        loader.record_path(dirname_web.as_ref(), basename.as_ref());
+        loader.record_path(dirname_api.as_ref(), basename.as_ref());
+        loader.record_path(dirname_worker.as_ref(), basename.as_ref());
 
         assert_eq!(loader.mix_exs_paths.len(), 3);
     }

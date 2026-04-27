@@ -22,13 +22,13 @@ use crate::core::{
     bump::{self, BumpConfig, BumpRecommendation},
     changelog::{Changelog, ChangelogConfig, Commit, GitConfig, Release},
     config::syntax::{BumpConfiguration, ChangelogConfiguration},
-    ecosystem::types::EcosystemType,
     git::repository::{ChangeList, RepoPathBuf, Repository},
     github::{client::GitHubInformation, pr},
     graph::GraphQueryBuilder,
     manifest::{ProjectRelease, ReleaseManifest, ReleaseStatistics, MANIFEST_DIR},
     project::ProjectId,
     session::AppSession,
+    wire::known::Ecosystem,
 };
 
 #[derive(Debug, Clone)]
@@ -40,7 +40,7 @@ pub struct ProjectCandidate {
     pub commits: Vec<Commit>,
     pub commit_count: usize,
     pub suggested_bump: BumpRecommendation,
-    pub ecosystem: EcosystemType,
+    pub ecosystem: Ecosystem,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,8 +200,8 @@ impl<'a> PrepareContext<'a> {
             let qnames = proj.qualified_names();
             let ecosystem = qnames
                 .get(1)
-                .and_then(|s| EcosystemType::from_qname(s))
-                .unwrap_or(EcosystemType::Cargo);
+                .map(|s| Ecosystem::classify(s))
+                .unwrap_or_else(|| Ecosystem::classify("cargo"));
 
             self.candidates.push(ProjectCandidate {
                 ident: *ident,
@@ -288,7 +288,7 @@ impl<'a> PrepareContext<'a> {
                 new_version,
                 bump_type: bump_scheme_text.to_string(),
                 commits: selection.candidate.commits.clone(),
-                ecosystem: selection.candidate.ecosystem,
+                ecosystem: selection.candidate.ecosystem.clone(),
                 cached_changelog: selection.cached_changelog.clone(),
             });
         }
@@ -310,7 +310,7 @@ pub struct SelectedProject {
     pub new_version: String,
     pub bump_type: String,
     pub commits: Vec<Commit>,
-    pub ecosystem: EcosystemType,
+    pub ecosystem: Ecosystem,
     pub cached_changelog: Option<String>,
 }
 
@@ -472,7 +472,7 @@ impl<'a> ReleasePipeline<'a> {
 
             let mut release = ProjectRelease::new(
                 project.name.clone(),
-                project.ecosystem.display_name().to_string(),
+                project.ecosystem.as_str().to_string(),
                 project.old_version.clone(),
                 project.new_version.clone(),
                 project.bump_type.clone(),
