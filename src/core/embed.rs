@@ -39,6 +39,11 @@ impl EmbeddedConfig {
             projects: cfg.projects,
             groups: cfg.groups.into_normalised(),
             bump_sources: cfg.bump_sources,
+            release_units: cfg.release_units,
+            release_unit_globs: cfg.release_unit_globs,
+            ignore_paths: cfg.ignore_paths,
+            allow_uncovered: cfg.allow_uncovered,
+            ecosystems: cfg.ecosystems,
         })
     }
 }
