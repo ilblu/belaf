@@ -471,7 +471,7 @@ fn build_manifests(
             None => parse_ecosystem(unit_ecosystem),
         };
 
-        let version_field = parse_version_field(unit_name, &m, &manifest_eco)?;
+        let version_field = parse_version_field(unit_name, m, &manifest_eco)?;
 
         out.push(ManifestFile {
             path,
@@ -566,18 +566,18 @@ fn validate_ecosystem_field_compat(
         _ if matches!(ecosystem, Ecosystem::Unknown(_)) => true,
         // For known ecosystems, reject if ecosystem name and field key
         // are clearly mismatched (e.g. npm + cargo_toml).
-        _ => match (ecosystem_str, version_field) {
+        _ => !matches!(
+            (ecosystem_str, version_field),
             ("npm", "cargo_toml")
-            | ("npm", "gradle_properties")
-            | ("npm", "tauri_conf_json")
-            | ("cargo", "npm_package_json")
-            | ("cargo", "gradle_properties")
-            | ("cargo", "tauri_conf_json")
-            | ("jvm-library", "cargo_toml")
-            | ("jvm-library", "npm_package_json")
-            | ("jvm-library", "tauri_conf_json") => false,
-            _ => true,
-        },
+                | ("npm", "gradle_properties")
+                | ("npm", "tauri_conf_json")
+                | ("cargo", "npm_package_json")
+                | ("cargo", "gradle_properties")
+                | ("cargo", "tauri_conf_json")
+                | ("jvm-library", "cargo_toml")
+                | ("jvm-library", "npm_package_json")
+                | ("jvm-library", "tauri_conf_json")
+        ),
     };
 
     if !compat {
