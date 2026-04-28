@@ -152,10 +152,18 @@ fn full_overlay_parses_and_preserves_every_field() {
     let cfg = ConfigurationFile::get(&cfg_path).expect("must parse full overlay");
 
     // 6 explicit release units (5 distinct shapes + 1 hidden aggregator)
-    assert_eq!(cfg.release_units.len(), 6, "expected 6 explicit release_unit entries");
+    assert_eq!(
+        cfg.release_units.len(),
+        6,
+        "expected 6 explicit release_unit entries"
+    );
 
     // 1 glob entry
-    assert_eq!(cfg.release_unit_globs.len(), 1, "expected 1 release_unit_glob entry");
+    assert_eq!(
+        cfg.release_unit_globs.len(),
+        1,
+        "expected 1 release_unit_glob entry"
+    );
     assert_eq!(cfg.release_unit_globs[0].glob, "apps/services/*");
     assert_eq!(cfg.release_unit_globs[0].name, "{basename}");
     assert_eq!(
@@ -167,14 +175,17 @@ fn full_overlay_parses_and_preserves_every_field() {
     assert_eq!(cfg.ignore_paths.paths.len(), 3);
     assert!(cfg.ignore_paths.paths.contains(&"examples/".to_string()));
     assert_eq!(cfg.allow_uncovered.paths.len(), 3);
-    assert!(cfg.allow_uncovered.paths.contains(&"apps/clients/ios/".to_string()));
+    assert!(cfg
+        .allow_uncovered
+        .paths
+        .contains(&"apps/clients/ios/".to_string()));
 
     // ecosystems.*
     assert_eq!(
         cfg.ecosystems.cargo.workspace_mode.as_deref(),
         Some("separate")
     );
-    assert_eq!(cfg.ecosystems.tauri.detect_triplet, true);
+    assert!(cfg.ecosystems.tauri.detect_triplet);
     assert_eq!(
         cfg.ecosystems.jvm_library.gradle_properties_path.as_deref(),
         Some("gradle.properties")
@@ -199,7 +210,10 @@ fn manifests_source_aura() {
     assert_eq!(aura.source.manifests[0].version_field, "cargo_toml");
     assert_eq!(aura.tag_format.as_deref(), Some("{name}-v{version}"));
     assert_eq!(aura.visibility.as_deref(), Some("public"));
-    assert_eq!(aura.satellites, vec!["apps/services/aura/crates".to_string()]);
+    assert_eq!(
+        aura.satellites,
+        vec!["apps/services/aura/crates".to_string()]
+    );
 }
 
 #[test]

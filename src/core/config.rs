@@ -8,8 +8,8 @@ pub mod syntax {
     use std::collections::HashMap;
 
     use crate::core::release_unit::syntax::{
-        AllowUncoveredConfig, EcosystemsConfig, ExplicitReleaseUnitConfig,
-        GlobReleaseUnitConfig, IgnorePathsConfig,
+        AllowUncoveredConfig, EcosystemsConfig, ExplicitReleaseUnitConfig, GlobReleaseUnitConfig,
+        IgnorePathsConfig,
     };
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -56,7 +56,11 @@ pub mod syntax {
 
         /// `[[release_unit]]` — explicit ReleaseUnit entries. Plan
         /// Part I + II.
-        #[serde(default, rename = "release_unit", skip_serializing_if = "Vec::is_empty")]
+        #[serde(
+            default,
+            rename = "release_unit",
+            skip_serializing_if = "Vec::is_empty"
+        )]
         pub release_units: Vec<ExplicitReleaseUnitConfig>,
 
         /// `[[release_unit_glob]]` — glob-form ReleaseUnit entries

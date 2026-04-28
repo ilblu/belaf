@@ -342,8 +342,7 @@ ecosystem = "cargo"
 path = "apps/services/aura/crates/bin/Cargo.toml"
 version_field = "cargo_toml"
 "#;
-        let cfg: ExplicitReleaseUnitConfig =
-            toml::from_str(toml_in).expect("must deserialize");
+        let cfg: ExplicitReleaseUnitConfig = toml::from_str(toml_in).expect("must deserialize");
         assert_eq!(cfg.name, "aura");
         assert_eq!(cfg.ecosystem, "cargo");
         assert_eq!(cfg.source.manifests.len(), 1);
@@ -353,8 +352,7 @@ version_field = "cargo_toml"
 
         // round-trip
         let serialized = toml::to_string(&cfg).expect("must serialize");
-        let cfg2: ExplicitReleaseUnitConfig =
-            toml::from_str(&serialized).expect("must round-trip");
+        let cfg2: ExplicitReleaseUnitConfig = toml::from_str(&serialized).expect("must round-trip");
         assert_eq!(cfg2.name, cfg.name);
         assert_eq!(cfg2.source.manifests[0].path, cfg.source.manifests[0].path);
     }
@@ -467,7 +465,7 @@ gradle_properties_path = "gradle.properties"
         let cfg: EcosystemsConfig = toml::from_str(toml_in).unwrap();
         assert_eq!(cfg.cargo.workspace_mode.as_deref(), Some("separate"));
         assert_eq!(cfg.npm.sync_workspaces.as_deref(), Some("auto"));
-        assert_eq!(cfg.tauri.detect_triplet, true);
+        assert!(cfg.tauri.detect_triplet);
         assert_eq!(
             cfg.jvm_library.gradle_properties_path.as_deref(),
             Some("gradle.properties")
