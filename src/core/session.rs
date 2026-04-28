@@ -144,6 +144,47 @@ impl AppBuilder {
         if self.populate_graph {
             let mut registry = crate::core::ecosystem::registry::EcosystemRegistry::with_defaults();
 
+            // Phase C — resolve [[release_unit]] / [[release_unit_glob]]
+            // BEFORE the index scan so the resulting skip-list silences
+            // ecosystem-level scanning of paths the units already cover
+            // (manifests + satellites). Plus [ignore_paths] entries.
+            let resolved_units = crate::core::release_unit::resolver::resolve(
+                &self.repo,
+                &config.release_units,
+                &config.release_unit_globs,
+            )
+            .map_err(|e| {
+                crate::core::errors::Error::msg(format!("release_unit resolution: {e}"))
+            })?;
+            let mut skip_list: Vec<crate::core::git::repository::RepoPathBuf> = Vec::new();
+            for r in &resolved_units {
+                if let crate::core::release_unit::VersionSource::Manifests(ms) = &r.unit.source {
+                    for m in ms {
+                        // Skip the parent directory of the manifest
+                        // (the unit's "anchor"), so the loader silences
+                        // every sibling/child file under it.
+                        let escaped = m.path.escaped().to_string();
+                        if let Some(parent) = std::path::Path::new(&escaped).parent() {
+                            let parent_str = parent.to_string_lossy().to_string();
+                            if !parent_str.is_empty() {
+                                skip_list.push(crate::core::git::repository::RepoPathBuf::new(
+                                    parent_str.as_bytes(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                for sat in &r.unit.satellites {
+                    skip_list.push(sat.clone());
+                }
+            }
+            for p in &config.ignore_paths.paths {
+                skip_list.push(crate::core::git::repository::RepoPathBuf::new(
+                    p.trim_end_matches('/').as_bytes(),
+                ));
+            }
+            registry.set_skip_list(skip_list);
+
             // Dumb hack around the borrowchecker to allow mutable reference to
             // the graph while iterating over the repo:
             let repo = self.repo;
