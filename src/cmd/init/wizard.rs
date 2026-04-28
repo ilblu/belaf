@@ -321,14 +321,18 @@ fn run_wizard_loop(
                 }
 
                 (KeyCode::Enter, _, WizardStep::Welcome) => {
-                    if state.error_message.is_none() || state.force {
-                        state.step = if state.preset_from_cli {
-                            WizardStep::ProjectSelection
-                        } else {
-                            WizardStep::PresetSelection
-                        };
-                        state.error_message = None;
-                    }
+                    // Welcome IS the confirmation step. Any warnings shown
+                    // (uncommitted changes, existing config) are displayed
+                    // above; pressing ENTER acknowledges them and proceeds.
+                    // The interactive flow does not require --force on top
+                    // of an explicit Enter.
+                    state.force = true;
+                    state.error_message = None;
+                    state.step = if state.preset_from_cli {
+                        WizardStep::ProjectSelection
+                    } else {
+                        WizardStep::PresetSelection
+                    };
                 }
 
                 (KeyCode::Down | KeyCode::Char('j'), _, WizardStep::PresetSelection) => {
@@ -661,7 +665,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
             Paragraph::new(warning_text).alignment(ratatui::layout::Alignment::Center);
         frame.render_widget(warning_text_para, chunks[2]);
 
-        let info_lines = vec![
+        let mut info_lines = vec![
             Line::from(""),
             Line::from(vec![
                 Span::styled("📦 ", Style::default()),
@@ -674,16 +678,38 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
                 ),
             ]),
         ];
+
+        if let Some(ref warning) = state.dirty_warning {
+            info_lines.push(Line::from(""));
+            info_lines.push(Line::from(vec![
+                Span::styled("⚠️  ", Style::default()),
+                Span::styled(warning.clone(), Style::default().fg(Color::Yellow)),
+            ]));
+        }
+
+        if let Some(ref error) = state.error_message {
+            info_lines.push(Line::from(""));
+            info_lines.push(Line::from(vec![
+                Span::styled("❌ ", Style::default()),
+                Span::styled(error.clone(), Style::default().fg(Color::Red)),
+            ]));
+        }
         let info_para = Paragraph::new(info_lines).alignment(ratatui::layout::Alignment::Center);
         frame.render_widget(info_para, chunks[3]);
 
+        let has_warnings = state.dirty_warning.is_some() || state.error_message.is_some();
+        let enter_label = if has_warnings {
+            " to override and reconfigure  •  "
+        } else {
+            " to reconfigure  •  "
+        };
         let action_text = vec![Line::from(vec![
             Span::styled("Press ", Style::default().fg(Color::Gray)),
             Span::styled(
                 "ENTER",
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" to reconfigure  •  ", Style::default().fg(Color::Gray)),
+            Span::styled(enter_label, Style::default().fg(Color::Gray)),
             Span::styled(
                 "Q",
                 Style::default()
@@ -793,6 +819,12 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
         let info_para = Paragraph::new(info_lines).alignment(ratatui::layout::Alignment::Center);
         frame.render_widget(info_para, chunks[1]);
 
+        let has_warnings = state.dirty_warning.is_some() || state.error_message.is_some();
+        let enter_label = if has_warnings {
+            " to override and start  •  "
+        } else {
+            " to start  •  "
+        };
         let action_text = vec![Line::from(vec![
             Span::styled("Press ", Style::default().fg(Color::Gray)),
             Span::styled(
@@ -801,7 +833,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(" to start  •  ", Style::default().fg(Color::Gray)),
+            Span::styled(enter_label, Style::default().fg(Color::Gray)),
             Span::styled(
                 "Q",
                 Style::default()
