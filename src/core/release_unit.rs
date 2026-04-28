@@ -18,7 +18,9 @@ use std::collections::HashMap;
 use crate::core::git::repository::RepoPathBuf;
 use crate::core::wire::known::Ecosystem;
 
+pub mod resolver;
 pub mod syntax;
+pub mod validator;
 
 // ---------------------------------------------------------------------------
 // ReleaseUnit
@@ -297,6 +299,74 @@ impl Visibility {
             Self::Public => "public",
             Self::Internal => "internal",
             Self::Hidden => "hidden",
+        }
+    }
+
+    /// Parse from the lowercase wire form. None for unknown strings.
+    pub fn from_wire(s: &str) -> Option<Self> {
+        match s {
+            "public" => Some(Self::Public),
+            "internal" => Some(Self::Internal),
+            "hidden" => Some(Self::Hidden),
+            _ => None,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Resolved units — the runtime form after [`resolver::resolve`] runs.
+// Each carries a [`ResolveOrigin`] so `belaf config explain` can attribute
+// it back to the user's config.
+// ---------------------------------------------------------------------------
+
+/// A [`ReleaseUnit`] plus provenance metadata (which config block /
+/// glob-expansion / detector produced it).
+#[derive(Clone, Debug)]
+pub struct ResolvedReleaseUnit {
+    /// The runtime release unit.
+    pub unit: ReleaseUnit,
+
+    /// Where this resolved unit came from. Used by `belaf config
+    /// explain` (Phase K) to attribute each unit back to a TOML line
+    /// or detector pattern.
+    pub origin: ResolveOrigin,
+}
+
+/// Provenance of a [`ResolvedReleaseUnit`].
+#[derive(Clone, Debug)]
+pub enum ResolveOrigin {
+    /// Came from an explicit `[[release_unit]]` block at the given
+    /// index in the config.
+    Explicit { config_index: usize },
+
+    /// Came from a `[[release_unit_glob]]` block at the given index,
+    /// matched the given repo-relative directory.
+    Glob {
+        glob_index: usize,
+        matched_path: RepoPathBuf,
+    },
+
+    /// Came from an init detector (Phase F). Carries the detector's
+    /// stable label.
+    Detected { detector: &'static str },
+}
+
+impl ResolveOrigin {
+    /// Short human-readable label for diagnostics.
+    pub fn label(&self) -> String {
+        match self {
+            Self::Explicit { config_index } => {
+                format!("explicit [[release_unit]] #{config_index}")
+            }
+            Self::Glob {
+                glob_index,
+                matched_path,
+            } => format!(
+                "glob [[release_unit_glob]] #{} matched {}",
+                glob_index,
+                matched_path.escaped()
+            ),
+            Self::Detected { detector } => format!("detector {detector}"),
         }
     }
 }

@@ -112,6 +112,30 @@ impl Repository {
         })
     }
 
+    /// Open a repository at an explicit path. Mirrors
+    /// [`Self::open_from_env`] but takes an explicit path so callers
+    /// (e.g. integration tests) don't need to mutate the process-wide
+    /// current working directory.
+    pub fn open<P: AsRef<Path>>(path: P) -> Result<Repository> {
+        let repo = git2::Repository::open(path.as_ref())?;
+
+        if repo.is_bare() {
+            return Err(BareRepositoryError.into());
+        }
+
+        let upstream_name = "origin".to_owned();
+
+        Ok(Repository {
+            repo,
+            upstream_name,
+            bootstrap_info: BootstrapConfiguration::default(),
+            analysis_config: crate::core::config::syntax::AnalysisConfig {
+                commit_cache_size: 512,
+                tree_cache_size: 3,
+            },
+        })
+    }
+
     /// Set up the upstream info in when bootstrapping.
     pub fn bootstrap_upstream(&mut self, name: Option<&str>) -> Result<String> {
         if let Some(name) = name {
