@@ -5,6 +5,7 @@ pub mod cmd {
     pub mod changelog;
     pub mod completions;
     pub mod dashboard;
+    pub mod explain;
     pub mod graph;
     pub mod init;
     pub mod install;
@@ -164,6 +165,13 @@ pub async fn execute(cli: Cli) -> Result<()> {
                 args.unreleased,
                 args.ci,
             )?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
+        Commands::Explain => {
+            let exit_code = cmd::explain::run()?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }
