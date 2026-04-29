@@ -77,6 +77,9 @@ fn run_ci_mode(
     info!("running in CI mode (PR-based workflow)");
 
     let mut sess = AppSession::initialize_default()?;
+    if let Err(message) = sess.pre_prepare_drift_check() {
+        anyhow::bail!("{}", message);
+    }
     let config_bump_sources = sess.config_bump_sources().to_vec();
     // Snapshot groups before ctx takes a mutable borrow on sess. The
     // GroupSet is cloneable and we only read from it during validation, so
@@ -147,6 +150,9 @@ fn run_interactive_mode(
     // wizard's "suggested bump" column reflects the same precedence as
     // CI mode. See `wizard::run_with_overrides_and_decisions`.
     let sess = AppSession::initialize_default()?;
+    if let Err(message) = sess.pre_prepare_drift_check() {
+        anyhow::bail!("{}", message);
+    }
     let config_bump_sources = sess.config_bump_sources().to_vec();
     drop(sess);
 

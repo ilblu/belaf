@@ -138,6 +138,9 @@ impl AppBuilder {
             .with_context(|| "failed to finalize repository setup")?;
 
         let proj_config = config.projects;
+        let ignore_paths = config.ignore_paths.paths.clone();
+        let allow_uncovered = config.allow_uncovered.paths.clone();
+        let mut resolved_units: Vec<crate::core::release_unit::ResolvedReleaseUnit> = Vec::new();
 
         // Now auto-detect everything in the repo index.
 
@@ -148,7 +151,7 @@ impl AppBuilder {
             // BEFORE the index scan so the resulting skip-list silences
             // ecosystem-level scanning of paths the units already cover
             // (manifests + satellites). Plus [ignore_paths] entries.
-            let resolved_units = crate::core::release_unit::resolver::resolve(
+            resolved_units = crate::core::release_unit::resolver::resolve(
                 &self.repo,
                 &config.release_units,
                 &config.release_unit_globs,
@@ -244,6 +247,9 @@ impl AppBuilder {
             bump_config: config.bump,
             bump_sources: config.bump_sources,
             project_configs: proj_config,
+            resolved_release_units: resolved_units,
+            ignore_paths,
+            allow_uncovered,
             is_ci: self.is_ci,
         })
     }
@@ -267,6 +273,17 @@ pub struct AppSession {
     /// `[project."<name>"]` entries from `belaf/config.toml`. Read at
     /// manifest-emission time for `tag_format` overrides (B10).
     project_configs: HashMap<String, super::config::syntax::ProjectConfiguration>,
+    /// Resolved `[[release_unit]]` / `[[release_unit_glob]]` entries.
+    /// Held so [`Self::pre_prepare_drift_check`] can compare detected
+    /// bundles against the configured coverage set without re-running
+    /// the resolver.
+    resolved_release_units: Vec<crate::core::release_unit::ResolvedReleaseUnit>,
+    /// `[ignore_paths] paths` from `belaf/config.toml` — paths the
+    /// drift check should silence even though a detector matches.
+    ignore_paths: Vec<String>,
+    /// `[allow_uncovered] paths` from `belaf/config.toml` — explicit
+    /// "yes I see this is uncovered, leave it alone" list.
+    allow_uncovered: Vec<String>,
     graph: ProjectGraph,
     is_ci: bool,
 }
@@ -326,6 +343,25 @@ impl AppSession {
     /// `[project."<name>"]` entries declared in `belaf/config.toml`.
     pub fn project_configs(&self) -> &HashMap<String, super::config::syntax::ProjectConfiguration> {
         &self.project_configs
+    }
+
+    /// Resolved `[[release_unit]]` / `[[release_unit_glob]]` entries.
+    pub fn resolved_release_units(&self) -> &[crate::core::release_unit::ResolvedReleaseUnit] {
+        &self.resolved_release_units
+    }
+
+    /// Phase H — run the drift detector against the working tree and
+    /// return an `Err(message)` when an uncovered detector hit exists.
+    /// Wired into [`crate::cmd::prepare::run`] so every prepare run
+    /// (CI or interactive) catches new bundles that aren't claimed by
+    /// any `[[release_unit]]` / `[ignore_paths]` / `[allow_uncovered]`.
+    pub fn pre_prepare_drift_check(&self) -> std::result::Result<(), String> {
+        crate::core::release_unit::detector::pre_prepare_drift_check_paths(
+            &self.repo,
+            &self.resolved_release_units,
+            &self.ignore_paths,
+            &self.allow_uncovered,
+        )
     }
 
     pub fn graph(&self) -> &ProjectGraph {

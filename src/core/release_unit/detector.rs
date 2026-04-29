@@ -204,6 +204,71 @@ pub fn pre_prepare_drift_check(
     }
 }
 
+/// Drift check variant that takes the path lists directly instead of
+/// requiring a full [`ConfigurationFile`]. Useful when callers don't
+/// hold the parsed config object — e.g. [`crate::core::session::AppSession`]
+/// stashes only the paths it needs and then calls this.
+pub fn pre_prepare_drift_check_paths(
+    repo: &Repository,
+    resolved: &[ResolvedReleaseUnit],
+    ignore_paths: &[String],
+    allow_uncovered: &[String],
+) -> std::result::Result<(), String> {
+    let report = detect_drift_paths(repo, resolved, ignore_paths, allow_uncovered);
+    if report.is_empty() {
+        Ok(())
+    } else {
+        Err(report.format_error())
+    }
+}
+
+/// Like [`detect_drift`] but accepts the ignore / allow path lists
+/// directly. Avoids forcing every caller to hand-build a
+/// [`ConfigurationFile`] just to call the drift check.
+pub fn detect_drift_paths(
+    repo: &Repository,
+    resolved: &[ResolvedReleaseUnit],
+    ignore_paths: &[String],
+    allow_uncovered: &[String],
+) -> DriftReport {
+    let report = detect_all(repo);
+
+    let mut coverage: Vec<RepoPathBuf> = Vec::new();
+    for r in resolved {
+        if let super::VersionSource::Manifests(ms) = &r.unit.source {
+            for m in ms {
+                if let Some(parent) = Path::new(&m.path.escaped().to_string()).parent() {
+                    let p = parent.to_string_lossy().to_string();
+                    if !p.is_empty() {
+                        coverage.push(RepoPathBuf::new(p.as_bytes()));
+                    }
+                }
+            }
+        }
+        for s in &r.unit.satellites {
+            coverage.push(s.clone());
+        }
+    }
+    for p in ignore_paths {
+        coverage.push(RepoPathBuf::new(p.trim_end_matches('/').as_bytes()));
+    }
+    for p in allow_uncovered {
+        coverage.push(RepoPathBuf::new(p.trim_end_matches('/').as_bytes()));
+    }
+
+    let uncovered: Vec<UncoveredHit> = report
+        .matches
+        .into_iter()
+        .filter(|m| !is_covered(&m.path, &coverage))
+        .map(|m| UncoveredHit {
+            path: m.path,
+            kind: m.kind,
+        })
+        .collect();
+
+    DriftReport { uncovered }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UncoveredHit {
     pub path: RepoPathBuf,
