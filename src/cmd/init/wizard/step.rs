@@ -69,10 +69,6 @@ pub enum StepResult {
 
 /// Why the wizard finished.
 #[derive(Debug)]
-#[expect(
-    dead_code,
-    reason = "SuggestedAlternative used by the single-mobile-repo step in a later commit"
-)]
 pub enum WizardOutcome {
     /// User confirmed at the final step. Caller should run
     /// `execute_bootstrap_with_output(state, repo)`.

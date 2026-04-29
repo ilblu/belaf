@@ -9,6 +9,7 @@ pub mod confirmation;
 pub mod detector_review;
 pub mod preset;
 pub mod project;
+pub mod single_mobile;
 pub mod state;
 pub mod step;
 pub mod tag_format;
@@ -41,6 +42,7 @@ use crate::{
 use super::auto_detect;
 
 use self::{
+    single_mobile::SingleMobileStep,
     state::{DetectedProject, WizardState},
     step::{MouseClick, Step, StepResult, WizardOutcome},
     welcome::WelcomeStep,
@@ -133,7 +135,12 @@ fn run_wizard_loop(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     state: &mut WizardState,
 ) -> Result<WizardOutcome> {
-    let mut stack: Vec<Box<dyn Step>> = vec![Box::new(WelcomeStep::new())];
+    let entry: Box<dyn Step> = if state.detection.is_single_mobile_repo() {
+        Box::new(SingleMobileStep::new())
+    } else {
+        Box::new(WelcomeStep::new())
+    };
+    let mut stack: Vec<Box<dyn Step>> = vec![entry];
 
     loop {
         {
