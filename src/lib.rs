@@ -124,7 +124,13 @@ pub async fn execute(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::Init(args) => {
-            let exit_code = cmd::init::run(args.force, args.upstream, args.ci, args.preset)?;
+            let exit_code = cmd::init::run(
+                args.force,
+                args.upstream,
+                args.ci,
+                args.preset,
+                args.auto_detect,
+            )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }

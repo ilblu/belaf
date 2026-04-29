@@ -114,6 +114,12 @@ pub struct InitArgs {
         help = "Use a preset configuration template (keepachangelog, flat, minimal)"
     )]
     pub preset: Option<String>,
+
+    #[arg(
+        long,
+        help = "Run release_unit auto-detectors (hexagonal cargo, Tauri, JVM library, mobile-warning, nested workspace, SDK cascade) — required to opt-in in --ci mode"
+    )]
+    pub auto_detect: bool,
 }
 
 #[derive(Args)]

@@ -68,7 +68,7 @@ async fn main() -> Result<()> {
                         }
                     }
                     DashboardAction::Init => {
-                        let exit_code = belaf::cmd::init::run(false, None, false, None)?;
+                        let exit_code = belaf::cmd::init::run(false, None, false, None, false)?;
                         if exit_code != 0 {
                             std::process::exit(exit_code);
                         }
