@@ -51,7 +51,7 @@ pub struct BootstrapCommand {
     preset: Option<String>,
 }
 
-mod auto_detect;
+pub mod auto_detect;
 mod wizard;
 
 pub fn run(
