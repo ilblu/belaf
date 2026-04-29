@@ -346,8 +346,31 @@ pub fn detect_drift(
     DriftReport { uncovered }
 }
 
+/// A detector-hit path is "covered" iff one of:
+///
+///   - the hit is **inside** a coverage path (the standard case —
+///     coverage is `apps/services/aura`, hit is `apps/services/aura/crates/bin`),
+///     OR
+///   - the hit is an **ancestor** of a coverage path (the inverted
+///     case — coverage is `apps/services/aura/crates` (the satellite),
+///     hit is `apps/services/aura` (the service dir the hexagonal-cargo
+///     detector reports). The deeper satellite means the user has
+///     definitely claimed the parent service even if no explicit
+///     entry names it).
+///
+/// Without the ancestor branch, hexagonal-cargo services with their
+/// canonical `satellites = ["{path}/crates"]` config drift on every
+/// `belaf prepare`.
 fn is_covered(path: &RepoPathBuf, coverage: &[RepoPathBuf]) -> bool {
-    crate::core::ecosystem::registry::is_path_inside_any(path, coverage)
+    if crate::core::ecosystem::registry::is_path_inside_any(path, coverage) {
+        return true;
+    }
+    let path_str = path.escaped();
+    let path_prefix = format!("{path_str}/");
+    coverage.iter().any(|c| {
+        let c_str = c.escaped();
+        c_str.starts_with(&*path_prefix) || *c_str == *path_str
+    })
 }
 
 // ---------------------------------------------------------------------------

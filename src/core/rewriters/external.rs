@@ -152,12 +152,42 @@ pub fn write_and_verify(
     Ok(())
 }
 
+/// Substitute `{key}` placeholders in `template` with values from
+/// `subs`, **shell-escaping each value** so a malicious version
+/// string (or unit name, or bump key) can't break out of its slot
+/// and execute arbitrary commands when the template is fed to
+/// `sh -c`.
+///
+/// We use POSIX single-quoting: every value is wrapped in `'...'`
+/// with any embedded single-quote replaced by `'\''`. This survives
+/// inside the user's template regardless of whether they themselves
+/// wrapped the placeholder in quotes — single-quoted strings are
+/// literal even when nested in double-quoted contexts.
+///
+/// For callers that *want* the raw value (read-only paths, log
+/// formatting, etc.) — they should not be feeding it to `sh -c` in
+/// the first place.
 fn apply_substitutions(template: &str, subs: &HashMap<String, String>) -> String {
     let mut out = template.to_string();
     for (k, v) in subs {
         let placeholder = format!("{{{k}}}");
-        out = out.replace(&placeholder, v);
+        out = out.replace(&placeholder, &shell_quote(v));
     }
+    out
+}
+
+/// POSIX single-quote escape. `foo` → `'foo'`, `it's` → `'it'\''s'`.
+fn shell_quote(value: &str) -> String {
+    let mut out = String::with_capacity(value.len() + 2);
+    out.push('\'');
+    for ch in value.chars() {
+        if ch == '\'' {
+            out.push_str("'\\''");
+        } else {
+            out.push(ch);
+        }
+    }
+    out.push('\'');
     out
 }
 
@@ -289,14 +319,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn substitution_replaces_all_placeholders() {
+    fn substitution_replaces_all_placeholders_with_shell_quoting() {
         let mut subs = HashMap::new();
         subs.insert("version".to_string(), "1.2.3".to_string());
         subs.insert("bump".to_string(), "minor".to_string());
         subs.insert("name".to_string(), "aura".to_string());
 
         let out = apply_substitutions("echo bumping {name} ({bump}) to {version}", &subs);
-        assert_eq!(out, "echo bumping aura (minor) to 1.2.3");
+        // Every value is single-quoted to survive `sh -c` parsing.
+        assert_eq!(out, "echo bumping 'aura' ('minor') to '1.2.3'");
     }
 
     #[test]
@@ -304,6 +335,37 @@ mod tests {
         let subs = HashMap::new();
         let out = apply_substitutions("echo {unknown}", &subs);
         assert_eq!(out, "echo {unknown}");
+    }
+
+    #[test]
+    fn shell_injection_via_version_is_neutralised() {
+        // A malicious version like `1.0.0; rm -rf /` would, without
+        // escaping, run `rm -rf /` after the version-update command.
+        // With our POSIX single-quote escape it becomes a literal
+        // arg to whatever the user's template runs.
+        let mut subs = HashMap::new();
+        subs.insert("version".to_string(), "1.0.0; rm -rf /".to_string());
+        let out = apply_substitutions("set-version --to {version}", &subs);
+        assert_eq!(out, "set-version --to '1.0.0; rm -rf /'");
+    }
+
+    #[test]
+    fn shell_injection_via_embedded_quote_is_neutralised() {
+        // The classic single-quote-escape attack: close our quote,
+        // run a command, reopen.
+        let mut subs = HashMap::new();
+        subs.insert("version".to_string(), "1.0.0'; rm -rf /; '".to_string());
+        let out = apply_substitutions("set-version --to {version}", &subs);
+        // Each embedded `'` is encoded as `'\''` — closing the quote,
+        // emitting a literal quote, reopening. The whole thing stays
+        // a single shell argument.
+        assert_eq!(out, "set-version --to '1.0.0'\\''; rm -rf /; '\\'''");
+    }
+
+    #[test]
+    fn shell_quote_wraps_simple_values() {
+        assert_eq!(shell_quote("foo"), "'foo'");
+        assert_eq!(shell_quote(""), "''");
     }
 
     #[test]
