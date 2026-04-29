@@ -3,6 +3,7 @@
 
 //! Updating project versioning metadata in the repository.
 
+pub mod external;
 pub mod multi_manifest;
 
 use crate::core::{errors::Result, git::repository::ChangeList, session::AppSession};
