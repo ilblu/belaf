@@ -105,3 +105,33 @@ impl From<&MouseEvent> for MouseClick {
         }
     }
 }
+
+#[cfg(test)]
+pub(super) mod test_support {
+    //! Snapshot harness for step renderers.
+    //!
+    //! Each step's tests build a [`WizardState`], hand the step to
+    //! [`render_to_string`], and pipe the result through
+    //! `insta::assert_snapshot!` so a render-output regression is
+    //! reviewable as a snapshot diff.
+    use ratatui::{backend::TestBackend, Terminal};
+
+    use super::{Step, WizardState};
+
+    pub fn render_to_string(
+        step: &mut dyn Step,
+        state: &WizardState,
+        width: u16,
+        height: u16,
+    ) -> String {
+        let backend = TestBackend::new(width, height);
+        let mut terminal = Terminal::new(backend).expect("test terminal init");
+        terminal
+            .draw(|frame| {
+                let area = frame.area();
+                step.render(frame, area, state);
+            })
+            .expect("test draw");
+        format!("{}", terminal.backend())
+    }
+}

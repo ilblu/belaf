@@ -252,3 +252,39 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState, cursor: usize) {
         frame.render_widget(popup, popup_area);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::{
+        state::{DetectedProject, WizardState},
+        step::test_support::render_to_string,
+    };
+    use super::*;
+
+    fn state_with_projects() -> WizardState {
+        let mut state = WizardState::new(false, None);
+        state.projects = vec![
+            DetectedProject {
+                name: "alpha".into(),
+                version: "0.1.0".into(),
+                prefix: "crates/alpha".into(),
+                selected: true,
+            },
+            DetectedProject {
+                name: "beta".into(),
+                version: "0.2.3".into(),
+                prefix: "crates/beta".into(),
+                selected: false,
+            },
+        ];
+        state
+    }
+
+    #[test]
+    fn renders_project_step() {
+        let state = state_with_projects();
+        let mut step = ProjectSelectionStep::new();
+        let out = render_to_string(&mut step, &state, 80, 24);
+        insta::assert_snapshot!("project_selection", out);
+    }
+}

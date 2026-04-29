@@ -349,3 +349,17 @@ fn generate_preset_example(preset_name: &str) -> String {
         _ => "Preview not available for this preset.".to_string(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::{state::WizardState, step::test_support::render_to_string};
+    use super::*;
+
+    #[test]
+    fn renders_preset_step_with_default_selected() {
+        let state = WizardState::new(false, None);
+        let mut step = PresetSelectionStep::new(&state);
+        let out = render_to_string(&mut step, &state, 100, 30);
+        insta::assert_snapshot!("preset_default_selected", out);
+    }
+}

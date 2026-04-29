@@ -190,3 +190,35 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState) {
     let hints_para = Paragraph::new(hints).alignment(Alignment::Center);
     frame.render_widget(hints_para, chunks[2]);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::{
+        state::{DetectedProject, WizardState},
+        step::test_support::render_to_string,
+    };
+    use super::*;
+
+    #[test]
+    fn renders_confirmation_with_projects() {
+        let mut state = WizardState::new(false, None);
+        state.upstream_url = "https://github.com/example/repo".into();
+        state.projects = vec![
+            DetectedProject {
+                name: "alpha".into(),
+                version: "0.1.0".into(),
+                prefix: "crates/alpha".into(),
+                selected: true,
+            },
+            DetectedProject {
+                name: "beta".into(),
+                version: "0.2.3".into(),
+                prefix: "crates/beta".into(),
+                selected: true,
+            },
+        ];
+        let mut step = ConfirmationStep::new();
+        let out = render_to_string(&mut step, &state, 100, 24);
+        insta::assert_snapshot!("confirmation_two_projects", out);
+    }
+}

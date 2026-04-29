@@ -199,3 +199,27 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState, input_active: bool
     let hints_para = Paragraph::new(hints).alignment(Alignment::Center);
     frame.render_widget(hints_para, chunks[2]);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::{state::WizardState, step::test_support::render_to_string};
+    use super::*;
+
+    #[test]
+    fn renders_upstream_with_url() {
+        let mut state = WizardState::new(false, None);
+        state.upstream_url = "https://github.com/example/repo".into();
+        let mut step = UpstreamConfigStep::new();
+        let out = render_to_string(&mut step, &state, 80, 24);
+        insta::assert_snapshot!("upstream_with_url", out);
+    }
+
+    #[test]
+    fn renders_upstream_input_active() {
+        let mut state = WizardState::new(false, None);
+        state.upstream_url = "git@github.com:example/repo.git".into();
+        let mut step = UpstreamConfigStep { input_active: true };
+        let out = render_to_string(&mut step, &state, 80, 24);
+        insta::assert_snapshot!("upstream_input_active", out);
+    }
+}

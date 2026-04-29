@@ -1,0 +1,28 @@
+---
+source: src/cmd/init/wizard/welcome.rs
+expression: out
+---
+"┌ ⚠ Reconfigure ───────────────────────────────────────────────────────────────┐"
+"│                                                                              │"
+"│                   ██████╗ ███████╗██╗      █████╗ ███████╗                   │"
+"│                   ██╔══██╗██╔════╝██║     ██╔══██╗██╔════╝                   │"
+"│                   ██████╔╝█████╗  ██║     ███████║█████╗                     │"
+"│                   ██╔══██╗██╔══╝  ██║     ██╔══██║██╔══╝                     │"
+"│                   ██████╔╝███████╗███████╗██║  ██║██║                        │"
+"│                   ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝                        │"
+"│                                    Release Management                        │"
+"│                                                                              │"
+"│                                                                              │"
+"│                           ⚠️  RECONFIGURE MODE  ⚠️                           │" Hidden by multi-width symbols: [(29, " "), (51, " ")]
+"│                                                                              │"
+"│                 A configuration already exists in this repo.                 │"
+"│                   Continuing will overwrite your settings.                   │"
+"│                                                                              │"
+"│                                                                              │"
+"│                            📦 Detected: 0 projects                           │" Hidden by multi-width symbols: [(30, " ")]
+"│                                                                              │"
+"│                   Press ENTER to reconfigure  •  Q to quit                   │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"

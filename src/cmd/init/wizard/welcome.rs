@@ -332,3 +332,42 @@ fn belaf_logo(color: Color) -> Vec<Line<'static>> {
         )),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::{state::WizardState, step::test_support::render_to_string};
+    use super::*;
+
+    fn fresh_state() -> WizardState {
+        WizardState::new(false, None)
+    }
+
+    #[test]
+    fn renders_first_run_welcome() {
+        let mut step = WelcomeStep::new();
+        let state = fresh_state();
+        let out = render_to_string(&mut step, &state, 80, 24);
+        insta::assert_snapshot!("welcome_first_run", out);
+    }
+
+    #[test]
+    fn renders_reconfigure_welcome() {
+        let mut step = WelcomeStep::new();
+        let mut state = fresh_state();
+        state.config_exists = true;
+        let out = render_to_string(&mut step, &state, 80, 24);
+        insta::assert_snapshot!("welcome_reconfigure", out);
+    }
+
+    #[test]
+    fn renders_dirty_warning() {
+        let mut step = WelcomeStep::new();
+        let mut state = fresh_state();
+        state.dirty_warning =
+            Some("Warning: uncommitted changes detected (e.g.: src/foo.rs)".into());
+        state.error_message =
+            Some("Repository has uncommitted changes. Use --force to override.".into());
+        let out = render_to_string(&mut step, &state, 80, 24);
+        insta::assert_snapshot!("welcome_dirty_warning", out);
+    }
+}
