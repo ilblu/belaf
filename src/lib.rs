@@ -30,6 +30,7 @@ pub mod core {
     pub mod session;
     pub mod tag_format;
     pub mod version;
+    pub mod version_field;
     pub mod workflow;
 
     pub mod api;
