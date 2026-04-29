@@ -17,6 +17,7 @@ pub mod core {
 
     pub mod bump;
     pub mod bump_source;
+    pub mod cargo_lock;
     pub mod config;
     pub mod embed;
     pub mod env;
