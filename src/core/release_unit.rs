@@ -18,6 +18,7 @@ use std::collections::HashMap;
 use crate::core::git::repository::RepoPathBuf;
 use crate::core::wire::known::Ecosystem;
 
+pub mod cascade;
 pub mod detector;
 pub mod resolver;
 pub mod syntax;
