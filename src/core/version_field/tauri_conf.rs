@@ -34,7 +34,13 @@ pub fn read(path: &Path) -> Result<String> {
             path: path.display().to_string(),
             looked_for: r#""version": "..." (top-level)"#,
         })?;
-    Ok(caps.get(2).unwrap().as_str().to_string())
+    let value = caps
+        .get(2)
+        .ok_or_else(|| VersionFieldError::VersionFieldMissing {
+            path: path.display().to_string(),
+            looked_for: r#""version": "..." (group 2 absent)"#,
+        })?;
+    Ok(value.as_str().to_string())
 }
 
 pub fn write(path: &Path, new_version: &str) -> Result<()> {
@@ -50,7 +56,13 @@ pub fn write(path: &Path, new_version: &str) -> Result<()> {
             looked_for: r#""version": "..." (top-level)"#,
         })?;
 
-    if caps.get(2).unwrap().as_str() == new_version {
+    let current = caps
+        .get(2)
+        .ok_or_else(|| VersionFieldError::VersionFieldMissing {
+            path: path.display().to_string(),
+            looked_for: r#""version": "..." (group 2 absent)"#,
+        })?;
+    if current.as_str() == new_version {
         return Ok(()); // idempotent
     }
 

@@ -30,7 +30,13 @@ pub fn read(path: &Path, pattern: &str) -> Result<String> {
             path: path.display().to_string(),
             looked_for: "regex pattern (custom)",
         })?;
-    Ok(caps.get(1).unwrap().as_str().to_string())
+    let value = caps
+        .get(1)
+        .ok_or_else(|| VersionFieldError::VersionFieldMissing {
+            path: path.display().to_string(),
+            looked_for: "regex pattern (custom): capture group 1 absent",
+        })?;
+    Ok(value.as_str().to_string())
 }
 
 pub fn write(path: &Path, pattern: &str, replace_template: &str, new_version: &str) -> Result<()> {
@@ -46,8 +52,13 @@ pub fn write(path: &Path, pattern: &str, replace_template: &str, new_version: &s
             path: path.display().to_string(),
             looked_for: "regex pattern (custom)",
         })?;
-    let current = caps.get(1).unwrap().as_str();
-    if current == new_version {
+    let current_match = caps
+        .get(1)
+        .ok_or_else(|| VersionFieldError::VersionFieldMissing {
+            path: path.display().to_string(),
+            looked_for: "regex pattern (custom): capture group 1 absent",
+        })?;
+    if current_match.as_str() == new_version {
         return Ok(()); // idempotent
     }
 

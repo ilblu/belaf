@@ -37,7 +37,13 @@ pub fn read(path: &Path) -> Result<String> {
             path: path.display().to_string(),
             looked_for: r"^version=(.+)$",
         })?;
-    Ok(caps.get(1).unwrap().as_str().trim().to_string())
+    let value = caps
+        .get(1)
+        .ok_or_else(|| VersionFieldError::VersionFieldMissing {
+            path: path.display().to_string(),
+            looked_for: r"^version=(.+)$ (capture group 1 absent)",
+        })?;
+    Ok(value.as_str().trim().to_string())
 }
 
 pub fn write(path: &Path, new_version: &str) -> Result<()> {
@@ -69,10 +75,14 @@ pub fn write(path: &Path, new_version: &str) -> Result<()> {
     }
 
     // Idempotent — if every match's captured value already equals
-    // new_version, no-op.
-    let all_idempotent = re
-        .captures_iter(&content)
-        .all(|c| c.get(1).unwrap().as_str().trim() == new_version);
+    // new_version, no-op. A capture without group 1 means the regex
+    // matched but didn't capture, which contradicts `version_re()`'s
+    // shape — treat that as "needs rewrite" rather than panicking.
+    let all_idempotent = re.captures_iter(&content).all(|c| {
+        c.get(1)
+            .map(|m| m.as_str().trim() == new_version)
+            .unwrap_or(false)
+    });
     if all_idempotent {
         return Ok(());
     }

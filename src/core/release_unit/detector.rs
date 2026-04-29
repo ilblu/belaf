@@ -232,7 +232,21 @@ pub fn detect_drift_paths(
     allow_uncovered: &[String],
 ) -> DriftReport {
     let report = detect_all(repo);
+    detect_drift_from_report(&report, resolved, ignore_paths, allow_uncovered)
+}
 
+/// Drift check variant that consumes a pre-computed
+/// [`DetectionReport`]. Intended for callers that already cache the
+/// detection output (e.g. [`crate::core::session::AppSession`]) and
+/// want to avoid re-walking the filesystem. The `_paths` and
+/// `ConfigurationFile`-based variants both delegate to this once
+/// they have a report in hand.
+pub fn detect_drift_from_report(
+    report: &DetectionReport,
+    resolved: &[ResolvedReleaseUnit],
+    ignore_paths: &[String],
+    allow_uncovered: &[String],
+) -> DriftReport {
     let mut coverage: Vec<RepoPathBuf> = Vec::new();
     for r in resolved {
         if let super::VersionSource::Manifests(ms) = &r.unit.source {
@@ -258,11 +272,11 @@ pub fn detect_drift_paths(
 
     let uncovered: Vec<UncoveredHit> = report
         .matches
-        .into_iter()
+        .iter()
         .filter(|m| !is_covered(&m.path, &coverage))
         .map(|m| UncoveredHit {
-            path: m.path,
-            kind: m.kind,
+            path: m.path.clone(),
+            kind: m.kind.clone(),
         })
         .collect();
 
@@ -301,49 +315,20 @@ pub fn detect_all(repo: &Repository) -> DetectionReport {
 /// Drift check: find paths matching a detector pattern that are not
 /// covered by any resolved ReleaseUnit, `[ignore_paths]`, or
 /// `[allow_uncovered]`. Runs on every `belaf prepare` (Phase H).
+/// Delegates to [`detect_drift_from_report`] so the coverage-set
+/// construction lives in one place.
 pub fn detect_drift(
     repo: &Repository,
     resolved: &[ResolvedReleaseUnit],
     cfg: &ConfigurationFile,
 ) -> DriftReport {
     let report = detect_all(repo);
-
-    // Build coverage set: resolved units' manifest parents +
-    // satellites + ignore_paths + allow_uncovered.
-    let mut coverage: Vec<RepoPathBuf> = Vec::new();
-    for r in resolved {
-        if let super::VersionSource::Manifests(ms) = &r.unit.source {
-            for m in ms {
-                if let Some(parent) = Path::new(&m.path.escaped().to_string()).parent() {
-                    let p = parent.to_string_lossy().to_string();
-                    if !p.is_empty() {
-                        coverage.push(RepoPathBuf::new(p.as_bytes()));
-                    }
-                }
-            }
-        }
-        for s in &r.unit.satellites {
-            coverage.push(s.clone());
-        }
-    }
-    for p in &cfg.ignore_paths.paths {
-        coverage.push(RepoPathBuf::new(p.trim_end_matches('/').as_bytes()));
-    }
-    for p in &cfg.allow_uncovered.paths {
-        coverage.push(RepoPathBuf::new(p.trim_end_matches('/').as_bytes()));
-    }
-
-    let uncovered: Vec<UncoveredHit> = report
-        .matches
-        .into_iter()
-        .filter(|m| !is_covered(&m.path, &coverage))
-        .map(|m| UncoveredHit {
-            path: m.path,
-            kind: m.kind,
-        })
-        .collect();
-
-    DriftReport { uncovered }
+    detect_drift_from_report(
+        &report,
+        resolved,
+        &cfg.ignore_paths.paths,
+        &cfg.allow_uncovered.paths,
+    )
 }
 
 /// A detector-hit path is "covered" iff one of:
@@ -473,6 +458,16 @@ fn tauri(workdir: &Path) -> Vec<DetectorMatch> {
     out
 }
 
+/// Compiled once per process. The detector now runs at the start of
+/// every wizard launch AND every `belaf prepare` (drift check) — paying
+/// the regex compile cost on every call would be unnecessary overhead.
+static TAURI_PATH_REF_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r#""version"\s*:\s*"\.\./[^"]+\.json""#).expect("static regex must compile")
+});
+static TAURI_ANY_VERSION_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r#""version"\s*:\s*"[^"]+""#).expect("static regex must compile")
+});
+
 fn is_tauri_single_source(conf_path: &Path) -> bool {
     let content = match std::fs::read_to_string(conf_path) {
         Ok(c) => c,
@@ -480,13 +475,10 @@ fn is_tauri_single_source(conf_path: &Path) -> bool {
     };
     // Either: no version field at all, OR version refers to a path
     // (Tauri 2.x supports `"version": "../package.json"`).
-    // Use a permissive regex match.
-    let re_path_ref = regex::Regex::new(r#""version"\s*:\s*"\.\./[^"]+\.json""#).unwrap();
-    if re_path_ref.is_match(&content) {
+    if TAURI_PATH_REF_RE.is_match(&content) {
         return true;
     }
-    let re_any_version = regex::Regex::new(r#""version"\s*:\s*"[^"]+""#).unwrap();
-    !re_any_version.is_match(&content)
+    !TAURI_ANY_VERSION_RE.is_match(&content)
 }
 
 // ---------------------------------------------------------------------------

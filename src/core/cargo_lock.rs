@@ -12,10 +12,19 @@
 //!    regenerates the lockfile on build anyway).
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use thiserror::Error;
 use tracing::warn;
+use wait_timeout::ChildExt as _;
+
+/// Wall-clock cap for any single `cargo update` invocation. Picked
+/// generously enough that a real workspace recompute fits, tight
+/// enough that an offline / network-stuck run doesn't hang `belaf
+/// prepare` indefinitely. The previous unbounded behaviour bricked
+/// CI environments without crates.io connectivity.
+const CARGO_UPDATE_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Error)]
 pub enum CargoLockError {
@@ -30,6 +39,9 @@ pub enum CargoLockError {
         #[source]
         source: std::io::Error,
     },
+
+    #[error("`cargo update {args:?}` exceeded its {timeout_sec}s timeout")]
+    Timeout { args: Vec<String>, timeout_sec: u64 },
 }
 
 pub type Result<T> = std::result::Result<T, CargoLockError>;
@@ -79,17 +91,44 @@ pub fn update_for_crate_best_effort(crate_name: &str, cwd: &Path) {
 }
 
 fn run_cargo(args: &[&str], cwd: &Path) -> Result<()> {
-    let output = Command::new("cargo")
+    let mut child = Command::new("cargo")
         .args(args)
         .current_dir(cwd)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(|e| CargoLockError::Spawn { source: e })?;
 
-    if output.status.success() {
+    // Cap the run so an offline / unreachable registry can't hang
+    // `belaf prepare` indefinitely.
+    let status = match child
+        .wait_timeout(CARGO_UPDATE_TIMEOUT)
+        .map_err(|e| CargoLockError::Spawn { source: e })?
+    {
+        Some(s) => s,
+        None => {
+            // Timeout expired — kill the child and surface a clear error.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(CargoLockError::Timeout {
+                args: args.iter().map(|a| (*a).to_string()).collect(),
+                timeout_sec: CARGO_UPDATE_TIMEOUT.as_secs(),
+            });
+        }
+    };
+
+    let mut stderr_buf = String::new();
+    if let Some(mut s) = child.stderr.take() {
+        use std::io::Read as _;
+        let _ = s.read_to_string(&mut stderr_buf);
+    }
+
+    if status.success() {
         return Ok(());
     }
 
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+    let stderr = stderr_buf.trim().to_string();
     let crate_name = args.iter().skip_while(|a| **a != "-p").nth(1);
     if let Some(name) = crate_name {
         Err(CargoLockError::PerCrateFailed {

@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use petgraph::{algo::tarjan_scc, graph::DiGraph};
+use petgraph::{algo::tarjan_scc, graph::DiGraph, visit::EdgeRef};
 
 use super::validator::ResolverError;
 use super::{CascadeBumpStrategy, ResolvedReleaseUnit};
@@ -63,36 +63,48 @@ fn cascaded(strategy: CascadeBumpStrategy, source: BumpKind) -> BumpKind {
     }
 }
 
-/// Build a `petgraph` directed graph of `cascade_from` edges and
-/// run Tarjan-SCC. Any SCC with size > 1 is a cycle; the error
-/// names every member so the user can locate them all.
-pub fn validate_no_cycles(units: &[ResolvedReleaseUnit]) -> Result<(), ResolverError> {
-    let mut graph: DiGraph<String, ()> = DiGraph::new();
+/// Build a `petgraph` directed graph of `cascade_from` edges, with
+/// each edge weighted by the cascade bump strategy. Used by both
+/// [`validate_no_cycles`] (which only needs structure) and
+/// [`apply_cascades`] (which needs the weights). Extracted so we
+/// build the graph exactly once per `apply_cascades` call.
+fn build_cascade_graph(units: &[ResolvedReleaseUnit]) -> DiGraph<String, CascadeBumpStrategy> {
+    let mut graph: DiGraph<String, CascadeBumpStrategy> = DiGraph::new();
     let mut node_idx: HashMap<String, _> = HashMap::new();
-
     for r in units {
         let idx = graph.add_node(r.unit.name.clone());
         node_idx.insert(r.unit.name.clone(), idx);
     }
-
     // Edge: source → cascading unit. Source must exist (resolver's
     // validate_cascade_sources catches the unknown-source case).
     for r in units {
         if let Some(c) = &r.unit.cascade_from {
             if let (Some(&src), Some(&dst)) = (node_idx.get(&c.source), node_idx.get(&r.unit.name))
             {
-                graph.add_edge(src, dst, ());
+                graph.add_edge(src, dst, c.bump);
             }
         }
     }
+    graph
+}
 
-    for scc in tarjan_scc(&graph) {
+/// Run Tarjan-SCC on the cascade graph. Any SCC with size > 1 is a
+/// cycle; the error names every member so the user can locate them
+/// all. Self-loops (single-node SCCs with a self-edge) also fail.
+pub fn validate_no_cycles(units: &[ResolvedReleaseUnit]) -> Result<(), ResolverError> {
+    let graph = build_cascade_graph(units);
+    validate_no_cycles_on(&graph)
+}
+
+fn validate_no_cycles_on(
+    graph: &DiGraph<String, CascadeBumpStrategy>,
+) -> Result<(), ResolverError> {
+    for scc in tarjan_scc(graph) {
         if scc.len() > 1 {
             let mut members: Vec<String> = scc.iter().map(|i| graph[*i].clone()).collect();
             members.sort();
             return Err(ResolverError::CascadeCycle { members });
         }
-        // Self-loop: scc size == 1 but with an edge to itself.
         if scc.len() == 1 {
             let n = scc[0];
             if graph.contains_edge(n, n) {
@@ -126,21 +138,11 @@ pub fn apply_cascades(
     units: &[ResolvedReleaseUnit],
     primary_bumps: &HashMap<String, BumpKind>,
 ) -> Result<HashMap<String, BumpKind>, ResolverError> {
-    validate_no_cycles(units)?;
-
-    let mut graph: DiGraph<String, CascadeBumpStrategy> = DiGraph::new();
-    let mut node_idx: HashMap<String, _> = HashMap::new();
-    for r in units {
-        node_idx.insert(r.unit.name.clone(), graph.add_node(r.unit.name.clone()));
-    }
-    for r in units {
-        if let Some(c) = &r.unit.cascade_from {
-            if let (Some(&src), Some(&dst)) = (node_idx.get(&c.source), node_idx.get(&r.unit.name))
-            {
-                graph.add_edge(src, dst, c.bump);
-            }
-        }
-    }
+    // One graph build for both cycle detection AND the topological
+    // walk below. Previously we built two identical-shape graphs back
+    // to back — wasted O(V+E) every time `apply_cascades` ran.
+    let graph = build_cascade_graph(units);
+    validate_no_cycles_on(&graph)?;
 
     // Topological order: petgraph's toposort returns Err on cycles,
     // but we already rejected cycles above.
@@ -173,8 +175,6 @@ pub fn apply_cascades(
 
     Ok(decisions)
 }
-
-use petgraph::visit::EdgeRef;
 
 #[cfg(test)]
 mod tests {

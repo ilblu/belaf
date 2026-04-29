@@ -250,6 +250,7 @@ impl AppBuilder {
             resolved_release_units: resolved_units,
             ignore_paths,
             allow_uncovered,
+            detection_cache: std::sync::OnceLock::new(),
             is_ci: self.is_ci,
         })
     }
@@ -284,6 +285,12 @@ pub struct AppSession {
     /// `[allow_uncovered] paths` from `belaf/config.toml` — explicit
     /// "yes I see this is uncovered, leave it alone" list.
     allow_uncovered: Vec<String>,
+    /// Cached output of [`crate::core::release_unit::detector::detect_all`]
+    /// — first call materialises it, subsequent calls reuse. Avoids
+    /// the full filesystem walk on every `belaf prepare` invocation
+    /// (the wizard + drift-check would otherwise traverse the same
+    /// tree twice).
+    detection_cache: std::sync::OnceLock<crate::core::release_unit::detector::DetectionReport>,
     graph: ProjectGraph,
     is_ci: bool,
 }
@@ -355,13 +362,29 @@ impl AppSession {
     /// Wired into [`crate::cmd::prepare::run`] so every prepare run
     /// (CI or interactive) catches new bundles that aren't claimed by
     /// any `[[release_unit]]` / `[ignore_paths]` / `[allow_uncovered]`.
+    /// Reuses [`Self::detection_report`] to avoid walking the
+    /// filesystem twice within one process.
     pub fn pre_prepare_drift_check(&self) -> std::result::Result<(), String> {
-        crate::core::release_unit::detector::pre_prepare_drift_check_paths(
-            &self.repo,
+        let report = self.detection_report();
+        let drift = crate::core::release_unit::detector::detect_drift_from_report(
+            report,
             &self.resolved_release_units,
             &self.ignore_paths,
             &self.allow_uncovered,
-        )
+        );
+        if drift.is_empty() {
+            Ok(())
+        } else {
+            Err(drift.format_error())
+        }
+    }
+
+    /// Cached [`detect_all`](crate::core::release_unit::detector::detect_all)
+    /// output. The first caller pays the filesystem-walk cost; the
+    /// rest reuse the materialised report.
+    pub fn detection_report(&self) -> &crate::core::release_unit::detector::DetectionReport {
+        self.detection_cache
+            .get_or_init(|| crate::core::release_unit::detector::detect_all(&self.repo))
     }
 
     pub fn graph(&self) -> &ProjectGraph {
