@@ -715,6 +715,20 @@ impl Rewriter for CargoRewriter {
             changes.add_path(&self.toml_path);
         }
 
+        // Phase J — refresh Cargo.lock so the bumped version
+        // propagates to the lockfile in the same prepare run. The
+        // `update_for_crate` helper runs `cargo update -p <name>
+        // --workspace`, falls back to `cargo update --workspace` if
+        // the per-crate target is unknown, and is a fast no-op when
+        // the version didn't change. We log + swallow errors here so
+        // a missing `cargo` binary or a Bazel-managed lockfile
+        // doesn't block the rewrite of other ecosystems.
+        let workspace_root = app.repo.resolve_workdir(&RepoPathBuf::new(b""));
+        let crate_name = &proj.qualified_names()[0];
+        if let Err(e) = crate::core::cargo_lock::update_for_crate(crate_name, &workspace_root) {
+            tracing::warn!("Cargo.lock update for `{crate_name}` failed (continuing): {e}",);
+        }
+
         Ok(())
     }
 
