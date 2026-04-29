@@ -15,6 +15,7 @@ use crate::core::ui::utils::centered_rect;
 use super::{
     state::WizardState,
     step::{Step, StepResult, WizardOutcome},
+    tag_format::TagFormatStep,
     upstream::UpstreamConfigStep,
 };
 
@@ -94,12 +95,17 @@ impl Step for ProjectSelectionStep {
                 StepResult::Continue
             }
             (KeyCode::Enter, _) => {
-                if state.selected_projects().is_empty() {
+                let count = state.selected_projects().len();
+                if count == 0 {
                     state.error_message = Some("Please select at least one project".to_string());
                     StepResult::Continue
                 } else {
                     state.error_message = None;
-                    StepResult::Next(Box::new(UpstreamConfigStep::new()))
+                    if count == 1 {
+                        StepResult::Next(Box::new(TagFormatStep::new()))
+                    } else {
+                        StepResult::Next(Box::new(UpstreamConfigStep::new()))
+                    }
                 }
             }
             (KeyCode::Esc, _) => StepResult::Back,

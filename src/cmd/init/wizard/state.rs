@@ -42,6 +42,14 @@ pub struct WizardState {
     /// reads this after a successful bootstrap and appends the
     /// auto_detect snippet to `belaf/config.toml`.
     pub detector_accepted: bool,
+
+    /// Phase I.3 — tag-format override picked by the user via
+    /// [`TagFormatStep`](super::tag_format::TagFormatStep) when the
+    /// repo is a single-project bundle. `None` means "fall back to
+    /// each ecosystem's `tag_format_default`". `Some` is appended as
+    /// a `[projects."<name>"]` block to `belaf/config.toml` after
+    /// bootstrap.
+    pub tag_format_override: Option<String>,
 }
 
 impl WizardState {
@@ -64,6 +72,7 @@ impl WizardState {
             config_exists: false,
             detection: DetectionReport::default(),
             detector_accepted: false,
+            tag_format_override: None,
         }
     }
 

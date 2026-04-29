@@ -11,6 +11,7 @@ pub mod preset;
 pub mod project;
 pub mod state;
 pub mod step;
+pub mod tag_format;
 pub mod upstream;
 pub mod welcome;
 
@@ -212,13 +213,22 @@ fn execute_bootstrap_with_output(state: &WizardState, repo: &Repository) -> Resu
     match execute_bootstrap(state, repo) {
         Ok(_) => {
             spinner.success("Initialization complete!");
+            let mut cfg_path = repo.resolve_config_dir();
+            cfg_path.push("config.toml");
             if state.detector_accepted {
                 let result = auto_detect::run(repo);
-                let mut cfg_path = repo.resolve_config_dir();
-                cfg_path.push("config.toml");
                 if let Err(e) = auto_detect::append_to_config(&cfg_path, &result.toml_snippet) {
                     eprintln!(
                         "warning: detected bundles but failed to append to {}: {}",
+                        cfg_path.display(),
+                        e
+                    );
+                }
+            }
+            if let Some(snippet) = build_tag_format_snippet(state) {
+                if let Err(e) = auto_detect::append_to_config(&cfg_path, &snippet) {
+                    eprintln!(
+                        "warning: failed to append tag_format override to {}: {}",
                         cfg_path.display(),
                         e
                     );
@@ -232,6 +242,18 @@ fn execute_bootstrap_with_output(state: &WizardState, repo: &Repository) -> Resu
             Ok(1)
         }
     }
+}
+
+/// Phase I.3 — when the user picked a tag-format override on the
+/// single-project tag-format step, build the per-project override
+/// snippet that gets appended to `belaf/config.toml`.
+fn build_tag_format_snippet(state: &WizardState) -> Option<String> {
+    let format = state.tag_format_override.as_ref()?;
+    let project = state.selected_projects().into_iter().next()?;
+    Some(format!(
+        "\n[projects.\"{name}\"]\ntag_format = \"{format}\"\n",
+        name = project.name,
+    ))
 }
 
 fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
