@@ -138,6 +138,72 @@ pub struct DriftReport {
     pub uncovered: Vec<UncoveredHit>,
 }
 
+impl DriftReport {
+    pub fn is_empty(&self) -> bool {
+        self.uncovered.is_empty()
+    }
+
+    /// Format per `BELAF_MASTER_PLAN.md` §3.9 — actionable, lists
+    /// every uncovered hit with its detector kind, suggests the
+    /// three remediation paths.
+    pub fn format_error(&self) -> String {
+        let mut s = String::from(
+            "✗ belaf prepare detected uncovered release artifacts.\n\nThe following paths match known detector patterns but are not part of any ReleaseUnit:\n",
+        );
+        for hit in &self.uncovered {
+            let path_lit = hit.path.escaped();
+            let label = drift_kind_label(&hit.kind);
+            s.push_str(&format!("  - {path_lit:<48}  ({label})\n"));
+        }
+        s.push_str(
+            "\nChoose one:\n  → run `belaf init --rescan` to re-detect bundles and update belaf/config.toml\n  → add explicit [[release_unit]] entries\n  → if intentional (mobile app, archive, etc.), add to [ignore_paths] or [allow_uncovered]\n\nAborting prepare. No releases will be drafted.",
+        );
+        s
+    }
+}
+
+fn drift_kind_label(k: &DetectorKind) -> String {
+    match k {
+        DetectorKind::HexagonalCargo { primary } => {
+            format!("hexagonal cargo: crates/{:?}/Cargo.toml present", primary)
+        }
+        DetectorKind::Tauri { single_source } => format!(
+            "tauri triplet ({})",
+            if *single_source {
+                "single-source"
+            } else {
+                "legacy multi-file"
+            }
+        ),
+        DetectorKind::JvmLibrary { version_source } => {
+            format!("jvm library ({})", jvm_label(version_source))
+        }
+        DetectorKind::MobileApp { platform } => match platform {
+            MobilePlatform::Ios => "iOS app — recommend Bitrise/fastlane".to_string(),
+            MobilePlatform::Android => "Android app — recommend Bitrise/Codemagic".to_string(),
+        },
+        DetectorKind::NestedNpmWorkspace => "nested npm workspace".to_string(),
+        DetectorKind::SdkCascadeMember => "generated SDK package under sdks/*".to_string(),
+    }
+}
+
+/// Phase H — `pre_prepare_drift_check`. Convenience wrapper that
+/// runs [`detect_drift`] and returns an error with the §3.9-format
+/// message when uncovered hits exist. Callers (the prepare command,
+/// hooked up in Phase I) just `?`-propagate.
+pub fn pre_prepare_drift_check(
+    repo: &Repository,
+    resolved: &[ResolvedReleaseUnit],
+    cfg: &ConfigurationFile,
+) -> std::result::Result<(), String> {
+    let report = detect_drift(repo, resolved, cfg);
+    if report.is_empty() {
+        Ok(())
+    } else {
+        Err(report.format_error())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UncoveredHit {
     pub path: RepoPathBuf,
@@ -991,5 +1057,38 @@ mod tests {
     fn empty_report_is_not_single_mobile() {
         let empty = DetectionReport::default();
         assert!(!empty.is_single_mobile_repo());
+    }
+
+    #[test]
+    fn drift_format_error_actionable() {
+        let r = DriftReport {
+            uncovered: vec![
+                UncoveredHit {
+                    path: RepoPathBuf::new(b"apps/services/foobar"),
+                    kind: DetectorKind::HexagonalCargo {
+                        primary: HexagonalPrimary::Bin,
+                    },
+                },
+                UncoveredHit {
+                    path: RepoPathBuf::new(b"sdks/python"),
+                    kind: DetectorKind::JvmLibrary {
+                        version_source: JvmVersionSource::GradleProperties,
+                    },
+                },
+            ],
+        };
+        let msg = r.format_error();
+        assert!(msg.contains("uncovered release artifacts"));
+        assert!(msg.contains("apps/services/foobar"));
+        assert!(msg.contains("sdks/python"));
+        assert!(msg.contains("belaf init --rescan"));
+        assert!(msg.contains("[ignore_paths]"));
+        assert!(msg.contains("[allow_uncovered]"));
+        assert!(msg.contains("Aborting prepare"));
+    }
+
+    #[test]
+    fn drift_empty_report_is_empty() {
+        assert!(DriftReport::default().is_empty());
     }
 }
