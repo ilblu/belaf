@@ -13,6 +13,7 @@ use ratatui::{
 };
 
 use super::{
+    detector_review::DetectorReviewStep,
     preset::PresetSelectionStep,
     project::ProjectSelectionStep,
     state::WizardState,
@@ -54,7 +55,9 @@ impl Step for WelcomeStep {
                 // --force on top of an explicit Enter.
                 state.force = true;
                 state.error_message = None;
-                if state.preset_from_cli {
+                if !state.detection.matches.is_empty() {
+                    StepResult::Next(Box::new(DetectorReviewStep::new()))
+                } else if state.preset_from_cli {
                     StepResult::Next(Box::new(ProjectSelectionStep::new()))
                 } else {
                     StepResult::Next(Box::new(PresetSelectionStep::new(state)))

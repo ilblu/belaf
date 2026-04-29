@@ -6,6 +6,8 @@
 //! lives on each step's struct in `welcome.rs` / `preset.rs` /
 //! `project.rs` / `upstream.rs` / `confirmation.rs`.
 
+use crate::core::release_unit::detector::DetectionReport;
+
 #[derive(Clone, Debug)]
 pub struct DetectedProject {
     pub name: String,
@@ -29,6 +31,17 @@ pub struct WizardState {
     pub preset_from_cli: bool,
     pub available_presets: Vec<String>,
     pub config_exists: bool,
+
+    /// Phase I.1 — auto-detected bundles. Populated once at the start
+    /// of the wizard run from `release_unit::detector::detect_all`.
+    /// Empty in tests / repos with nothing matching the heuristics.
+    pub detection: DetectionReport,
+
+    /// Phase I.1 — set to `true` by [`DetectorReviewStep`](super::detector_review::DetectorReviewStep)
+    /// when the user accepts the detected bundles. The orchestrator
+    /// reads this after a successful bootstrap and appends the
+    /// auto_detect snippet to `belaf/config.toml`.
+    pub detector_accepted: bool,
 }
 
 impl WizardState {
@@ -49,6 +62,8 @@ impl WizardState {
             preset_from_cli,
             available_presets,
             config_exists: false,
+            detection: DetectionReport::default(),
+            detector_accepted: false,
         }
     }
 

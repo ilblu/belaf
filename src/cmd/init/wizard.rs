@@ -6,6 +6,7 @@
 //! returned. Concrete steps live in their own modules.
 
 pub mod confirmation;
+pub mod detector_review;
 pub mod preset;
 pub mod project;
 pub mod state;
@@ -31,9 +32,12 @@ use crate::{
     core::{
         git::repository::{PathMatcher, RepoPathBuf, Repository},
         project::DepRequirement,
+        release_unit::detector,
         session::{AppBuilder, AppSession},
     },
 };
+
+use super::auto_detect;
 
 use self::{
     state::{DetectedProject, WizardState},
@@ -76,6 +80,8 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
     } else if let Ok(url) = repo.upstream_url() {
         state.upstream_url = url;
     }
+
+    state.detection = detector::detect_all(&repo);
 
     let sess = AppBuilder::new()?.with_progress(true).initialize()?;
 
@@ -206,6 +212,18 @@ fn execute_bootstrap_with_output(state: &WizardState, repo: &Repository) -> Resu
     match execute_bootstrap(state, repo) {
         Ok(_) => {
             spinner.success("Initialization complete!");
+            if state.detector_accepted {
+                let result = auto_detect::run(repo);
+                let mut cfg_path = repo.resolve_config_dir();
+                cfg_path.push("config.toml");
+                if let Err(e) = auto_detect::append_to_config(&cfg_path, &result.toml_snippet) {
+                    eprintln!(
+                        "warning: detected bundles but failed to append to {}: {}",
+                        cfg_path.display(),
+                        e
+                    );
+                }
+            }
             print_terminal_summary(state);
             Ok(0)
         }

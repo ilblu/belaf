@@ -1,0 +1,28 @@
+---
+source: src/cmd/init/wizard/detector_review.rs
+expression: out
+---
+"┌ Auto-detected ReleaseUnits ────────────────────────────────────────────────────────────┐"
+"│                                                                                        │"
+"│                  🔍 belaf detected the following bundles in your repo                  │" Hidden by multi-width symbols: [(20, " ")]
+"│                                                                                        │"
+"│┌ Detected bundles ────────────────────────────────────────────────────────────────────┐│"
+"││ 🦀  apps/services/foo                 hexagonal cargo (bin)                          ││" Hidden by multi-width symbols: [(4, " ")]
+"││ 🖥  apps/desktop                      tauri (single-source)                           ││"
+"││ ☕  sdks/kotlin                       jvm library (gradle.properties)                ││" Hidden by multi-width symbols: [(4, " ")]
+"││ 📱  apps/mobile-ios                   mobile iOS (managed externally)                ││" Hidden by multi-width symbols: [(4, " ")]
+"││ 🔗  sdks/typescript                   sdk cascade member                             ││" Hidden by multi-width symbols: [(4, " ")]
+"││                                                                                      ││"
+"││                                                                                      ││"
+"││                                                                                      ││"
+"││                                                                                      ││"
+"││                                                                                      ││"
+"││                                                                                      ││"
+"││                                                                                      ││"
+"│└──────────────────────────────────────────────────────────────────────────────────────┘│"
+"│           4 ReleaseUnit candidate(s), 1 mobile warning(s) → [allow_uncovered]          │"
+"│                                                                                        │"
+"│                                                                                        │"
+"│             Enter/y accept and append to config  s/n skip  Esc back  q quit            │"
+"│                                                                                        │"
+"└────────────────────────────────────────────────────────────────────────────────────────┘"
