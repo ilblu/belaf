@@ -56,7 +56,7 @@ pub fn write_all(
         // Read first so we can decide idempotent vs write. Read
         // failure (file missing, malformed) is a hard error — we
         // would otherwise silently skip half a Tauri triplet.
-        let current = read_or_warn(&m, &abs)?;
+        let current = read_or_warn(m, &abs)?;
 
         if current.as_deref() == Some(new_version) {
             report.already_at_target.push(m.path.clone());
