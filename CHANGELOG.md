@@ -42,26 +42,67 @@ See `docs/adr/0001..0005-*.md` for the architectural decisions.
 - **Repo-tags grouping in github-app dashboard** — multi-select tag
   chips filter the workspace overview.
 
-### Known deferrals (focused follow-up PRs)
+### Resolved follow-ups (delivered in this release)
 
-- `bootstrap.toml` retirement (ADR 0002).
-- `src/core/ecosystem/maven.rs` (1521 LOC) and
-  `src/core/release_unit/detector.rs` (1192 LOC) physical splits.
-- Producer wiring for the new typed manifest fields
-  (`version_field_spec` / `bundle_manifests` / `external_versioner`
-  / `satellites` are emitted as empty / null today).
-- Dashboard greenfield routes
-  (`/repos/$owner/$repo/{release-units,cascade-graph,drift,explain}`)
-  and visualizers (ReleaseUnitCard, BundleBadge, CascadeArrow, …).
+What was originally framed as "deferred 3.1 work" landed in 3.0:
+
+- `bootstrap.toml` retired (ADR 0002). Per-unit baseline tags + manifest
+  version-at-runtime replace it; `core/release_unit/initial_state.rs`
+  derives the baseline.
+- `src/core/ecosystem/maven.rs` (1521 LOC) split into `maven.rs` +
+  `pom_parser.rs` + `pom_rewriter.rs` + `property_resolver.rs`.
+- `src/core/release_unit/detector.rs` (1192 LOC) split into the slim
+  orchestrator + `scanners.rs` + `walk.rs`.
+- Producer wiring for `bundle_manifests`, `external_versioner`,
+  `version_field_spec`, `cascade_from`, `visibility`, `satellites` —
+  the resolver populates them and the manifest writer emits typed
+  values instead of empty defaults.
+- Dashboard `/repositories/$repoId` route with 5 tabs (Release Units,
+  Cascade Graph, Drift, Explain, Automations) plus 8 visualizer
+  components (`ReleaseUnitCard`, `BundleBadge`, `ExternalVersionerBadge`,
+  `CascadeArrow`, `DriftWarning`, `SatelliteList`, `TagFormatPreview`,
+  `ManifestFileList`).
+
+### Final-polish refactors
+
+Identifier sweep so `git grep -i project` returns only legitimate hits
+(csproj XML `<Project>`, pypa PEP-621 `[project]`, third-party
+`directories::ProjectDirs`, ADR 0001 historical doc). Every internal
+type/field/method got the rename:
+
+- Wire/config: `BumpDecision.project` → `release_unit`,
+  `BumpSourceConfig.project` → `release_unit`. CLI flag
+  `--project` → `--release-unit` (short `-p` kept).
+- Public types: `SelectedProject` → `SelectedReleaseUnit`,
+  `ProjectSelection` → `ReleaseUnitSelection`, `DetectedProject` →
+  `DetectedUnit`, `ProjectRelease` alias → `ReleaseEntry`.
+- Wizard: `WizardStep::ProjectSelection`/`ProjectConfig` →
+  `UnitSelection`/`UnitConfig`, `BackRef::Project` → `Standalone`,
+  `state.projects` → `state.standalone_units`.
+- Graph: `GraphQueryBuilder.project_type` → `ecosystem_filter`,
+  `fn project_type()` → `fn ecosystem()`.
+- Locals: 248 `let proj` / `proj.x` / `proj_id` / `proj_idx` /
+  `proj_builder` → `let unit` / `unit.*`.
+- Codegen filename: `manifest_v2_codegen.rs` → `manifest_v3_codegen.rs`
+  (the "one cycle" workaround from Wave 2 retired).
+- Test file: `tests/test_manifest_v2.rs` → `test_manifest_v3.rs`.
+
+Drift telemetry runtime-aware: `report_drift_telemetry` now detects
+an existing tokio runtime via `Handle::try_current()` and bounces work
+onto a dedicated thread instead of nesting runtimes. Future async-context
+callers (e.g. wrapping `belaf prepare` from a Tokio main) can no longer
+trigger the "Cannot start a runtime from within a runtime" panic.
 
 ### Cross-repo
 
 - github-app deploys `feat/3.0` together with this CLI release. Mixed
   versions (CLI 3.0 + github-app 2.x, or vice versa) are not
   supported.
-- Drizzle migration `0003_drop_projects_tier_v3.sql` runs on
-  github-app deploy. Destructive (drops the `projects` table); per
-  the user's audit no production data exists.
+- Drizzle migrations `0003_drop_projects_tier_v3.sql` (drops the
+  `projects` table; per the user's audit no production data exists),
+  `0004_release_unit_snapshot.sql` (releases.unit_snapshot jsonb), and
+  `0005_repository_drift_state.sql` (repositories.last_drift_paths
+  text[] + last_drift_at timestamp) run on github-app deploy.
 
 ## [2.1.1](https://github.com/ilblu/belaf/compare/v2.1.0...v2.1.1) (2026-05-01)
 
