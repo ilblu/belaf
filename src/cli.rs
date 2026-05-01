@@ -81,9 +81,26 @@ pub enum Commands {
 
     #[command(
         about = "Explain why each ReleaseUnit was created",
-        long_about = "Print provenance for every resolved ReleaseUnit:\n  • Which detector matched (auto-detected)\n  • Which TOML line it came from (explicit [[release_unit]])\n  • Which glob expansion produced it ([[release_unit_glob]])\n\nUseful when a unit appears in your config and you don't remember\nwhy, or to debug unexpected glob expansions / name collisions."
+        long_about = "Print provenance for every resolved ReleaseUnit:\n  • Which detector matched (auto-detected)\n  • Which TOML line it came from (explicit [[release_unit]])\n  • Which glob expansion produced it ([[release_unit_glob]])\n\nUseful when a unit appears in your config and you don't remember\nwhy, or to debug unexpected glob expansions / name collisions.\n\nUse --format=json for machine-readable output (consumed by the\ngithub-app dashboard's /api/cli/explain endpoint in 3.0)."
     )]
-    Explain,
+    Explain(ExplainArgs),
+}
+
+#[derive(Args)]
+pub struct ExplainArgs {
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        help = "Output format (default: text). `json` emits a structured payload that the github-app dashboard renders."
+    )]
+    pub format: Option<ExplainOutputFormat>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ExplainOutputFormat {
+    Text,
+    Json,
 }
 
 #[derive(Subcommand)]

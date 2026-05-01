@@ -5,15 +5,76 @@
 //! and prints provenance for each one (which detector / TOML line /
 //! glob expansion produced it). Useful for debugging unexpected
 //! configs.
+//!
+//! 3.0/Wave 1g: `--format=json` emits a serde-derived payload that
+//! the github-app dashboard's `/api/cli/explain/:owner/:repo`
+//! endpoint will proxy to dashboard users. JSON shape is treated as
+//! a stable contract — additions land as new optional fields,
+//! removals require a 3.x → 4.x bump.
 
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
+use serde::Serialize;
 
+use crate::cli::ExplainOutputFormat;
 use crate::core::config::ConfigurationFile;
 use crate::core::git::repository::Repository;
 use crate::core::release_unit::{detector, resolver::resolve, ResolveOrigin, VersionSource};
 
-pub fn run() -> Result<i32> {
+#[derive(Serialize)]
+struct ExplainPayload {
+    units: Vec<ExplainUnit>,
+    drift: ExplainDrift,
+    ignore_paths: Vec<String>,
+    allow_uncovered: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ExplainUnit {
+    name: String,
+    ecosystem: String,
+    origin: ExplainOrigin,
+    source: ExplainSource,
+    satellites: Vec<String>,
+    tag_format: Option<String>,
+    visibility: String,
+    cascade_from: Option<ExplainCascade>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ExplainOrigin {
+    Explicit {
+        config_index: usize,
+    },
+    Glob {
+        glob_index: usize,
+        matched_path: String,
+    },
+    Detected {
+        detector: String,
+    },
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum ExplainSource {
+    Manifests { paths: Vec<String> },
+    External { tool: String },
+}
+
+#[derive(Serialize)]
+struct ExplainCascade {
+    source: String,
+    bump: String,
+}
+
+#[derive(Serialize, Default)]
+struct ExplainDrift {
+    uncovered_paths: Vec<String>,
+}
+
+pub fn run(format: Option<ExplainOutputFormat>) -> Result<i32> {
     let repo = Repository::open_from_env()
         .context("belaf is not being run from a Git working directory")?;
 
@@ -24,6 +85,15 @@ pub fn run() -> Result<i32> {
 
     let resolved = resolve(&repo, &cfg.release_units, &cfg.release_unit_globs)
         .map_err(|e| anyhow::anyhow!("release_unit resolution: {e}"))?;
+
+    let json_mode = matches!(format, Some(ExplainOutputFormat::Json));
+
+    if json_mode {
+        let payload = build_json_payload(&repo, &resolved, &cfg);
+        let json = serde_json::to_string_pretty(&payload).context("serialise explain payload")?;
+        println!("{}", json);
+        return Ok(0);
+    }
 
     println!();
     println!("{}", "Belaf — config explain".bold());
@@ -133,4 +203,69 @@ pub fn run() -> Result<i32> {
     }
 
     Ok(0)
+}
+
+fn build_json_payload(
+    repo: &Repository,
+    resolved: &[crate::core::release_unit::ResolvedReleaseUnit],
+    cfg: &ConfigurationFile,
+) -> ExplainPayload {
+    let units = resolved
+        .iter()
+        .map(|r| ExplainUnit {
+            name: r.unit.name.clone(),
+            ecosystem: format!("{:?}", r.unit.ecosystem),
+            origin: match &r.origin {
+                ResolveOrigin::Explicit { config_index } => ExplainOrigin::Explicit {
+                    config_index: *config_index,
+                },
+                ResolveOrigin::Glob {
+                    glob_index,
+                    matched_path,
+                } => ExplainOrigin::Glob {
+                    glob_index: *glob_index,
+                    matched_path: matched_path.escaped().to_string(),
+                },
+                ResolveOrigin::Detected { detector } => ExplainOrigin::Detected {
+                    detector: detector.to_string(),
+                },
+            },
+            source: match &r.unit.source {
+                VersionSource::Manifests(ms) => ExplainSource::Manifests {
+                    paths: ms.iter().map(|m| m.path.escaped().to_string()).collect(),
+                },
+                VersionSource::External(ext) => ExplainSource::External {
+                    tool: ext.tool.clone(),
+                },
+            },
+            satellites: r
+                .unit
+                .satellites
+                .iter()
+                .map(|s| s.escaped().to_string())
+                .collect(),
+            tag_format: r.unit.tag_format.clone(),
+            visibility: r.unit.visibility.wire_key().to_string(),
+            cascade_from: r.unit.cascade_from.as_ref().map(|c| ExplainCascade {
+                source: c.source.clone(),
+                bump: format!("{:?}", c.bump),
+            }),
+        })
+        .collect();
+
+    let drift_report = detector::detect_drift(repo, resolved, cfg);
+    let drift = ExplainDrift {
+        uncovered_paths: drift_report
+            .uncovered
+            .iter()
+            .map(|h| h.path.escaped().to_string())
+            .collect(),
+    };
+
+    ExplainPayload {
+        units,
+        drift,
+        ignore_paths: cfg.ignore_paths.paths.clone(),
+        allow_uncovered: cfg.allow_uncovered.paths.clone(),
+    }
 }

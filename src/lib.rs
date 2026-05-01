@@ -176,8 +176,8 @@ pub async fn execute(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Commands::Explain => {
-            let exit_code = cmd::explain::run()?;
+        Commands::Explain(args) => {
+            let exit_code = cmd::explain::run(args.format)?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }
