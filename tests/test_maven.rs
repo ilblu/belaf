@@ -397,7 +397,12 @@ fn maven_tag_format_uses_slash_not_colon() {
     );
 }
 
+// 3.0/Wave 1c: this test exercises the legacy `[projects."<name>"].tag_format`
+// precedence path which was removed when [projects.*] config drops in 3.0.
+// Re-enable once `[[release_unit]].tag_format` plumbing reaches the validator
+// (TODO: ResolvedReleaseUnit needs to carry tag_format from its source unit).
 #[test]
+#[ignore = "3.0/Wave 1c: legacy [projects.*] override path retired; rewrite for [[release_unit]] tag_format"]
 fn project_tag_format_override_with_invalid_var_is_hard_error() {
     let repo = TestRepo::new();
     repo.write_file(

@@ -860,12 +860,13 @@ pub fn generate_changelog_entry(
 }
 
 /// Resolve the per-release tag name using the precedence chain:
-/// `[project."name".tag_format]` > `[group.<id>.tag_format]` > the
-/// ecosystem trait's `tag_format_default()`. The ecosystem registry is
+/// `[group.<id>.tag_format]` > the ecosystem trait's
+/// `tag_format_default()`. The legacy `[projects."name".tag_format]`
+/// fallback was removed in 3.0/Wave 1c. The ecosystem registry is
 /// instantiated fresh here (the Loader instances are stateless once
 /// `finalize` has run).
 fn build_tag_name(
-    sess: &AppSession,
+    _sess: &AppSession,
     project: &SelectedProject,
     groups: &GroupSet,
 ) -> Result<String> {
@@ -878,14 +879,15 @@ fn build_tag_name(
         )
     })?;
 
-    let project_override = sess
-        .project_configs()
-        .get(&project.name)
-        .and_then(|c| c.tag_format.as_deref());
+    // 3.0/Wave 1c: dropped legacy `[projects."<name>"].tag_format`
+    // precedence — release-unit-level overrides now live exclusively
+    // on `[[release_unit]].tag_format` (plumbing TODO once
+    // ResolvedReleaseUnit carries the field). For 3.0 ship-1, only
+    // group-level + ecosystem-default precedence remains active.
     let group_override = groups
         .group_of(project.ident)
         .and_then(|g| g.tag_format.as_deref());
-    let template = project_override.or(group_override);
+    let template = group_override;
 
     let maven_coords = if eco_name == "maven" {
         split_maven_coords(&project.name)
