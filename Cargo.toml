@@ -1,6 +1,6 @@
 [package]
 name = "belaf"
-version = "2.0.1"
+version = "2.1.0"
 description = "Release management CLI for monorepos"
 authors = ["Dennis Ollhoff <contact@nyxb.email>"]
 edition = "2021"

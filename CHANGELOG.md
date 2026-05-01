@@ -1,3 +1,127 @@
+## [2.1.0](https://github.com/ilblu/belaf/compare/v2.0.1...v2.1.0) (2026-05-01)
+
+belaf 2.1 — the **ReleaseUnit primitive** plus a modular Step-trait
+wizard refactor. ReleaseUnit lets a single config block atomically
+claim a directory across heterogeneous file shapes (a hexagonal Rust
+service with an `api/` satellite, a Tauri triplet that bumps three
+manifests in lockstep, a JVM library whose version lives in
+`gradle.properties`, etc.) without per-shape ad-hoc plumbing.
+
+### Features
+
+* **`[[release_unit]]` and `[[release_unit_glob]]` config blocks**
+  bundle one or more manifests + satellites into a single release unit.
+  Five `version_field` types ship: `cargo_toml`, `npm_package_json`,
+  `tauri_conf_json`, `gradle_properties`, `generic_regex`. Plus an
+  `external` source for buf / gradle plugin / fastlane / custom-script
+  shell-out via `read_command` + `write_command`.
+* **Cascade rules** — `cascade_from = { source = "schema", bump = "floor_minor" }`
+  on a downstream unit propagates its source's bump per a strategy
+  (`mirror` / `floor_patch` / `floor_minor` / `floor_major`). Cycles
+  rejected at config-load time via `petgraph::algo::tarjan_scc`.
+* **Auto-detectors** — Phase F: hexagonal cargo, Tauri (single-source +
+  legacy multi-file), JVM library (gradle.properties /
+  build.gradle.kts literal / plugin-managed), mobile-app (warning only),
+  single-mobile-repo, nested npm workspace, SDK cascade member,
+  single-project. Surfaced in the wizard's new **DetectorReviewStep**
+  for review before append.
+* **Wizard refactor** — the previous 1340-LOC monolithic wizard is
+  split into a `Step` trait + `Vec<Box<dyn Step>>` orchestrator.
+  Adding a new screen now means adding one file. Three new steps
+  ship: DetectorReviewStep (Phase I.1), TagFormatStep for
+  single-project repos (Phase I.3), SingleMobileStep that exits with
+  a Bitrise/fastlane/Codemagic suggestion when belaf isn't the right
+  fit (Phase I.4). Snapshot harness via `ratatui::backend::TestBackend`
+  + insta pins every render.
+* **Drift detection always-on** in `belaf prepare` (Phase H).
+  Detected bundles that aren't claimed by any `[[release_unit]]`,
+  `[ignore_paths]`, or `[allow_uncovered]` abort the prepare run with
+  the §3.9 actionable error message — non-bypassable safety net.
+* **Cargo.lock auto-refresh** in CargoRewriter (Phase J): per-crate
+  `cargo update -p` with workspace fallback, 120s timeout via
+  `wait_timeout`, best-effort under Bazel-managed lockfiles.
+* **`belaf explain`** subcommand renders attribution per ReleaseUnit
+  (origin: explicit / glob / detected, source manifests, satellites,
+  tag_format, cascade rule). Useful for debugging unexpected configs.
+* **`init --auto-detect` + `--force`** lets CI re-emit detector
+  snippets idempotently — the auto-detect marker comment at the head
+  of every snippet keeps re-runs from duplicate-appending.
+
+### Fixes
+
+* **Drift coverage** is now bidirectional. Hexagonal-cargo services
+  with the canonical `satellites = ["{path}/crates"]` shape have
+  their satellite *deeper* than the detector hit (the service dir
+  itself); the previous one-way `is_covered` made every such service
+  drift on every `belaf prepare`.
+* **Auto-detect snippet emission is byte-deterministic** across runs
+  (DoD #7). Two latent non-determinism bugs fixed in
+  `cmd::init::auto_detect.rs`: HashMap iteration order is no longer
+  observable, and the hexagonal-cargo glob picks its `manifests`
+  primary by majority-vote (Bin > Lib > Workers > BaseName tie-break)
+  instead of from an arbitrary first match — clikd-shape with mixed
+  bin/workers services no longer emits a glob that fails to resolve.
+* **POSIX shell-quote escape** on every `{version}` / `{bump}` /
+  `{name}` substitution in `external_versioner` write commands. A
+  malicious version string from a tag can no longer break out and
+  execute arbitrary shell. Two regression tests cover the standard
+  injection patterns (`1.0.0; rm -rf /` and the embedded-quote
+  escape attack).
+* **TOML basic-string escape** on every path / name / template
+  substituted into `belaf/config.toml` snippets emitted by
+  `auto_detect` and the wizard's tag-format builder. A directory or
+  project name containing `"` or `]]` can no longer structurally
+  inject into the config.
+* **Memory leak** removed from `auto_detect`'s `BaseName` branch
+  (previous code did `.to_string().leak()` to coerce to `&'static
+  str`, which permanently leaked memory on every `belaf init` /
+  `prepare`).
+
+### Performance
+
+* Tauri-detector regexes compiled once via `std::sync::LazyLock`
+  instead of per-invocation.
+* `apply_cascades` builds the cascade graph once instead of twice
+  (cycle check + topo walk shared one graph).
+* `DetectionReport` cached on `AppSession` so the wizard and the
+  drift check don't both walk the filesystem.
+* `cargo update -p` now bounded by a 120s wall-clock timeout — an
+  offline / unreachable-registry CI can no longer hang `belaf
+  prepare` indefinitely.
+
+### Reliability
+
+* Regex `.unwrap()` on capture groups in `version_field/{tauri_conf,
+  generic_regex, gradle_properties}` replaced with typed
+  `VersionFieldError::VersionFieldMissing` errors — no more
+  unreachable panics.
+* `Repository::open(path)` documents its assumed defaults (`origin`,
+  cache sizes 512/3); new `Repository::open_with(path, upstream,
+  AnalysisConfig)` for callers needing overrides.
+* `#[serde(deny_unknown_fields)]` on `ExplicitReleaseUnitConfig` and
+  `ManifestFileConfig` so a typo like `versoin_field` or `tag_formet`
+  surfaces at config-load time instead of being silently dropped.
+* `append_to_config` idempotency now anchored to a stable marker
+  comment instead of fragile content-equality matching.
+
+### Tests
+
+* 388 unit tests, all green.
+* New integration suites:
+  `test_drift_detection`, `test_cargo_lock_update`, `test_clikd_shape`,
+  `test_clikd_synthetic_commits`, `test_fixture_smoke`,
+  `test_explain_clikd`, `test_ci_determinism`,
+  `test_tokio_single_end_to_end`, `test_prepare_manifest_emission`.
+* Reusable fixtures under `tests/fixtures.rs`: clikd-shape (full
+  polyglot), lerna-fixed, tokio-single, cargo-monorepo-independent,
+  polyglot-cross-eco-group, kotlin-library-only, ios-only.
+* Real-repo dogfood: `scripts/smoke-clikd.sh` runs every read-only
+  smoke command (`init --ci --auto-detect`, `status`, `explain`,
+  `graph`, `prepare --ci`) against a `git clone` of any source repo
+  pointed at via `BELAF_TEST_CLIKD_PATH`. Original is never touched.
+
+---
+
 ## [2.0.0](https://github.com/ilblu/belaf/compare/v1.3.6...v2.0.0) (2026-04-27)
 
 belaf 2.0 — architectural refactor focused on additive evolution. The
