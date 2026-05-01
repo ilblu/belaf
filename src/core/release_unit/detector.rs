@@ -75,6 +75,21 @@ pub enum HexagonalPrimary {
     BaseName,
 }
 
+impl std::fmt::Display for HexagonalPrimary {
+    /// Lowercase so error messages and config snippets read uniformly
+    /// (`crates/bin/Cargo.toml`) rather than the PascalCase that the
+    /// `Debug` derive would produce.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let s = match self {
+            HexagonalPrimary::Bin => "bin",
+            HexagonalPrimary::Lib => "lib",
+            HexagonalPrimary::Workers => "workers",
+            HexagonalPrimary::BaseName => "basename",
+        };
+        f.write_str(s)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JvmVersionSource {
     /// `gradle.properties` has `version=...` (recommended).
@@ -131,6 +146,15 @@ impl DetectionReport {
     }
 }
 
+/// One detector hit that isn't covered by any resolved ReleaseUnit,
+/// `[ignore_paths]`, or `[allow_uncovered]` — listed in the drift
+/// error so the user can remediate it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UncoveredHit {
+    pub path: RepoPathBuf,
+    pub kind: DetectorKind,
+}
+
 /// Drift report: paths matching a detector pattern but not covered
 /// by any resolved ReleaseUnit, ignore_paths, or allow_uncovered.
 #[derive(Debug, Default)]
@@ -165,7 +189,7 @@ impl DriftReport {
 fn drift_kind_label(k: &DetectorKind) -> String {
     match k {
         DetectorKind::HexagonalCargo { primary } => {
-            format!("hexagonal cargo: crates/{:?}/Cargo.toml present", primary)
+            format!("hexagonal cargo: crates/{primary}/Cargo.toml present")
         }
         DetectorKind::Tauri { single_source } => format!(
             "tauri triplet ({})",
@@ -281,12 +305,6 @@ pub fn detect_drift_from_report(
         .collect();
 
     DriftReport { uncovered }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UncoveredHit {
-    pub path: RepoPathBuf,
-    pub kind: DetectorKind,
 }
 
 // ---------------------------------------------------------------------------

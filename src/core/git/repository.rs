@@ -116,23 +116,47 @@ impl Repository {
     /// [`Self::open_from_env`] but takes an explicit path so callers
     /// (e.g. integration tests) don't need to mutate the process-wide
     /// current working directory.
+    ///
+    /// Assumes:
+    /// - `upstream_name = "origin"` — the standard remote name. Repos
+    ///   that use a different name need [`Self::bootstrap_upstream`]
+    ///   or [`Self::open_with`] to override.
+    /// - `commit_cache_size = 512`, `tree_cache_size = 3` — the same
+    ///   defaults `open_from_env` uses when no `belaf/config.toml`
+    ///   has overridden them.
+    ///
+    /// Most callers should use this; the `_with` variant is for
+    /// callers that need to construct a Repository with non-default
+    /// config (rare in practice — tests and scripts).
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Repository> {
-        let repo = git2::Repository::open(path.as_ref())?;
-
-        if repo.is_bare() {
-            return Err(BareRepositoryError.into());
-        }
-
-        let upstream_name = "origin".to_owned();
-
-        Ok(Repository {
-            repo,
-            upstream_name,
-            bootstrap_info: BootstrapConfiguration::default(),
-            analysis_config: crate::core::config::syntax::AnalysisConfig {
+        Self::open_with(
+            path,
+            "origin",
+            crate::core::config::syntax::AnalysisConfig {
                 commit_cache_size: 512,
                 tree_cache_size: 3,
             },
+        )
+    }
+
+    /// Open a repository with explicit upstream name and analysis
+    /// config. Used by callers that don't want to inherit `open`'s
+    /// defaults (forks with non-`origin` remotes, callers tuning
+    /// cache sizes for very large repos, etc.).
+    pub fn open_with<P: AsRef<Path>>(
+        path: P,
+        upstream_name: &str,
+        analysis_config: crate::core::config::syntax::AnalysisConfig,
+    ) -> Result<Repository> {
+        let repo = git2::Repository::open(path.as_ref())?;
+        if repo.is_bare() {
+            return Err(BareRepositoryError.into());
+        }
+        Ok(Repository {
+            repo,
+            upstream_name: upstream_name.to_owned(),
+            bootstrap_info: BootstrapConfiguration::default(),
+            analysis_config,
         })
     }
 

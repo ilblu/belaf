@@ -174,7 +174,12 @@ impl EcosystemsConfig {
 /// Source-form is split: `manifests` (zero or more) for
 /// `VersionSource::Manifests`, OR `external` (exclusive) for
 /// `VersionSource::External`. Validator ensures exactly one is set.
+///
+/// `deny_unknown_fields` so that a typo like `versoin_field` or
+/// `tag_formet` surfaces as a config error instead of being silently
+/// dropped at deserialise time.
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ExplicitReleaseUnitConfig {
     pub name: String,
 
@@ -217,8 +222,11 @@ pub struct SourceConfig {
     pub external: Option<ExternalConfig>,
 }
 
-/// One entry under `source.manifests`.
+/// One entry under `source.manifests`. `deny_unknown_fields` so a
+/// typo'd `path_pattern` or `regex_replece` fails at config-load
+/// time instead of being silently ignored.
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct ManifestFileConfig {
     pub path: String,
 

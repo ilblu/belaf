@@ -28,6 +28,12 @@ fn read_lockfile_version(lockfile: &Path, crate_name: &str) -> Option<String> {
     //   [[package]]
     //   name = "<crate_name>"
     //   version = "0.1.0"
+    //
+    // Limitation: returns the FIRST matching `[[package]]` entry. If
+    // a workspace had multiple versions of the same crate (e.g.
+    // `serde 1.0.x` and `serde 1.0.y` pulled in by different deps)
+    // this would only see the first. Sufficient for the single-crate
+    // fixture below; broaden if a multi-version test ever lands.
     let mut found_name = false;
     for line in s.lines() {
         let trimmed = line.trim();

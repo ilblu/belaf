@@ -5,6 +5,7 @@
 use std::fs;
 use std::path::Path;
 
+use serde::Serialize;
 use serde_json::Value;
 
 use super::{Result, VersionFieldError};
@@ -101,8 +102,6 @@ pub fn write(path: &Path, new_version: &str) -> Result<()> {
     })?;
     Ok(())
 }
-
-use serde::Serialize;
 
 #[cfg(test)]
 mod tests {

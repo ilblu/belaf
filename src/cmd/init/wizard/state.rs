@@ -16,6 +16,7 @@ pub struct DetectedProject {
     pub selected: bool,
 }
 
+#[derive(Debug)]
 pub struct WizardState {
     pub projects: Vec<DetectedProject>,
     pub upstream_url: String,

@@ -51,6 +51,11 @@ pub struct BootstrapCommand {
     preset: Option<String>,
 }
 
+// `pub` only because the `tests/test_clikd_shape.rs` and
+// `tests/test_explain_clikd.rs` integration tests call `auto_detect::run`
+// directly to verify snippet emission against fixtures. Keeping it
+// crate-private would force those tests to go through the wizard's
+// runtime entry point, which needs a live tty.
 pub mod auto_detect;
 mod wizard;
 
