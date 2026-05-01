@@ -75,13 +75,13 @@ impl AppBuilder {
     }
 
     fn resolve_versions_from_tags(&mut self) -> Result<()> {
-        let is_single_project = self.graph.project_count() == 1;
+        let is_single_project = self.graph.unit_count() == 1;
 
         for ident in self.graph.project_ids() {
-            let proj = self.graph.lookup_mut(ident);
+            let unit = self.graph.lookup_mut(ident);
 
             let is_zero_version = matches!(
-                &proj.version,
+                &unit.version,
                 Some(Version::Semver(v)) if v.major == 0
                     && v.minor == 0
                     && v.patch == 0
@@ -93,7 +93,7 @@ impl AppBuilder {
                 continue;
             }
 
-            let Some(project_name) = proj.qnames.first().cloned() else {
+            let Some(project_name) = unit.qnames.first().cloned() else {
                 warn!(
                     "project at index {} has no qualified names, skipping version resolution",
                     ident
@@ -111,7 +111,7 @@ impl AppBuilder {
                         "resolved version {} from tag '{}' for project '{}'",
                         version, tag_name, project_name
                     );
-                    proj.version = Some(Version::Semver(version));
+                    unit.version = Some(Version::Semver(version));
                 }
             }
         }
@@ -355,6 +355,25 @@ impl AppSession {
         }
     }
 
+    /// Compute the current uncovered-path list. Returns `[]` when the
+    /// drift detector finds nothing — distinct from `pre_prepare_drift_check`
+    /// in that it never errors. Used by the CLI to telemetry-report
+    /// drift state to the dashboard regardless of pass/fail.
+    pub fn drift_uncovered_paths(&self) -> Vec<String> {
+        let report = self.detection_report();
+        let drift = crate::core::release_unit::detector::detect_drift_from_report(
+            report,
+            &self.resolved_release_units,
+            &self.ignore_paths,
+            &self.allow_uncovered,
+        );
+        drift
+            .uncovered
+            .iter()
+            .map(|h| h.path.escaped().to_string())
+            .collect()
+    }
+
     /// Cached [`detect_all`](crate::core::release_unit::detector::detect_all)
     /// output. The first caller pays the filesystem-walk cost; the
     /// rest reuse the materialised report.
@@ -407,10 +426,10 @@ impl AppSession {
             unsatisfied_deps.clear();
 
             let mut resolved_versions = {
-                let proj = self.graph.lookup(ident);
+                let unit = self.graph.lookup(ident);
                 let mut resolved_versions = Vec::new();
 
-                for (idx, dep) in proj.internal_deps.iter().enumerate() {
+                for (idx, dep) in unit.internal_deps.iter().enumerate() {
                     match dep.belaf_requirement {
                         // If the requirement is of a specific commit, we need
                         // to resolve its corresponding release and/or make sure
@@ -462,10 +481,10 @@ impl AppSession {
             };
 
             {
-                let proj = self.graph.lookup_mut(ident);
+                let unit = self.graph.lookup_mut(ident);
 
                 for (idx, resolved) in resolved_versions.drain(..) {
-                    proj.internal_deps[idx].resolved_version = Some(resolved);
+                    unit.internal_deps[idx].resolved_version = Some(resolved);
                 }
             }
 
@@ -477,23 +496,23 @@ impl AppSession {
                 ["failed to solve internal dependencies of project `{}`", self.graph.lookup(ident).user_facing_name]
             );
 
-            let proj = self.graph.lookup(ident);
+            let unit = self.graph.lookup(ident);
 
             if updated_version {
                 if !unsatisfied_deps.is_empty() {
                     return Err(UnsatisfiedInternalRequirementError(
-                        proj.user_facing_name.to_string(),
+                        unit.user_facing_name.to_string(),
                         unsatisfied_deps.join(", "),
                     )
                     .into());
                 }
 
-                new_versions.insert(ident, proj.version.clone());
+                new_versions.insert(ident, unit.version.clone());
             } else if !unsatisfied_deps.is_empty() {
                 warn!(
                     "project `{}` has internal requirements that won't be satisfiable in the wild, \
                      but that's OK since it's not going to be released",
-                    proj.user_facing_name
+                    unit.user_facing_name
                 );
             }
         }
@@ -511,10 +530,10 @@ impl AppSession {
 
         for ident in (toposorted_idents[..]).iter().copied() {
             let mut resolved_versions = {
-                let proj = self.graph.lookup(ident);
+                let unit = self.graph.lookup(ident);
                 let mut resolved_versions = Vec::new();
 
-                for (idx, dep) in proj.internal_deps.iter().enumerate() {
+                for (idx, dep) in unit.internal_deps.iter().enumerate() {
                     let dependee_proj = self.graph.lookup(dep.ident);
                     resolved_versions.push((idx, dependee_proj.version.clone()));
                 }
@@ -523,12 +542,12 @@ impl AppSession {
             };
 
             {
-                let proj = self.graph.lookup_mut(ident);
+                let unit = self.graph.lookup_mut(ident);
 
                 for (idx, resolved) in resolved_versions.drain(..) {
-                    proj.internal_deps[idx].belaf_requirement =
+                    unit.internal_deps[idx].belaf_requirement =
                         DepRequirement::Manual(resolved.to_string());
-                    proj.internal_deps[idx].resolved_version = Some(resolved);
+                    unit.internal_deps[idx].resolved_version = Some(resolved);
                 }
             }
         }
@@ -538,28 +557,28 @@ impl AppSession {
         let histories = self.graph.analyze_histories(&self.repo)?;
 
         self.solve_internal_deps(|_repo, graph, ident| {
-            let proj = graph.lookup_mut(ident);
+            let unit = graph.lookup_mut(ident);
             let history = histories.lookup(ident);
 
             if let Some(tag_version) = history.release_version() {
-                proj.version = proj.version.parse_like(tag_version.to_string())?;
+                unit.version = unit.version.parse_like(tag_version.to_string())?;
             }
 
-            let baseline_version = proj.version.clone();
+            let baseline_version = unit.version.clone();
 
             Ok(
-                if let Some(bump_spec) = bump_specs.get(&proj.user_facing_name) {
-                    let scheme = proj.version.parse_bump_scheme(bump_spec)?;
-                    scheme.apply(&mut proj.version)?;
+                if let Some(bump_spec) = bump_specs.get(&unit.user_facing_name) {
+                    let scheme = unit.version.parse_bump_scheme(bump_spec)?;
+                    scheme.apply(&mut unit.version)?;
                     info!(
                         "{}: {} => {}",
-                        proj.user_facing_name, baseline_version, proj.version
+                        unit.user_facing_name, baseline_version, unit.version
                     );
                     true
                 } else {
                     info!(
                         "{}: unchanged from {}",
-                        proj.user_facing_name, baseline_version
+                        unit.user_facing_name, baseline_version
                     );
                     false
                 },
@@ -575,9 +594,9 @@ impl AppSession {
         let mut changes = ChangeList::default();
 
         for ident in self.graph.toposorted() {
-            let proj = self.graph.lookup(ident);
+            let unit = self.graph.lookup(ident);
 
-            for rw in &proj.rewriters {
+            for rw in &unit.rewriters {
                 rw.rewrite(self, &mut changes)?;
             }
         }
@@ -591,9 +610,9 @@ impl AppSession {
         let mut changes = ChangeList::default();
 
         for ident in self.graph.toposorted() {
-            let proj = self.graph.lookup(ident);
+            let unit = self.graph.lookup(ident);
 
-            for rw in &proj.rewriters {
+            for rw in &unit.rewriters {
                 rw.rewrite_belaf_requirements(self, &mut changes)?;
             }
         }

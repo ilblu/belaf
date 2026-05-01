@@ -77,7 +77,7 @@ src/
 │   └── ui/             shared Ratatui components
 └── utils/              theme, file_io, version_check
 schemas/
-└── manifest.v2.0.schema.json  canonical wire format (belaf-owned)
+└── manifest.v3.0.schema.json  canonical wire format (belaf-owned)
 ```
 
 ### Release pipeline (the core flow)
@@ -116,9 +116,9 @@ scenarios in `tests/test_ecosystem_edge_cases.rs`.
 
 ### Manifest schema is the wire format
 
-belaf is the owner of `belaf/schemas/manifest.v2.0.schema.json`
+belaf is the owner of `belaf/schemas/manifest.v3.0.schema.json`
 (JSON Schema Draft 2020-12). `build.rs` runs `typify` against it to
-produce `$OUT_DIR/manifest_v2_codegen.rs`, which is `include!`d by
+produce `$OUT_DIR/manifest_v3_codegen.rs`, which is `include!`d by
 `core::wire::codegen` and wrapped by hand-written domain types in
 `core::wire::domain`. The github-app vendors a copy (mirror of the
 OpenAPI direction): drift between producer + consumer is a build error
@@ -151,8 +151,9 @@ Tag templating per ecosystem (`tag_format_default()` on the trait):
 - pypa: `{name}-{version}`
 - go: `{module}/v{version}`
 
-Override per-project with `[projects."<name>".tag_format]` or
-per-group with `[group.<id>].tag_format`. Two layers of validation:
+Override per-unit with `[release_unit.tag_format]` on a `[[release_unit]]`
+block, or per-group with `[group.<id>].tag_format`. Precedence (high
+→ low): unit > group > ecosystem default. Two layers of validation:
 ecosystem variable whitelist + `git check-ref-format --allow-onelevel`.
 
 ### TUI and CI modes

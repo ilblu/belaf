@@ -184,12 +184,12 @@ impl CargoLoader {
 
         let ident = app.graph.add_project(qnames);
         {
-            let proj = app.graph.lookup_mut(ident);
-            proj.version = Some(Version::Semver(version));
-            proj.prefix = Some(prefix.to_owned());
+            let unit = app.graph.lookup_mut(ident);
+            unit.version = Some(Version::Semver(version));
+            unit.prefix = Some(prefix.to_owned());
 
             let cargo_rewrite = CargoRewriter::new(ident, toml_repopath.clone());
-            proj.rewriters.push(Box::new(cargo_rewrite));
+            unit.rewriters.push(Box::new(cargo_rewrite));
         }
         Ok(())
     }
@@ -348,10 +348,10 @@ impl CargoLoader {
 
                 let ident = app.graph.add_project(qnames);
                 {
-                    let proj = app.graph.lookup_mut(ident);
+                    let unit = app.graph.lookup_mut(ident);
 
-                    proj.version = Some(Version::Semver(version));
-                    proj.prefix = Some(prefix.to_owned());
+                    unit.version = Some(Version::Semver(version));
+                    unit.prefix = Some(prefix.to_owned());
 
                     let workspace_member_ids: std::collections::HashSet<_> =
                         cargo_meta.workspace_members.iter().collect();
@@ -364,7 +364,7 @@ impl CargoLoader {
                     }
 
                     let cargo_rewrite = CargoRewriter::new(ident, manifest_repopath);
-                    proj.rewriters.push(Box::new(cargo_rewrite));
+                    unit.rewriters.push(Box::new(cargo_rewrite));
                 }
             }
         } else {
@@ -406,15 +406,15 @@ impl CargoLoader {
 
                 let ident = app.graph.add_project(qnames);
                 {
-                    let proj = app.graph.lookup_mut(ident);
+                    let unit = app.graph.lookup_mut(ident);
 
-                    proj.version = Some(Version::Semver(pkg.version.clone()));
-                    proj.prefix = Some(prefix.to_owned());
+                    unit.version = Some(Version::Semver(pkg.version.clone()));
+                    unit.prefix = Some(prefix.to_owned());
                     cargo_to_graph.insert(pkg.id.clone(), ident);
                     name_to_project.insert(pkg.name.to_string(), ident);
 
                     let cargo_rewrite = CargoRewriter::new(ident, manifest_repopath);
-                    proj.rewriters.push(Box::new(cargo_rewrite));
+                    unit.rewriters.push(Box::new(cargo_rewrite));
                 }
             }
         }
@@ -548,14 +548,14 @@ impl Ecosystem for CargoLoader {
 /// Rewrite Cargo.toml to include real version numbers.
 #[derive(Debug)]
 pub struct CargoRewriter {
-    proj_id: ReleaseUnitId,
+    unit_id: ReleaseUnitId,
     toml_path: RepoPathBuf,
 }
 
 impl CargoRewriter {
     /// Create a new Cargo.toml rewriter.
-    pub fn new(proj_id: ReleaseUnitId, toml_path: RepoPathBuf) -> Self {
-        CargoRewriter { proj_id, toml_path }
+    pub fn new(unit_id: ReleaseUnitId, toml_path: RepoPathBuf) -> Self {
+        CargoRewriter { unit_id, toml_path }
     }
 }
 
@@ -571,10 +571,10 @@ impl Rewriter for CargoRewriter {
         // qname, not the user-facing name, since that is what is used in
         // Cargo-land.
 
-        let proj = app.graph().lookup(self.proj_id);
+        let unit = app.graph().lookup(self.unit_id);
         let mut internal_reqs = HashMap::new();
 
-        for dep in &proj.internal_deps[..] {
+        for dep in &unit.internal_deps[..] {
             let req_text = match dep.belaf_requirement {
                 DepRequirement::Manual(ref t) => t.clone(),
 
@@ -623,7 +623,7 @@ impl Rewriter for CargoRewriter {
                             self.toml_path.escaped()
                         )
                     })?;
-                ws_pkg["version"] = toml_edit::value(proj.version.to_string());
+                ws_pkg["version"] = toml_edit::value(unit.version.to_string());
             } else {
                 let pkg = ct_root
                     .get_mut("package")
@@ -631,7 +631,7 @@ impl Rewriter for CargoRewriter {
                     .ok_or_else(|| {
                         anyhow!("no [package] section in {}", self.toml_path.escaped())
                     })?;
-                pkg["version"] = toml_edit::value(proj.version.to_string());
+                pkg["version"] = toml_edit::value(unit.version.to_string());
             }
 
             // Rewrite any internal dependencies. These may be found in three
@@ -714,7 +714,7 @@ impl Rewriter for CargoRewriter {
         // a missing `cargo` binary or a Bazel-managed lockfile
         // doesn't block the rewrite of other ecosystems.
         let workspace_root = app.repo.resolve_workdir(&RepoPathBuf::new(b""));
-        let crate_name = &proj.qualified_names()[0];
+        let crate_name = &unit.qualified_names()[0];
         if let Err(e) = crate::core::cargo_lock::update_for_crate(crate_name, &workspace_root) {
             tracing::warn!("Cargo.lock update for `{crate_name}` failed (continuing): {e}",);
         }
@@ -728,7 +728,7 @@ impl Rewriter for CargoRewriter {
         // as done below, we don't clear unexpected entries in the
         // internal_dep_versions block. Should we do that?
 
-        if app.graph().lookup(self.proj_id).internal_deps.is_empty() {
+        if app.graph().lookup(self.unit_id).internal_deps.is_empty() {
             return Ok(());
         }
 
@@ -784,9 +784,9 @@ impl Rewriter for CargoRewriter {
                 })?;
 
             let graph = app.graph();
-            let proj = graph.lookup(self.proj_id);
+            let unit = graph.lookup(self.unit_id);
 
-            for dep in &proj.internal_deps {
+            for dep in &unit.internal_deps {
                 let target = &graph.lookup(dep.ident).qualified_names()[0];
 
                 let spec = match &dep.belaf_requirement {

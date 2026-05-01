@@ -212,7 +212,7 @@ edition = "2021"
     let out = repo.run_belaf_command(&[
         "prepare",
         "--ci",
-        "--project",
+        "--release-unit",
         "@org/schema:major,schema-rs:patch",
     ]);
     assert!(

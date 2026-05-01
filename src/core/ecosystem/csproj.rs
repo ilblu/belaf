@@ -379,19 +379,19 @@ impl CsProjLoader {
 
             let ident = app.graph.add_project(qnames);
             {
-                let proj = app.graph.lookup_mut(ident);
-                proj.prefix = Some(repodir.to_owned());
-                proj.version = Some(version);
+                let unit = app.graph.lookup_mut(ident);
+                unit.prefix = Some(repodir.to_owned());
+                unit.version = Some(version);
 
                 // Auto-register a rewriter to update this package's `AssemblyInfo.cs`.
                 let rewrite = AssemblyInfoCsRewriter::new(ident, assembly_info.to_owned());
-                proj.rewriters.push(Box::new(rewrite));
+                unit.rewriters.push(Box::new(rewrite));
 
                 // Any vdproj rewriters?
                 if let Some(mut vdprojs) = guid_to_vdproj.remove(&guid) {
                     for vdproj in vdprojs.drain(..) {
                         let rewrite = VdprojRewriter::new(ident, vdproj);
-                        proj.rewriters.push(Box::new(rewrite));
+                        unit.rewriters.push(Box::new(rewrite));
                     }
                 }
 
@@ -467,14 +467,14 @@ impl Ecosystem for CsProjLoader {
 /// Rewrite `AssemblyInfo.cs` to include real version numbers.
 #[derive(Debug)]
 pub struct AssemblyInfoCsRewriter {
-    proj_id: ReleaseUnitId,
+    unit_id: ReleaseUnitId,
     cs_path: RepoPathBuf,
 }
 
 impl AssemblyInfoCsRewriter {
     /// Create a new `AssemblyInfo.cs` rewriter.
-    pub fn new(proj_id: ReleaseUnitId, cs_path: RepoPathBuf) -> Self {
-        AssemblyInfoCsRewriter { proj_id, cs_path }
+    pub fn new(unit_id: ReleaseUnitId, cs_path: RepoPathBuf) -> Self {
+        AssemblyInfoCsRewriter { unit_id, cs_path }
     }
 }
 
@@ -494,7 +494,7 @@ impl Rewriter for AssemblyInfoCsRewriter {
             atomicwrites::OverwriteBehavior::AllowOverwrite,
         );
 
-        let proj = app.graph().lookup(self.proj_id);
+        let unit = app.graph().lookup(self.unit_id);
 
         let r = new_af.write(|new_f| {
             for line in cur_reader.lines() {
@@ -506,7 +506,7 @@ impl Rewriter for AssemblyInfoCsRewriter {
                 let line = if line.starts_with("[assembly: AssemblyVersion") || line.starts_with("[assembly: AssemblyFileVersion") {
                     did_anything = true;
                     atry!(
-                        crate::core::ecosystem::pypa::simple_py_parse::replace_text_in_string_literal(&line, &proj.version.to_string());
+                        crate::core::ecosystem::pypa::simple_py_parse::replace_text_in_string_literal(&line, &unit.version.to_string());
                         ["couldn't rewrite version-string source line `{}`", line]
                     )
                 } else {
@@ -543,15 +543,15 @@ impl Rewriter for AssemblyInfoCsRewriter {
 /// Rewrite a vdproj (setup installer) to include real version numbers.
 #[derive(Debug)]
 pub struct VdprojRewriter {
-    proj_id: ReleaseUnitId,
+    unit_id: ReleaseUnitId,
     vdproj_path: RepoPathBuf,
 }
 
 impl VdprojRewriter {
     /// Create a new `AssemblyInfo.cs` rewriter.
-    pub fn new(proj_id: ReleaseUnitId, vdproj_path: RepoPathBuf) -> Self {
+    pub fn new(unit_id: ReleaseUnitId, vdproj_path: RepoPathBuf) -> Self {
         VdprojRewriter {
-            proj_id,
+            unit_id,
             vdproj_path,
         }
     }
@@ -573,7 +573,7 @@ impl Rewriter for VdprojRewriter {
             atomicwrites::OverwriteBehavior::AllowOverwrite,
         );
 
-        let proj = app.graph().lookup(self.proj_id);
+        let unit = app.graph().lookup(self.unit_id);
 
         let mut pcode = uuid::Uuid::new_v4().hyphenated().to_string();
         pcode.make_ascii_uppercase();
@@ -606,7 +606,7 @@ impl Rewriter for VdprojRewriter {
                 let line = if line.contains("\"ProductVersion\" =") {
                     // ProductVersion must have the form `X.Y.Z`; the "revision"
                     // component must be stripped.
-                    let prod_vers = proj.version.to_string();
+                    let prod_vers = unit.version.to_string();
                     let pieces: Vec<_> = prod_vers.split('.').collect();
                     let prod_vers = &pieces[..3].join(".");
 

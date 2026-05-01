@@ -56,6 +56,8 @@ fn detector_finds_expected_bundle_kinds() {
             DetectorKind::MobileApp { .. } => "mobile_app",
             DetectorKind::NestedNpmWorkspace => "nested_npm_workspace",
             DetectorKind::SdkCascadeMember => "sdk_cascade_member",
+            DetectorKind::SingleProject { .. } => "single_project",
+            DetectorKind::NestedMonorepo => "nested_monorepo",
         })
         .collect();
 

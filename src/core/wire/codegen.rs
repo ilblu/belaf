@@ -1,4 +1,4 @@
-//! typify-generated wire types from `schemas/manifest.v2.0.schema.json`.
+//! typify-generated wire types from `schemas/manifest.v3.0.schema.json`.
 //!
 //! Do not edit manually — regenerate by changing the schema and rebuilding.
 //! All consumers of these types should import from `core::wire::domain`,
@@ -23,4 +23,4 @@
     clippy::large_enum_variant
 )]
 
-include!(concat!(env!("OUT_DIR"), "/manifest_v2_codegen.rs"));
+include!(concat!(env!("OUT_DIR"), "/manifest_v3_codegen.rs"));

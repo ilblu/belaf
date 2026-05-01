@@ -157,12 +157,12 @@ pub struct PrepareArgs {
     pub ci: bool,
 
     #[arg(
-        short,
-        long,
+        short = 'p',
+        long = "release-unit",
         value_delimiter = ',',
-        help = "Override bump for specific projects (e.g., gate:major,core:minor)"
+        help = "Override bump for specific ReleaseUnits (e.g., gate:major,core:minor)"
     )]
-    pub project: Option<Vec<String>>,
+    pub release_unit: Option<Vec<String>>,
 
     #[arg(
         long,
@@ -202,8 +202,12 @@ pub struct ChangelogArgs {
     #[arg(long, help = "Output changelog to stdout instead of files")]
     pub stdout: bool,
 
-    #[arg(short, long, help = "Generate changelog only for specific project")]
-    pub project: Option<String>,
+    #[arg(
+        short = 'p',
+        long = "release-unit",
+        help = "Generate changelog only for a specific ReleaseUnit"
+    )]
+    pub release_unit: Option<String>,
 
     #[arg(short, long, help = "Custom output file path (overrides config)")]
     pub output: Option<String>,

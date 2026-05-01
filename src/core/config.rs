@@ -161,14 +161,14 @@ pub mod syntax {
 
     /// `[[bump_source]]` table: a subprocess belaf runs by default to
     /// gather externally-computed bump decisions (e.g. `graphql-inspector
-    /// diff`). At least one of `cmd` is required; `project` / `group` are
-    /// pure diagnostic labels (the JSON output's own `project` field is
-    /// what wires decisions to projects).
+    /// diff`). `cmd` is required; `release_unit` / `group` are pure
+    /// diagnostic labels (the JSON output's own `release_unit` field is
+    /// what wires decisions to ReleaseUnits).
     #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct BumpSourceConfig {
         pub cmd: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub project: Option<String>,
+        pub release_unit: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub group: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

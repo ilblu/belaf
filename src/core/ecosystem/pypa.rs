@@ -318,10 +318,10 @@ impl PypaLoader {
             let ident = app.graph.add_project(qnames);
             {
                 {
-                    let proj = app.graph.lookup_mut(ident);
+                    let unit = app.graph.lookup_mut(ident);
 
-                    proj.version = Some(Version::Pep440(version));
-                    proj.prefix = Some(dirname.to_owned());
+                    unit.version = Some(Version::Pep440(version));
+                    unit.prefix = Some(dirname.to_owned());
 
                     let rw: Box<dyn Rewriter> = match &version_loc {
                         PypaVersionLocation::PyFile(p) => {
@@ -335,7 +335,7 @@ impl PypaLoader {
                             Box::new(PyProjectVersionRewriter::new(ident, rw_path))
                         }
                     };
-                    proj.rewriters.push(rw);
+                    unit.rewriters.push(rw);
                 }
 
                 // Handle the other annotated files. Besides registering them for
@@ -360,8 +360,8 @@ impl PypaLoader {
 
                     let rw = PythonRewriter::new(ident, rw_path);
                     {
-                        let proj = app.graph.lookup_mut(ident);
-                        proj.rewriters.push(Box::new(rw));
+                        let unit = app.graph.lookup_mut(ident);
+                        unit.rewriters.push(Box::new(rw));
                     }
                 }
 
@@ -377,12 +377,12 @@ impl PypaLoader {
             }
         }
 
-        for (project_name, project_data) in &pypa_projects {
+        for (project_name, unit_data) in &pypa_projects {
             let (config, toml_repopath) = project_configs
                 .get(project_name)
                 .expect("BUG: project_configs should contain all pypa_projects");
 
-            for req_name in &project_data.internal_reqs {
+            for req_name in &unit_data.internal_reqs {
                 let is_internal = pypa_projects.contains_key(req_name);
 
                 let req = config
@@ -407,14 +407,14 @@ impl PypaLoader {
 
                 if let Some(dep_project) = pypa_projects.get(req_name) {
                     app.graph.add_dependency(
-                        project_data.ident,
+                        unit_data.ident,
                         DependencyTarget::Ident(dep_project.ident),
                         "(internal)".to_owned(),
                         req,
                     );
                 } else {
                     app.graph.add_dependency(
-                        project_data.ident,
+                        unit_data.ident,
                         DependencyTarget::Text(req_name.clone()),
                         "(unavailable)".to_owned(),
                         req,
@@ -721,14 +721,14 @@ struct PyProjectBelaf {
 /// Rewrite a Python file to include real version numbers.
 #[derive(Debug)]
 pub struct PythonRewriter {
-    proj_id: ReleaseUnitId,
+    unit_id: ReleaseUnitId,
     file_path: RepoPathBuf,
 }
 
 impl PythonRewriter {
     /// Create a new Python file rewriter.
-    pub fn new(proj_id: ReleaseUnitId, file_path: RepoPathBuf) -> Self {
-        PythonRewriter { proj_id, file_path }
+    pub fn new(unit_id: ReleaseUnitId, file_path: RepoPathBuf) -> Self {
+        PythonRewriter { unit_id, file_path }
     }
 }
 
@@ -745,10 +745,10 @@ impl Rewriter for PythonRewriter {
 
         // Helper table for applying internal deps if needed.
 
-        let proj = app.graph().lookup(self.proj_id);
+        let unit = app.graph().lookup(self.unit_id);
         let mut internal_reqs = HashMap::new();
 
-        for dep in &proj.internal_deps[..] {
+        for dep in &unit.internal_deps[..] {
             let req_text = match dep.belaf_requirement {
                 DepRequirement::Manual(ref t) => t.clone(),
 
@@ -776,7 +776,7 @@ impl Rewriter for PythonRewriter {
             atomicwrites::OverwriteBehavior::AllowOverwrite,
         );
 
-        let proj = app.graph().lookup(self.proj_id);
+        let unit = app.graph().lookup(self.unit_id);
 
         let r = new_af.write(|new_f| {
 
@@ -792,7 +792,7 @@ impl Rewriter for PythonRewriter {
 
                     if simple_py_parse::has_commented_marker(&line, "belaf project-version tuple") {
                         let new_text = atry!(
-                            proj.version.as_pep440_tuple_literal();
+                            unit.version.as_pep440_tuple_literal();
                             ["couldn't convert the project version to a `sys.version_info` tuple"]
                         );
                         atry!(
@@ -801,7 +801,7 @@ impl Rewriter for PythonRewriter {
                         )
                     } else {
                         atry!(
-                            simple_py_parse::replace_text_in_string_literal(&line, &proj.version.to_string());
+                            simple_py_parse::replace_text_in_string_literal(&line, &unit.version.to_string());
                             ["couldn't rewrite version-string source line `{}`", line]
                         )
                     }
@@ -948,13 +948,13 @@ enum PypaVersionLocation {
 /// the structure of `CargoRewriter` for `Cargo.toml`.
 #[derive(Debug)]
 pub struct PyProjectVersionRewriter {
-    proj_id: ReleaseUnitId,
+    unit_id: ReleaseUnitId,
     toml_path: RepoPathBuf,
 }
 
 impl PyProjectVersionRewriter {
-    pub fn new(proj_id: ReleaseUnitId, toml_path: RepoPathBuf) -> Self {
-        PyProjectVersionRewriter { proj_id, toml_path }
+    pub fn new(unit_id: ReleaseUnitId, toml_path: RepoPathBuf) -> Self {
+        PyProjectVersionRewriter { unit_id, toml_path }
     }
 }
 
@@ -979,8 +979,8 @@ impl Rewriter for PyProjectVersionRewriter {
             ["could not parse file `{}` as TOML", toml_path.display()]
         );
 
-        let proj = app.graph().lookup(self.proj_id);
-        let new_version = proj.version.to_string();
+        let unit = app.graph().lookup(self.unit_id);
+        let new_version = unit.version.to_string();
 
         let project_table = a_ok_or!(
             doc.get_mut("project").and_then(|p| p.as_table_mut());

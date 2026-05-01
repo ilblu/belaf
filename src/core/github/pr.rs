@@ -49,7 +49,7 @@
 
 use std::collections::HashMap;
 
-use crate::core::workflow::SelectedProject;
+use crate::core::workflow::SelectedReleaseUnit;
 
 const MAX_PROJECTS_IN_TITLE: usize = 3;
 
@@ -60,7 +60,7 @@ const MAX_PROJECTS_IN_TITLE: usize = 3;
 /// - Single: `chore(release): my-crate v1.2.0`
 /// - Few: `chore(release): core v1.0.0, utils v2.1.0`
 /// - Many: `chore(release): 5 packages`
-pub fn generate_pr_title(projects: &[SelectedProject]) -> String {
+pub fn generate_pr_title(projects: &[SelectedReleaseUnit]) -> String {
     if projects.len() == 1 {
         let p = &projects[0];
         format!("chore(release): {} v{}", p.name, p.new_version)
@@ -90,7 +90,7 @@ pub fn generate_pr_title(projects: &[SelectedProject]) -> String {
 ///
 /// Bump badges: `🔴 **MAJOR**`, `🟡 MINOR`, `🟢 patch`
 pub fn generate_pr_body(
-    projects: &[SelectedProject],
+    projects: &[SelectedReleaseUnit],
     manifest_filename: &str,
     changelog_contents: &HashMap<String, String>,
 ) -> String {
@@ -174,8 +174,8 @@ mod tests {
     use super::*;
     use crate::core::wire::known::Ecosystem;
 
-    fn make_project(name: &str, old: &str, new: &str, bump: &str) -> SelectedProject {
-        SelectedProject {
+    fn make_project(name: &str, old: &str, new: &str, bump: &str) -> SelectedReleaseUnit {
+        SelectedReleaseUnit {
             ident: 0,
             name: name.to_string(),
             prefix: String::new(),

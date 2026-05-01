@@ -56,7 +56,7 @@ struct Row {
     /// (ExternallyManaged) is not togglable.
     selected: bool,
     /// Backref index — used on confirm to mutate the right
-    /// `state.detection.matches[i]` or `state.projects[i]`. Mobile
+    /// `state.detection.matches[i]` or `state.standalone_units[i]`. Mobile
     /// rows do not need a backref because they're read-only.
     backref: BackRef,
 }
@@ -65,8 +65,8 @@ struct Row {
 enum BackRef {
     /// Index into `state.detection.matches`.
     Detection(usize),
-    /// Index into `state.projects`.
-    Project(usize),
+    /// Index into `state.standalone_units`.
+    Standalone(usize),
     /// Mobile app — no backref needed, lands in [allow_uncovered]
     /// automatically via auto_detect snippet emission.
     Mobile,
@@ -106,13 +106,13 @@ impl UnifiedSelectionStep {
         }
 
         // Standalone: manual project list.
-        for (idx, p) in state.projects.iter().enumerate() {
+        for (idx, p) in state.standalone_units.iter().enumerate() {
             self.rows.push(Row {
                 category: RowCategory::Standalone,
                 label: p.name.clone(),
                 secondary: format!("@ {} ({})", p.version, p.prefix),
                 selected: p.selected,
-                backref: BackRef::Project(idx),
+                backref: BackRef::Standalone(idx),
             });
         }
 
@@ -190,8 +190,8 @@ impl UnifiedSelectionStep {
                         }
                     }
                 }
-                (RowCategory::Standalone, BackRef::Project(idx)) => {
-                    if let Some(p) = state.projects.get_mut(idx) {
+                (RowCategory::Standalone, BackRef::Standalone(idx)) => {
+                    if let Some(p) = state.standalone_units.get_mut(idx) {
                         p.selected = row.selected;
                     }
                 }
@@ -320,6 +320,10 @@ fn detector_kind_label(kind: &DetectorKind) -> String {
         DetectorKind::MobileApp { .. } => "mobile-app".to_string(),
         DetectorKind::NestedNpmWorkspace => "nested-npm-workspace".to_string(),
         DetectorKind::SdkCascadeMember => "sdk-cascade-member".to_string(),
+        DetectorKind::SingleProject { ecosystem } => {
+            format!("single-project/{ecosystem}")
+        }
+        DetectorKind::NestedMonorepo => "nested-monorepo".to_string(),
     }
 }
 
@@ -495,7 +499,7 @@ fn category_header(c: RowCategory) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::super::{
-        state::{DetectedProject, WizardState},
+        state::{DetectedUnit, WizardState},
         step::test_support::render_to_string,
     };
     use super::*;
@@ -503,14 +507,14 @@ mod tests {
 
     fn state_with_mix() -> WizardState {
         let mut state = WizardState::new(false, None);
-        state.projects = vec![
-            DetectedProject {
+        state.standalone_units = vec![
+            DetectedUnit {
                 name: "alpha".into(),
                 version: "0.1.0".into(),
                 prefix: "crates/alpha".into(),
                 selected: true,
             },
-            DetectedProject {
+            DetectedUnit {
                 name: "beta".into(),
                 version: "0.2.3".into(),
                 prefix: "crates/beta".into(),
@@ -560,7 +564,7 @@ mod tests {
         step.toggle_current();
         assert!(!step.rows[1].selected);
         step.flush_to_state(&mut state);
-        assert!(!state.projects[0].selected);
+        assert!(!state.standalone_units[0].selected);
     }
 
     #[test]

@@ -69,12 +69,12 @@ impl GoLoader {
             let qnames = vec![module_name, "go".to_owned()];
 
             let ident = app.graph.add_project(qnames);
-            let proj = app.graph.lookup_mut(ident);
-            proj.version = Some(Version::Semver(semver::Version::new(0, 0, 0)));
-            proj.prefix = Some(prefix.to_owned());
+            let unit = app.graph.lookup_mut(ident);
+            unit.version = Some(Version::Semver(semver::Version::new(0, 0, 0)));
+            unit.prefix = Some(prefix.to_owned());
 
             let go_rewrite = GoModRewriter::new(ident, go_mod_path);
-            proj.rewriters.push(Box::new(go_rewrite));
+            unit.rewriters.push(Box::new(go_rewrite));
         }
 
         Ok(())
@@ -117,20 +117,20 @@ impl Ecosystem for GoLoader {
 
 #[derive(Debug)]
 pub struct GoModRewriter {
-    proj_id: ReleaseUnitId,
+    unit_id: ReleaseUnitId,
     repo_path: RepoPathBuf,
 }
 
 impl GoModRewriter {
-    pub fn new(proj_id: ReleaseUnitId, repo_path: RepoPathBuf) -> Self {
-        GoModRewriter { proj_id, repo_path }
+    pub fn new(unit_id: ReleaseUnitId, repo_path: RepoPathBuf) -> Self {
+        GoModRewriter { unit_id, repo_path }
     }
 }
 
 impl Rewriter for GoModRewriter {
     fn rewrite(&self, app: &AppSession, changes: &mut ChangeList) -> Result<()> {
         let fs_path = app.repo.resolve_workdir(&self.repo_path);
-        let _proj = app.graph().lookup(self.proj_id);
+        let _proj = app.graph().lookup(self.unit_id);
 
         let f = atry!(
             File::open(&fs_path);

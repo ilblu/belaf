@@ -122,10 +122,10 @@ impl ReleaseUnitGraph {
         };
 
         for id in root_idents {
-            let proj = &self.projects[id];
+            let unit = &self.projects[id];
 
-            if let Some(ref ptype) = query.project_type {
-                let qnames = proj.qualified_names();
+            if let Some(ref ptype) = query.ecosystem_filter {
+                let qnames = unit.qualified_names();
                 let n = qnames.len();
 
                 if n < 2 {
@@ -175,7 +175,7 @@ impl RepoHistories {
 #[derive(Debug, Default)]
 pub struct GraphQueryBuilder {
     names: Vec<String>,
-    project_type: Option<String>,
+    ecosystem_filter: Option<String>,
 }
 
 impl GraphQueryBuilder {
@@ -184,8 +184,8 @@ impl GraphQueryBuilder {
         self
     }
 
-    pub fn only_project_type<T: std::fmt::Display>(&mut self, ptype: T) -> &mut Self {
-        self.project_type = Some(ptype.to_string());
+    pub fn only_ecosystem<T: std::fmt::Display>(&mut self, ptype: T) -> &mut Self {
+        self.ecosystem_filter = Some(ptype.to_string());
         self
     }
 
@@ -238,7 +238,7 @@ impl ReleaseUnitGraphBuilder {
     }
 
     /// Get the number of projects in the graph.
-    pub fn project_count(&self) -> usize {
+    pub fn unit_count(&self) -> usize {
         self.projects.len()
     }
 
@@ -309,7 +309,7 @@ impl ReleaseUnitGraphBuilder {
         }
 
         impl NamingState {
-            fn compute_name(&self, proj: &ResolvedReleaseUnitBuilder) -> String {
+            fn compute_name(&self, unit: &ResolvedReleaseUnitBuilder) -> String {
                 let mut s = String::new();
                 const SEP: char = ':';
 
@@ -318,7 +318,7 @@ impl ReleaseUnitGraphBuilder {
                         s.push(SEP);
                     }
 
-                    s.push_str(&proj.qnames[self.n_narrow - 1 - i]);
+                    s.push_str(&unit.qnames[self.n_narrow - 1 - i]);
                 }
 
                 s
@@ -412,7 +412,7 @@ impl ReleaseUnitGraphBuilder {
 
         let mut projects = Vec::with_capacity(self.projects.len());
 
-        for (ident, mut proj_builder) in self.projects.drain(..).enumerate() {
+        for (ident, mut unit_builder) in self.projects.drain(..).enumerate() {
             let mut name = None;
 
             for (i_name, i_ident) in &name_to_id {
@@ -423,10 +423,10 @@ impl ReleaseUnitGraphBuilder {
             }
 
             let name = name.expect("BUG: every project should have a user-facing name assigned");
-            let mut internal_deps = Vec::with_capacity(proj_builder.internal_deps.len());
+            let mut internal_deps = Vec::with_capacity(unit_builder.internal_deps.len());
             let depender_nix = self.node_ixs[ident];
 
-            for dep in proj_builder.internal_deps.drain(..) {
+            for dep in unit_builder.internal_deps.drain(..) {
                 let dep_ident = match dep.target {
                     DependencyTarget::Ident(id) => id,
                     DependencyTarget::Text(ref dep_name) => *a_ok_or!(
@@ -447,8 +447,8 @@ impl ReleaseUnitGraphBuilder {
                 self.graph.add_edge(dependee_nix, depender_nix, ());
             }
 
-            let proj = proj_builder.finalize(ident, name, internal_deps)?;
-            projects.push(proj);
+            let unit = unit_builder.finalize(ident, name, internal_deps)?;
+            projects.push(unit);
         }
 
         // Bind groups against the now-finalized name_to_id map. We do

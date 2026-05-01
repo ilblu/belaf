@@ -72,7 +72,7 @@ impl ElixirLoader {
             let qnames = vec![app_name, "elixir".to_owned()];
 
             let ident = app.graph.add_project(qnames);
-            let proj = app.graph.lookup_mut(ident);
+            let unit = app.graph.lookup_mut(ident);
 
             let version = match semver::Version::parse(&version_str) {
                 Ok(v) => Version::Semver(v),
@@ -85,11 +85,11 @@ impl ElixirLoader {
                 }
             };
 
-            proj.version = Some(version);
-            proj.prefix = Some(prefix.to_owned());
+            unit.version = Some(version);
+            unit.prefix = Some(prefix.to_owned());
 
             let elixir_rewrite = MixExsRewriter::new(ident, mix_exs_path);
-            proj.rewriters.push(Box::new(elixir_rewrite));
+            unit.rewriters.push(Box::new(elixir_rewrite));
         }
 
         Ok(())
@@ -159,20 +159,20 @@ impl Ecosystem for ElixirLoader {
 
 #[derive(Debug)]
 pub struct MixExsRewriter {
-    proj_id: ReleaseUnitId,
+    unit_id: ReleaseUnitId,
     repo_path: RepoPathBuf,
 }
 
 impl MixExsRewriter {
-    pub fn new(proj_id: ReleaseUnitId, repo_path: RepoPathBuf) -> Self {
-        MixExsRewriter { proj_id, repo_path }
+    pub fn new(unit_id: ReleaseUnitId, repo_path: RepoPathBuf) -> Self {
+        MixExsRewriter { unit_id, repo_path }
     }
 }
 
 impl Rewriter for MixExsRewriter {
     fn rewrite(&self, app: &AppSession, changes: &mut ChangeList) -> Result<()> {
         let fs_path = app.repo.resolve_workdir(&self.repo_path);
-        let proj = app.graph().lookup(self.proj_id);
+        let unit = app.graph().lookup(self.unit_id);
 
         let mut contents = String::new();
         let mut f = atry!(
@@ -187,7 +187,7 @@ impl Rewriter for MixExsRewriter {
 
         drop(f);
 
-        let new_version = proj.version.to_string();
+        let new_version = unit.version.to_string();
         let mut new_contents = String::new();
 
         for line in contents.lines() {

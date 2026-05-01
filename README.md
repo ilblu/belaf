@@ -208,12 +208,19 @@ initial_tag = "0.1.0"
 strategy = "scope_first"
 scope_matching = "smart"
 
-[projects.my-package]
-ignore = false
+# Per-unit overrides go on `[[release_unit]]` blocks. The wizard
+# emits these automatically — you rarely write them by hand.
+[[release_unit]]
+name = "my-package"
+source = { manifests = ["packages/my-package/Cargo.toml"] }
 
-[projects.my-package.cargo]
-publish = true
+[release_unit.tag_format]
+template = "{name}-v{version}"
 ```
+
+See [`docs/configuration.md`](docs/configuration.md) for every
+config knob, or run `belaf config explain` in your repo to print
+the resolved view of every Release Unit.
 
 ---
 

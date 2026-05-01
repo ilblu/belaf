@@ -33,9 +33,7 @@
             "nullable": true
           }
         },
-        "required": [
-          "id"
-        ]
+        "required": ["id"]
       },
       "ErrorResponse": {
         "type": "object",
@@ -44,9 +42,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "error"
-        ]
+        "required": ["error"]
       },
       "CheckInstallationResponse": {
         "type": "object",
@@ -67,9 +63,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "installed"
-        ]
+        "required": ["installed"]
       },
       "CommitAuthor": {
         "type": "object",
@@ -83,10 +77,7 @@
             "nullable": true
           }
         },
-        "required": [
-          "login",
-          "name"
-        ]
+        "required": ["login", "name"]
       },
       "ApiCommit": {
         "type": "object",
@@ -106,9 +97,7 @@
             "nullable": true
           }
         },
-        "required": [
-          "sha"
-        ]
+        "required": ["sha"]
       },
       "CommitsResponse": {
         "type": "object",
@@ -123,10 +112,7 @@
             "type": "boolean"
           }
         },
-        "required": [
-          "commits",
-          "has_more"
-        ]
+        "required": ["commits", "has_more"]
       },
       "ApiPullRequest": {
         "type": "object",
@@ -153,10 +139,7 @@
             "nullable": true
           }
         },
-        "required": [
-          "number",
-          "labels"
-        ]
+        "required": ["number", "labels"]
       },
       "PullRequestsResponse": {
         "type": "object",
@@ -171,10 +154,7 @@
             "type": "boolean"
           }
         },
-        "required": [
-          "pull_requests",
-          "has_more"
-        ]
+        "required": ["pull_requests", "has_more"]
       },
       "CreatePullRequestResponse": {
         "type": "object",
@@ -190,10 +170,7 @@
             "nullable": true
           }
         },
-        "required": [
-          "number",
-          "html_url"
-        ]
+        "required": ["number", "html_url"]
       },
       "CreatePullRequestRequest": {
         "type": "object",
@@ -211,11 +188,7 @@
             "type": "string"
           }
         },
-        "required": [
-          "title",
-          "head",
-          "base"
-        ]
+        "required": ["title", "head", "base"]
       },
       "GitCredentialsResponse": {
         "type": "object",
@@ -227,10 +200,28 @@
             "type": "string"
           }
         },
-        "required": [
-          "token",
-          "expires_at"
-        ]
+        "required": ["token", "expires_at"]
+      },
+      "ReportDriftResponse": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          }
+        },
+        "required": ["accepted"]
+      },
+      "ReportDriftRequest": {
+        "type": "object",
+        "properties": {
+          "uncovered_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": ["uncovered_paths"]
       }
     },
     "parameters": {}
@@ -239,9 +230,7 @@
     "/me": {
       "get": {
         "operationId": "getMe",
-        "tags": [
-          "CLI"
-        ],
+        "tags": ["CLI"],
         "security": [
           {
             "bearerAuth": []
@@ -275,9 +264,7 @@
     "/check-installation": {
       "get": {
         "operationId": "checkInstallation",
-        "tags": [
-          "CLI"
-        ],
+        "tags": ["CLI"],
         "security": [
           {
             "bearerAuth": []
@@ -323,9 +310,7 @@
     "/repos/{owner}/{repo}/commits": {
       "get": {
         "operationId": "listCommits",
-        "tags": [
-          "CLI"
-        ],
+        "tags": ["CLI"],
         "security": [
           {
             "bearerAuth": []
@@ -426,9 +411,7 @@
     "/repos/{owner}/{repo}/pulls": {
       "get": {
         "operationId": "listPulls",
-        "tags": [
-          "CLI"
-        ],
+        "tags": ["CLI"],
         "security": [
           {
             "bearerAuth": []
@@ -457,11 +440,7 @@
           {
             "schema": {
               "type": "string",
-              "enum": [
-                "open",
-                "closed",
-                "all"
-              ]
+              "enum": ["open", "closed", "all"]
             },
             "required": false,
             "name": "state",
@@ -532,9 +511,7 @@
       },
       "post": {
         "operationId": "createPull",
-        "tags": [
-          "CLI"
-        ],
+        "tags": ["CLI"],
         "security": [
           {
             "bearerAuth": []
@@ -628,9 +605,7 @@
     "/repos/{owner}/{repo}/git/credentials": {
       "get": {
         "operationId": "getGitCredentials",
-        "tags": [
-          "CLI"
-        ],
+        "tags": ["CLI"],
         "security": [
           {
             "bearerAuth": []
@@ -664,6 +639,89 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/GitCredentialsResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/repos/{owner}/{repo}/drift": {
+      "post": {
+        "operationId": "reportDrift",
+        "tags": ["CLI"],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "summary": "Report the current drift state from `belaf prepare`. Empty array means the run found no drift.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "owner",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": true,
+            "name": "repo",
+            "in": "path"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReportDriftRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Drift state recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportDriftResponse"
                 }
               }
             }

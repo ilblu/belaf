@@ -295,6 +295,40 @@ impl ApiClient {
 
         Self::handle_response(response).await
     }
+
+    /// Report the current drift state to the dashboard. `uncovered_paths`
+    /// is empty when the local detector found no drift; populated with
+    /// the same paths the CLI would print as the abort error otherwise.
+    /// Errors are swallowed by the caller — this is best-effort
+    /// telemetry, not a release-blocking call.
+    pub async fn report_drift(
+        &self,
+        token: &StoredToken,
+        owner: &str,
+        repo: &str,
+        uncovered_paths: Vec<String>,
+    ) -> Result<(), ApiError> {
+        let response = self
+            .client
+            .post(format!(
+                "{}/api/cli/repos/{}/{}/drift",
+                self.base_url, owner, repo
+            ))
+            .bearer_auth(&token.access_token)
+            .json(&serde_json::json!({ "uncovered_paths": uncovered_paths }))
+            .send()
+            .await?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let body = response.text().await.unwrap_or_default();
+            return Err(ApiError::ApiResponse {
+                status,
+                message: body,
+            });
+        }
+        Ok(())
+    }
 }
 
 impl Default for ApiClient {

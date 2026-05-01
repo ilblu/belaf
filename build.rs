@@ -56,9 +56,7 @@ fn generate_api_client() {
 /// The JSON Schema is the canonical wire format for the belaf release
 /// manifest. belaf is the schema-owner; github-app vendors a copy. Generated
 /// types live in the `types` module of the produced file and are re-exported
-/// through `src/core/wire/`. Output filename is kept as
-/// `manifest_v2_codegen.rs` for one cycle to minimise call-site churn —
-/// the next 3.x cleanup PR can rename to `manifest_v3_codegen.rs`.
+/// through `src/core/wire/`.
 fn generate_manifest_types() {
     let schema_path =
         Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/manifest.v3.0.schema.json");
@@ -86,7 +84,7 @@ fn generate_manifest_types() {
     let content = prettyplease::unparse(&ast);
 
     let out =
-        Path::new(&env::var("OUT_DIR").expect("OUT_DIR not set")).join("manifest_v2_codegen.rs");
+        Path::new(&env::var("OUT_DIR").expect("OUT_DIR not set")).join("manifest_v3_codegen.rs");
     std::fs::write(&out, content)
         .unwrap_or_else(|e| panic!("failed to write {}: {e}", out.display()));
 }

@@ -65,11 +65,11 @@ use tracing::{info, warn};
 
 use crate::core::errors::Result;
 
-/// Single bump decision from an external source. `project` matches the
-/// user-facing project name; `bump` is one of `major | minor | patch`.
+/// Single bump decision from an external source. `release_unit` matches
+/// the user-facing ReleaseUnit name; `bump` is one of `major | minor | patch`.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct BumpDecision {
-    pub project: String,
+    pub release_unit: String,
     pub bump: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -123,14 +123,16 @@ pub fn parse_bump_source(json: &str) -> Result<Vec<BumpDecision>> {
 }
 
 fn validate_decision(d: &BumpDecision) -> Result<()> {
-    if d.project.trim().is_empty() {
-        return Err(anyhow!("bump-source decision has empty `project` field"));
+    if d.release_unit.trim().is_empty() {
+        return Err(anyhow!(
+            "bump-source decision has empty `release_unit` field"
+        ));
     }
     match d.bump.as_str() {
         "major" | "minor" | "patch" => Ok(()),
         other => Err(anyhow!(
             "bump-source decision for `{}`: `bump` must be `major`, `minor`, or `patch` — got `{}`",
-            d.project,
+            d.release_unit,
             other
         )),
     }
@@ -247,13 +249,13 @@ mod tests {
         let json = r#"{
             "version": 1,
             "decisions": [
-                { "project": "@org/foo", "bump": "minor",
+                { "release_unit": "@org/foo", "bump": "minor",
                   "reason": "feature", "source": "test" }
             ]
         }"#;
         let d = parse_bump_source(json).unwrap();
         assert_eq!(d.len(), 1);
-        assert_eq!(d[0].project, "@org/foo");
+        assert_eq!(d[0].release_unit, "@org/foo");
         assert_eq!(d[0].bump, "minor");
         assert_eq!(d[0].reason.as_deref(), Some("feature"));
     }
@@ -268,7 +270,7 @@ mod tests {
     #[test]
     fn rejects_invalid_bump_string() {
         let json = r#"{ "version": 1,
-          "decisions": [{ "project": "x", "bump": "feature" }] }"#;
+          "decisions": [{ "release_unit": "x", "bump": "feature" }] }"#;
         let err = parse_bump_source(json).unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("major"), "want major listed; got: {msg}");
@@ -278,7 +280,7 @@ mod tests {
     #[test]
     fn rejects_empty_project_name() {
         let json = r#"{ "version": 1,
-          "decisions": [{ "project": "  ", "bump": "patch" }] }"#;
+          "decisions": [{ "release_unit": "  ", "bump": "patch" }] }"#;
         let err = parse_bump_source(json).unwrap_err();
         assert!(format!("{err:#}").contains("empty"));
     }
@@ -286,7 +288,7 @@ mod tests {
     #[test]
     fn omits_optional_fields_round_trip() {
         let d = BumpDecision {
-            project: "x".into(),
+            release_unit: "x".into(),
             bump: "patch".into(),
             reason: None,
             source: None,
@@ -299,14 +301,14 @@ mod tests {
     #[test]
     fn collect_command_captures_stdout() {
         let input = BumpSourceInput::Command {
-            cmd: r#"printf '{"version":1,"decisions":[{"project":"x","bump":"minor"}]}'"#
+            cmd: r#"printf '{"version":1,"decisions":[{"release_unit":"x","bump":"minor"}]}'"#
                 .to_string(),
             timeout_sec: 5,
             label: Some("test-echo".into()),
         };
         let d = collect(&input).unwrap();
         assert_eq!(d.len(), 1);
-        assert_eq!(d[0].project, "x");
+        assert_eq!(d[0].release_unit, "x");
     }
 
     #[test]

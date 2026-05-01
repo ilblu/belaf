@@ -146,7 +146,7 @@ pub async fn execute(cli: Cli) -> Result<()> {
         Commands::Prepare(args) => {
             let exit_code = cmd::prepare::run(
                 args.ci,
-                args.project,
+                args.release_unit,
                 args.bump_source,
                 args.bump_source_cmd,
             )?;
@@ -166,7 +166,7 @@ pub async fn execute(cli: Cli) -> Result<()> {
             let exit_code = cmd::changelog::run(
                 args.preview,
                 args.stdout,
-                args.project,
+                args.release_unit,
                 args.output,
                 args.unreleased,
                 args.ci,

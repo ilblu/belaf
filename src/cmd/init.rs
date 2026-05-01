@@ -215,7 +215,7 @@ impl BootstrapCommand {
         let mut seen_any = false;
 
         for ident in sess.graph().toposorted() {
-            let proj = sess.graph().lookup(ident);
+            let unit = sess.graph().lookup(ident);
 
             if !seen_any {
                 info!("belaf detected the following projects in the repo:");
@@ -224,7 +224,7 @@ impl BootstrapCommand {
             }
 
             let loc_desc = {
-                let p = proj.prefix();
+                let p = unit.prefix();
 
                 if p.is_empty() {
                     "the root directory".to_owned()
@@ -235,7 +235,7 @@ impl BootstrapCommand {
 
             println!(
                 "    {} @ {} in {}",
-                proj.user_facing_name, proj.version, loc_desc
+                unit.user_facing_name, unit.version, loc_desc
             );
         }
 
@@ -255,9 +255,9 @@ impl BootstrapCommand {
         let mut versions = HashMap::new();
         let topo_ids: Vec<_> = sess.graph().toposorted().collect();
         for ident in topo_ids {
-            let proj = sess.graph_mut().lookup_mut(ident);
-            versions.insert(proj.ident(), proj.version.clone());
-            for dep in &mut proj.internal_deps[..] {
+            let unit = sess.graph_mut().lookup_mut(ident);
+            versions.insert(unit.ident(), unit.version.clone());
+            for dep in &mut unit.internal_deps[..] {
                 dep.belaf_requirement = DepRequirement::Manual(versions[&dep.ident].to_string());
             }
         }
@@ -292,8 +292,8 @@ impl BootstrapCommand {
 
         let topo_ids: Vec<_> = sess.graph().toposorted().collect();
         for ident in topo_ids {
-            let proj = sess.graph_mut().lookup_mut(ident);
-            for dep in &mut proj.internal_deps[..] {
+            let unit = sess.graph_mut().lookup_mut(ident);
+            for dep in &mut unit.internal_deps[..] {
                 dep.belaf_requirement = DepRequirement::Manual(dep.literal.clone());
             }
         }

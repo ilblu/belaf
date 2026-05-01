@@ -67,21 +67,22 @@ fn lerna_fixed_does_not_trigger_detector_warnings() {
 
 #[test]
 fn tokio_single_has_no_detector_hits() {
-    // A flat single-crate Cargo repo doesn't match any detector
-    // heuristic (no `crates/{bin,lib,workers}` layout, no Tauri
-    // triplet, etc.). The wizard should surface the single-project
-    // tag-format prompt instead.
     let repo = TestRepo::new();
     fixtures::seed_tokio_single(&repo);
 
     let r = open_repo(&repo);
     let report = detector::detect_all(&r);
 
-    assert!(
-        report.matches.is_empty(),
-        "tokio-single must produce zero detector hits; got: {:#?}",
+    assert_eq!(
+        report.matches.len(),
+        1,
+        "expected exactly one SingleProject hit; got: {:#?}",
         report.matches
     );
+    assert!(matches!(
+        report.matches[0].kind,
+        DetectorKind::SingleProject { .. }
+    ));
     assert_eq!(report.count_release_unit_candidates(), 0);
 }
 

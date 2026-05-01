@@ -68,14 +68,14 @@ fn render_ascii(sess: &AppSession, idents: &[usize]) {
     let mut has_deps = false;
 
     for ident in idents {
-        let proj = sess.graph().lookup(*ident);
-        let deps = &proj.internal_deps;
+        let unit = sess.graph().lookup(*ident);
+        let deps = &unit.internal_deps;
 
         if deps.is_empty() {
-            println!("  ○ {} @ {}", proj.user_facing_name, proj.version);
+            println!("  ○ {} @ {}", unit.user_facing_name, unit.version);
         } else {
             has_deps = true;
-            println!("  ● {} @ {}", proj.user_facing_name, proj.version);
+            println!("  ● {} @ {}", unit.user_facing_name, unit.version);
             for (i, dep) in deps.iter().enumerate() {
                 let dep_proj = sess.graph().lookup(dep.ident);
                 let prefix = if i == deps.len() - 1 {
@@ -105,8 +105,8 @@ fn render_ascii(sess: &AppSession, idents: &[usize]) {
     println!("  Release order (topological):");
     let toposorted: Vec<_> = sess.graph().toposorted().collect();
     for (i, ident) in toposorted.iter().enumerate() {
-        let proj = sess.graph().lookup(*ident);
-        println!("    {}. {}", i + 1, proj.user_facing_name);
+        let unit = sess.graph().lookup(*ident);
+        println!("    {}. {}", i + 1, unit.user_facing_name);
     }
     println!();
 }
@@ -118,20 +118,20 @@ fn render_dot(sess: &AppSession, idents: &[usize]) {
     println!();
 
     for ident in idents {
-        let proj = sess.graph().lookup(*ident);
-        let label = format!("{}\\n{}", proj.user_facing_name, proj.version);
-        println!("    \"{}\" [label=\"{}\"];", proj.user_facing_name, label);
+        let unit = sess.graph().lookup(*ident);
+        let label = format!("{}\\n{}", unit.user_facing_name, unit.version);
+        println!("    \"{}\" [label=\"{}\"];", unit.user_facing_name, label);
     }
 
     println!();
 
     for ident in idents {
-        let proj = sess.graph().lookup(*ident);
-        for dep in &proj.internal_deps {
+        let unit = sess.graph().lookup(*ident);
+        for dep in &unit.internal_deps {
             let dep_proj = sess.graph().lookup(dep.ident);
             println!(
                 "    \"{}\" -> \"{}\";",
-                proj.user_facing_name, dep_proj.user_facing_name
+                unit.user_facing_name, dep_proj.user_facing_name
             );
         }
     }
@@ -145,8 +145,8 @@ fn render_json(sess: &AppSession, idents: &[usize]) -> Result<()> {
     let mut projects = Vec::new();
 
     for ident in idents {
-        let proj = sess.graph().lookup(*ident);
-        let deps: Vec<String> = proj
+        let unit = sess.graph().lookup(*ident);
+        let deps: Vec<String> = unit
             .internal_deps
             .iter()
             .map(|d| {
@@ -156,9 +156,9 @@ fn render_json(sess: &AppSession, idents: &[usize]) -> Result<()> {
             .collect();
 
         projects.push(json!({
-            "name": proj.user_facing_name,
-            "version": proj.version.to_string(),
-            "prefix": proj.prefix().escaped(),
+            "name": unit.user_facing_name,
+            "version": unit.version.to_string(),
+            "prefix": unit.prefix().escaped(),
             "dependencies": deps,
         }));
     }

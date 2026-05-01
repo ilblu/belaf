@@ -42,7 +42,7 @@ use super::auto_detect;
 
 use self::{
     single_mobile::SingleMobileStep,
-    state::{DetectedProject, WizardState},
+    state::{DetectedUnit, WizardState},
     step::{MouseClick, Step, StepResult, WizardOutcome},
     welcome::WelcomeStep,
 };
@@ -86,17 +86,17 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
     let sess = AppBuilder::new()?.with_progress(true).initialize()?;
 
     for ident in sess.graph().toposorted() {
-        let proj = sess.graph().lookup(ident);
-        let prefix = proj.prefix();
+        let unit = sess.graph().lookup(ident);
+        let prefix = unit.prefix();
         let prefix_str = if prefix.is_empty() {
             "root".to_string()
         } else {
             prefix.escaped()
         };
 
-        state.projects.push(DetectedProject {
-            name: proj.user_facing_name.clone(),
-            version: proj.version.to_string(),
+        state.standalone_units.push(DetectedUnit {
+            name: unit.user_facing_name.clone(),
+            version: unit.version.to_string(),
             prefix: prefix_str,
             selected: true,
         });
@@ -277,21 +277,21 @@ fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
     // the rewrite step has concrete versions to write.
     let mut versions = HashMap::new();
     let selected_names: Vec<String> = state
-        .selected_projects()
+        .selected_units()
         .iter()
         .map(|p| p.name.clone())
         .collect();
 
     let topo_ids: Vec<_> = sess.graph().toposorted().collect();
     for ident in topo_ids {
-        let proj = sess.graph_mut().lookup_mut(ident);
-        if !selected_names.contains(&proj.user_facing_name) {
+        let unit = sess.graph_mut().lookup_mut(ident);
+        if !selected_names.contains(&unit.user_facing_name) {
             continue;
         }
 
-        versions.insert(proj.ident(), proj.version.clone());
+        versions.insert(unit.ident(), unit.version.clone());
 
-        for dep in &mut proj.internal_deps[..] {
+        for dep in &mut unit.internal_deps[..] {
             dep.belaf_requirement = DepRequirement::Manual(
                 versions
                     .get(&dep.ident)
@@ -305,8 +305,8 @@ fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
 
     let topo_ids: Vec<_> = sess.graph().toposorted().collect();
     for ident in topo_ids {
-        let proj = sess.graph_mut().lookup_mut(ident);
-        for dep in &mut proj.internal_deps[..] {
+        let unit = sess.graph_mut().lookup_mut(ident);
+        for dep in &mut unit.internal_deps[..] {
             dep.belaf_requirement = DepRequirement::Manual(dep.literal.clone());
         }
     }

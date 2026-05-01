@@ -703,14 +703,14 @@ impl Repository {
         let baseline_tag_oid = self.find_baseline_tag()?;
         let is_single_project = projects.len() == 1;
 
-        for (i, proj) in projects.iter().enumerate() {
+        for (i, unit) in projects.iter().enumerate() {
             if let Some((tag_oid, tag_name)) =
-                self.find_latest_tag_for_project(&proj.user_facing_name, is_single_project)?
+                self.find_latest_tag_for_project(&unit.user_facing_name, is_single_project)?
             {
                 let version = Self::parse_version_from_tag(&tag_name);
                 info!(
                     "found release tag for {}: {} (v{})",
-                    proj.user_facing_name, tag_name, version
+                    unit.user_facing_name, tag_name, version
                 );
                 histories[i].boundary = Some(HistoryBoundary::ReleaseTag {
                     commit: CommitId(tag_oid),
@@ -720,7 +720,7 @@ impl Repository {
             } else if let Some(baseline_oid) = baseline_tag_oid {
                 info!(
                     "no release tag for {}, using baseline tag belaf-baseline",
-                    proj.user_facing_name
+                    unit.user_facing_name
                 );
                 histories[i].boundary = Some(HistoryBoundary::Baseline {
                     commit: CommitId(baseline_oid),
@@ -728,7 +728,7 @@ impl Repository {
             } else {
                 warn!(
                     "no release tag or baseline found for {}, analyzing all commits since repo start",
-                    proj.user_facing_name
+                    unit.user_facing_name
                 );
             }
         }
@@ -750,12 +750,12 @@ impl Repository {
             .collect();
         let scope_matcher = ScopeMatcher::default();
 
-        // note that we don't "know" that proj_idx = project.ident
-        for proj_idx in 0..projects.len() {
+        // note that we don't "know" that unit_idx = project.ident
+        for unit_idx in 0..projects.len() {
             let mut walk = self.repo.revwalk()?;
             walk.push_head()?;
 
-            if let Some(boundary_commit) = histories[proj_idx].boundary_commit() {
+            if let Some(boundary_commit) = histories[unit_idx].boundary_commit() {
                 walk.hide(boundary_commit.0)?;
             }
 
@@ -818,8 +818,8 @@ impl Repository {
                                 if let Some(matched_name) =
                                     scope_matcher.find_matching_project(&scope, &project_names)
                                 {
-                                    for (idx, proj) in projects.iter().enumerate() {
-                                        if &proj.user_facing_name == matched_name {
+                                    for (idx, unit) in projects.iter().enumerate() {
+                                        if &unit.user_facing_name == matched_name {
                                             hit_buf[idx] = true;
                                             scope_matched = true;
                                             break;
@@ -834,8 +834,8 @@ impl Repository {
                                 for file in &[delta.old_file(), delta.new_file()] {
                                     if let Some(path_bytes) = file.path_bytes() {
                                         let path = RepoPath::new(path_bytes);
-                                        for (idx, proj) in projects.iter().enumerate() {
-                                            if proj.repo_paths.repo_path_matches(path) {
+                                        for (idx, unit) in projects.iter().enumerate() {
+                                            if unit.repo_paths.repo_path_matches(path) {
                                                 hit_buf[idx] = true;
                                             }
                                         }
@@ -852,8 +852,8 @@ impl Repository {
                     .get(&oid)
                     .expect("BUG: commit data should be in cache after put()");
 
-                if hits[proj_idx] {
-                    histories[proj_idx].commits.push(CommitId(oid));
+                if hits[unit_idx] {
+                    histories[unit_idx].commits.push(CommitId(oid));
                 }
             }
         }
@@ -1002,16 +1002,16 @@ pub enum ReleaseAvailability {
 impl Repository {
     pub fn find_earliest_release_containing(
         &self,
-        proj: &ResolvedReleaseUnit,
+        unit: &ResolvedReleaseUnit,
         cid: &CommitId,
         is_single_project: bool,
     ) -> Result<ReleaseAvailability> {
         if let Some((tag_oid, tag_name)) =
-            self.find_latest_tag_for_project(&proj.user_facing_name, is_single_project)?
+            self.find_latest_tag_for_project(&unit.user_facing_name, is_single_project)?
         {
             if self.repo.graph_descendant_of(tag_oid, cid.0)? || tag_oid == cid.0 {
                 let version = Self::parse_version_from_tag(&tag_name);
-                let v = Version::parse_like(&proj.version, version.to_string())?;
+                let v = Version::parse_like(&unit.version, version.to_string())?;
                 return Ok(ReleaseAvailability::ExistingRelease(v));
             }
         }
@@ -1051,18 +1051,18 @@ impl ReleaseCommitInfo {
     ///
     /// Information may be missing if the project was only added to the
     /// repository after this information was recorded.
-    pub fn lookup_project(&self, proj: &ResolvedReleaseUnit) -> Option<&ReleasedProjectInfo> {
+    pub fn lookup_project(&self, unit: &ResolvedReleaseUnit) -> Option<&ReleasedProjectInfo> {
         self.projects
             .iter()
-            .find(|&rpi| rpi.qnames == *proj.qualified_names())
+            .find(|&rpi| rpi.qnames == *unit.qualified_names())
     }
 
     /// Find information about a project release if it occurred at this moment.
     ///
     /// This function is like `lookup_project()`, but also returns None if the
     /// "age" of any identified release is not zero.
-    pub fn lookup_if_released(&self, proj: &ResolvedReleaseUnit) -> Option<&ReleasedProjectInfo> {
-        self.lookup_project(proj).filter(|rel| rel.age == 0)
+    pub fn lookup_if_released(&self, unit: &ResolvedReleaseUnit) -> Option<&ReleasedProjectInfo> {
+        self.lookup_project(unit).filter(|rel| rel.age == 0)
     }
 }
 

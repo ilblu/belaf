@@ -27,7 +27,7 @@ use crate::core::{
     github::{client::GitHubInformation, pr},
     graph::GraphQueryBuilder,
     group::GroupSet,
-    manifest::{ProjectRelease, ReleaseManifest, ReleaseStatistics, MANIFEST_DIR},
+    manifest::{ReleaseEntry, ReleaseManifest, ReleaseStatistics, MANIFEST_DIR},
     resolved_release_unit::ReleaseUnitId,
     session::AppSession,
     tag_format::{format_tag, split_maven_coords, TagFormatInputs},
@@ -79,7 +79,7 @@ impl BumpChoice {
 }
 
 #[derive(Debug, Clone)]
-pub struct ProjectSelection {
+pub struct ReleaseUnitSelection {
     pub candidate: ReleaseUnitCandidate,
     pub bump_choice: BumpChoice,
     pub cached_changelog: Option<String>,
@@ -166,14 +166,14 @@ impl<'a> PrepareContext<'a> {
             .context("failed to analyze project histories")?;
 
         for ident in &idents {
-            let proj = self.sess.graph().lookup(*ident);
+            let unit = self.sess.graph().lookup(*ident);
             let history = histories.lookup(*ident);
             let n_commits = history.n_commits();
 
             if n_commits == 0 {
                 info!(
                     "{}: no changes since last release, skipping",
-                    proj.user_facing_name
+                    unit.user_facing_name
                 );
                 continue;
             }
@@ -184,12 +184,12 @@ impl<'a> PrepareContext<'a> {
                 .filter_map(|cid| self.sess.repo.get_commit_details(*cid).ok())
                 .collect();
 
-            let current_version = proj.version.to_string();
+            let current_version = unit.version.to_string();
 
             let analysis = bump::analyze_commits(&commits).with_context(|| {
                 format!(
                     "failed to analyze commit messages for {}",
-                    proj.user_facing_name
+                    unit.user_facing_name
                 )
             })?;
 
@@ -198,9 +198,9 @@ impl<'a> PrepareContext<'a> {
                 .recommendation
                 .apply_config(&bump_config, Some(&current_version));
 
-            info!("{}: {}", proj.user_facing_name, analysis.summary());
+            info!("{}: {}", unit.user_facing_name, analysis.summary());
 
-            let qnames = proj.qualified_names();
+            let qnames = unit.qualified_names();
             let ecosystem = qnames
                 .get(1)
                 .map(|s| Ecosystem::classify(s))
@@ -208,8 +208,8 @@ impl<'a> PrepareContext<'a> {
 
             self.candidates.push(ReleaseUnitCandidate {
                 ident: *ident,
-                name: proj.user_facing_name.clone(),
-                prefix: proj.prefix().escaped(),
+                name: unit.user_facing_name.clone(),
+                prefix: unit.prefix().escaped(),
                 current_version,
                 commits,
                 commit_count: n_commits,
@@ -229,32 +229,32 @@ impl<'a> PrepareContext<'a> {
         cleanup_release_branch(self.sess, &self.base_branch, &self.release_branch);
     }
 
-    pub fn finalize(self, selections: Vec<ProjectSelection>) -> Result<String> {
+    pub fn finalize(self, selections: Vec<ReleaseUnitSelection>) -> Result<String> {
         if selections.is_empty() {
             return Err(anyhow::anyhow!("no projects selected for release"));
         }
 
-        let mut prepared: Vec<SelectedProject> = Vec::new();
+        let mut prepared: Vec<SelectedReleaseUnit> = Vec::new();
 
         for selection in &selections {
-            let proj = self.sess.graph().lookup(selection.candidate.ident);
+            let unit = self.sess.graph().lookup(selection.candidate.ident);
 
             let bump_scheme_text = selection
                 .bump_choice
                 .resolve(selection.candidate.suggested_bump);
 
             if bump_scheme_text == "no bump" {
-                info!("{}: no version bump needed", proj.user_facing_name);
+                info!("{}: no version bump needed", unit.user_facing_name);
                 continue;
             }
 
-            let bump_scheme = proj
+            let bump_scheme = unit
                 .version
                 .parse_bump_scheme(bump_scheme_text)
                 .with_context(|| {
                     format!(
                         "invalid bump scheme \"{}\" for project {}",
-                        bump_scheme_text, proj.user_facing_name
+                        bump_scheme_text, unit.user_facing_name
                     )
                 })?;
 
@@ -284,7 +284,7 @@ impl<'a> PrepareContext<'a> {
                 }
             );
 
-            prepared.push(SelectedProject {
+            prepared.push(SelectedReleaseUnit {
                 ident: selection.candidate.ident,
                 name: proj_mut.user_facing_name.clone(),
                 prefix: selection.candidate.prefix.clone(),
@@ -307,7 +307,7 @@ impl<'a> PrepareContext<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct SelectedProject {
+pub struct SelectedReleaseUnit {
     pub ident: ReleaseUnitId,
     pub name: String,
     pub prefix: String,
@@ -338,7 +338,7 @@ impl<'a> ReleasePipeline<'a> {
         })
     }
 
-    pub fn execute(mut self, projects: Vec<SelectedProject>) -> Result<String> {
+    pub fn execute(mut self, projects: Vec<SelectedReleaseUnit>) -> Result<String> {
         if projects.is_empty() {
             return Err(anyhow::anyhow!("no projects to release"));
         }
@@ -378,7 +378,7 @@ impl<'a> ReleasePipeline<'a> {
 
     fn generate_changelogs(
         &self,
-        projects: &[SelectedProject],
+        projects: &[SelectedReleaseUnit],
     ) -> Result<ChangelogGenerationResult> {
         let mut changelog_paths: Vec<RepoPathBuf> = Vec::new();
         let mut changelog_contents: HashMap<String, String> = HashMap::new();
@@ -445,7 +445,7 @@ impl<'a> ReleasePipeline<'a> {
 
     fn create_manifest(
         &mut self,
-        projects: &[SelectedProject],
+        projects: &[SelectedReleaseUnit],
         changelog_contents: &HashMap<String, String>,
         processed_commits: &HashMap<String, Vec<Commit>>,
     ) -> Result<(ReleaseManifest, String, RepoPathBuf)> {
@@ -501,7 +501,7 @@ impl<'a> ReleasePipeline<'a> {
             let first_time_contributors = Self::extract_first_time_contributors(commits);
             let statistics = Self::extract_commit_statistics(commits);
 
-            let mut release = ProjectRelease::new(
+            let mut release = ReleaseEntry::new(
                 project.name.clone(),
                 project.ecosystem.as_str().to_string(),
                 project.old_version.clone(),
@@ -642,7 +642,7 @@ impl<'a> ReleasePipeline<'a> {
 
     fn create_commit(
         &self,
-        projects: &[SelectedProject],
+        projects: &[SelectedReleaseUnit],
         all_changed_paths: &[&crate::core::git::repository::RepoPath],
     ) -> Result<()> {
         let commit_message = format_commit_message(projects);
@@ -709,7 +709,7 @@ impl<'a> ReleasePipeline<'a> {
 
     fn create_pull_request(
         &self,
-        projects: &[SelectedProject],
+        projects: &[SelectedReleaseUnit],
         manifest_filename: &str,
         changelog_contents: &HashMap<String, String>,
     ) -> Result<String> {
@@ -726,7 +726,7 @@ impl<'a> ReleasePipeline<'a> {
         Ok(pr_url)
     }
 
-    fn print_summary(&self, projects: &[SelectedProject], pr_url: &str) {
+    fn print_summary(&self, projects: &[SelectedReleaseUnit], pr_url: &str) {
         info!(
             "prepared {} project{} for release",
             projects.len(),
@@ -860,7 +860,7 @@ pub fn cleanup_release_branch(sess: &mut AppSession, base_branch: &str, release_
     info!("cleaned up release branch, returned to '{}'", base_branch);
 }
 
-fn format_commit_message(projects: &[SelectedProject]) -> String {
+fn format_commit_message(projects: &[SelectedReleaseUnit]) -> String {
     if projects.len() == 1 {
         let p = &projects[0];
         format!(
@@ -927,7 +927,7 @@ pub fn generate_changelog_entry(
 /// (the Loader instances are stateless once `finalize` has run).
 fn build_tag_name(
     sess: &AppSession,
-    project: &SelectedProject,
+    project: &SelectedReleaseUnit,
     groups: &GroupSet,
 ) -> Result<String> {
     let registry = EcosystemRegistry::with_defaults();

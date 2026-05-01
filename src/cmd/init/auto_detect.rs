@@ -35,6 +35,8 @@ pub struct DetectionCounters {
     pub mobile_android: usize,
     pub nested_npm_workspace: usize,
     pub sdk_cascade_member: usize,
+    pub single_project: usize,
+    pub nested_monorepo: usize,
 }
 
 impl DetectionCounters {
@@ -49,6 +51,10 @@ impl DetectionCounters {
 
     pub fn total_mobile_warnings(&self) -> usize {
         self.mobile_ios + self.mobile_android
+    }
+
+    pub fn total_advisory_hints(&self) -> usize {
+        self.nested_monorepo
     }
 }
 
@@ -275,6 +281,29 @@ pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> Aut
             "\n# {} SDK packages detected under sdks/* — consider adding\n# `cascade_from = {{ source = \"<schema-unit>\", bump = \"floor_minor\" }}`\n# to each so they bump in lockstep when the schema bumps.\n",
             counters.sdk_cascade_member
         ));
+    }
+
+    for m in &report.matches {
+        if let DetectorKind::SingleProject { ecosystem } = &m.kind {
+            counters.single_project += 1;
+            snippet.push_str(&format!(
+                "\n# Single-project repo detected ({ecosystem}) — `v{{version}}`\n# tag format is suggested instead of the ecosystem default.\n# Override per-unit if you publish under a different naming convention.\n",
+            ));
+        }
+    }
+
+    for m in &report.matches {
+        if matches!(m.kind, DetectorKind::NestedMonorepo) {
+            counters.nested_monorepo += 1;
+            let path = m.path.escaped();
+            let note = m
+                .note
+                .as_deref()
+                .unwrap_or("submodule looks like its own monorepo");
+            snippet.push_str(&format!(
+                "\n# Nested submodule at {path} — {note}.\n# Consider running `belaf init` inside the submodule and excluding\n# its path from this repo's detection rather than driving both from one config.\n",
+            ));
+        }
     }
 
     // User-excluded matches — emit as `[ignore_paths]` so the

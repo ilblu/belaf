@@ -55,10 +55,10 @@ pub fn run(
     let mut processed_count = 0;
 
     for ident in &idents {
-        let proj = sess.graph().lookup(*ident);
+        let unit = sess.graph().lookup(*ident);
 
         if let Some(ref filter) = project_filter {
-            if proj.user_facing_name != *filter {
+            if unit.user_facing_name != *filter {
                 continue;
             }
         }
@@ -70,7 +70,7 @@ pub fn run(
             if !ci {
                 info!(
                     "{}: no changes since last release, skipping",
-                    proj.user_facing_name
+                    unit.user_facing_name
                 );
             }
             continue;
@@ -86,9 +86,9 @@ pub fn run(
             continue;
         }
 
-        let current_version = proj.version.to_string();
+        let current_version = unit.version.to_string();
         let analysis = bump::analyze_commits(&commits)
-            .with_context(|| format!("failed to analyze commits for {}", proj.user_facing_name))?;
+            .with_context(|| format!("failed to analyze commits for {}", unit.user_facing_name))?;
 
         let suggested_bump = analysis
             .recommendation
@@ -97,30 +97,30 @@ pub fn run(
         let new_version = if unreleased || suggested_bump.as_str() == "no bump" {
             None
         } else {
-            let mut version_clone = proj.version.clone();
+            let mut version_clone = unit.version.clone();
             let bump_scheme = version_clone
                 .parse_bump_scheme(suggested_bump.as_str())
                 .with_context(|| {
-                    format!("invalid bump scheme for project {}", proj.user_facing_name)
+                    format!("invalid bump scheme for project {}", unit.user_facing_name)
                 })?;
             bump_scheme.apply(&mut version_clone).with_context(|| {
-                format!("failed to apply version bump to {}", proj.user_facing_name)
+                format!("failed to apply version bump to {}", unit.user_facing_name)
             })?;
             Some(version_clone.to_string())
         };
 
-        let qnames = proj.qualified_names();
+        let qnames = unit.qualified_names();
         let ecosystem = qnames
             .get(1)
             .map(|s| Ecosystem::classify(s))
             .unwrap_or_else(|| Ecosystem::classify("cargo"));
 
-        let prefix = proj.prefix().escaped();
+        let prefix = unit.prefix().escaped();
         let write_to_file = !preview && !stdout;
 
         let params = ChangelogGenerationParams {
             repo: &sess.repo,
-            project_name: &proj.user_facing_name,
+            project_name: &unit.user_facing_name,
             prefix: &prefix,
             version: new_version.as_deref(),
             commits: &commits,
@@ -139,7 +139,7 @@ pub fn run(
             if !ci {
                 info!(
                     "{}: no user-facing changes, skipping",
-                    proj.user_facing_name
+                    unit.user_facing_name
                 );
             }
             continue;
@@ -147,7 +147,7 @@ pub fn run(
 
         if preview {
             print_changelog_preview(
-                &proj.user_facing_name,
+                &unit.user_facing_name,
                 &current_version,
                 new_version.as_deref(),
                 &ecosystem,
@@ -170,7 +170,7 @@ pub fn run(
             println!(
                 "  {} {} ({}) {} → {}",
                 "✓".green(),
-                proj.user_facing_name.bold(),
+                unit.user_facing_name.bold(),
                 ecosystem.display_name().dimmed(),
                 version_info,
                 path_display.dimmed()

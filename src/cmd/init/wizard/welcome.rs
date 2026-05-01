@@ -57,7 +57,7 @@ impl Step for WelcomeStep {
                 // UnifiedSelectionStep covers both auto-detected
                 // bundles and manual project list. Skip it only when
                 // both are empty (preset-only flow).
-                if !state.detection.matches.is_empty() || !state.projects.is_empty() {
+                if !state.detection.matches.is_empty() || !state.standalone_units.is_empty() {
                     StepResult::Next(Box::new(UnifiedSelectionStep::new()))
                 } else {
                     StepResult::Next(Box::new(PresetSelectionStep::new(state)))
@@ -83,11 +83,11 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
         Color::Cyan
     };
 
-    let project_count = state.projects.len();
-    let project_text = if project_count == 1 {
+    let unit_count = state.standalone_units.len();
+    let unit_text = if unit_count == 1 {
         "1 project".to_string()
     } else {
-        format!("{} projects", project_count)
+        format!("{} projects", unit_count)
     };
 
     let block = Block::default()
@@ -156,7 +156,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
                 Span::styled("📦 ", Style::default()),
                 Span::styled("Detected: ", Style::default().fg(Color::Gray)),
                 Span::styled(
-                    project_text,
+                    unit_text,
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
@@ -226,7 +226,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
                 Span::styled("📦 ", Style::default()),
                 Span::styled("Detected: ", Style::default().fg(Color::Gray)),
                 Span::styled(
-                    project_text,
+                    unit_text,
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),

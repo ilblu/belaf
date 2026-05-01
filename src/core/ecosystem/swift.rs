@@ -74,9 +74,9 @@ impl SwiftLoader {
             let qnames = vec![package_name, "swift".to_owned()];
 
             let ident = app.graph.add_project(qnames);
-            let proj = app.graph.lookup_mut(ident);
-            proj.version = Some(Version::Semver(semver::Version::new(0, 0, 0)));
-            proj.prefix = Some(prefix.to_owned());
+            let unit = app.graph.lookup_mut(ident);
+            unit.version = Some(Version::Semver(semver::Version::new(0, 0, 0)));
+            unit.prefix = Some(prefix.to_owned());
         }
 
         Ok(())
