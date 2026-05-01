@@ -18,7 +18,6 @@ use toml_edit::{DocumentMut, Item, Table};
 use tracing::info;
 
 use crate::core::{
-    config::syntax::ProjectConfiguration,
     ecosystem::registry::Ecosystem,
     errors::Result,
     git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
@@ -61,11 +60,7 @@ impl CargoLoader {
     ///
     /// Discovers ALL workspace roots and loads each one separately.
     /// Uses two-phase loading: first register all projects, then resolve dependencies.
-    pub fn into_projects(
-        self,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
+    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
         if self.cargo_toml_paths.is_empty() {
             return Ok(());
         }
@@ -87,7 +82,6 @@ impl CargoLoader {
 
             self.register_workspace_projects(
                 app,
-                pconfig,
                 cargo_meta,
                 workspace_root,
                 &mut all_cargo_to_graph,
@@ -127,7 +121,7 @@ impl CargoLoader {
             if metadata_covered_manifests.contains(&toml_abs) {
                 continue;
             }
-            self.register_via_direct_parse(toml_repopath, app, pconfig)?;
+            self.register_via_direct_parse(toml_repopath, app)?;
         }
 
         Ok(())
@@ -147,7 +141,6 @@ impl CargoLoader {
         &self,
         toml_repopath: &RepoPathBuf,
         app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         let toml_abs = app.repo.resolve_workdir(toml_repopath);
         if !toml_abs.exists() {
@@ -189,7 +182,8 @@ impl CargoLoader {
         let (prefix, _) = toml_repopath.split_basename();
         let qnames = vec![name.clone(), "cargo".to_owned()];
 
-        if let Some(ident) = app.graph.try_add_project(qnames, pconfig) {
+        let ident = app.graph.add_project(qnames);
+        {
             let proj = app.graph.lookup_mut(ident);
             proj.version = Some(Version::Semver(version));
             proj.prefix = Some(prefix.to_owned());
@@ -306,7 +300,6 @@ impl CargoLoader {
     fn register_workspace_projects(
         &self,
         app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
         cargo_meta: &cargo_metadata::Metadata,
         workspace_root: &Path,
         cargo_to_graph: &mut HashMap<cargo_metadata::PackageId, ReleaseUnitId>,
@@ -353,7 +346,8 @@ impl CargoLoader {
 
                 let qnames = vec![name.clone(), "cargo".to_owned()];
 
-                if let Some(ident) = app.graph.try_add_project(qnames, pconfig) {
+                let ident = app.graph.add_project(qnames);
+                {
                     let proj = app.graph.lookup_mut(ident);
 
                     proj.version = Some(Version::Semver(version));
@@ -410,7 +404,8 @@ impl CargoLoader {
 
                 let qnames = vec![pkg.name.to_string(), "cargo".to_owned()];
 
-                if let Some(ident) = app.graph.try_add_project(qnames, pconfig) {
+                let ident = app.graph.add_project(qnames);
+                {
                     let proj = app.graph.lookup_mut(ident);
 
                     proj.version = Some(Version::Semver(pkg.version.clone()));
@@ -532,18 +527,13 @@ impl Ecosystem for CargoLoader {
         _repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        _pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         self.record_path(dirname, basename);
         Ok(())
     }
 
-    fn finalize(
-        self: Box<Self>,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
-        (*self).into_projects(app, pconfig)
+    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
+        (*self).into_projects(app)
     }
 
     /// Phase C — receive the resolved release-unit skip-list.

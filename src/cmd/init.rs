@@ -5,7 +5,6 @@
 
 use anyhow::{bail, Context};
 use clap::Parser;
-use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, io::Write};
 use tracing::{error, info, warn};
 
@@ -15,32 +14,6 @@ use crate::core::{
     resolved_release_unit::DepRequirement,
     session::AppBuilder,
 };
-
-/// The toplevel bootstrap state structure.
-///
-/// TODO(belaf-3.0/wave1f): retire `belaf/bootstrap.toml` and replace
-/// the bootstrap-info pathway with `core/release_unit/initial_state.rs`
-/// (per-unit `initial_state(unit) = max(manifest_version, latest_matching_tag)`,
-/// plus per-unit `belaf-baseline-<name>` tags instead of the single
-/// global `belaf-baseline`). Defer is the safe choice — the bootstrap
-/// writer in `cmd::init::run` and `cmd::init::wizard::run` also updates
-/// each project's `internal_deps[i].belaf_requirement` to
-/// `Manual(version)`, so retiring the writer requires routing that
-/// dep-resolution through the resolver pipeline first. Bootstrap.toml
-/// is functional today; the cleanup is architectural, not a 3.0
-/// blocker.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct BootstrapConfiguration {
-    pub project: Vec<BootstrapProjectInfo>,
-}
-
-/// Bootstrap info for a project.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct BootstrapProjectInfo {
-    pub qnames: Vec<String>,
-    pub version: String,
-    pub release_commit: Option<String>,
-}
 
 /// The `bootstrap` commands.
 #[derive(Debug, Eq, PartialEq, Parser)]
@@ -104,14 +77,7 @@ pub fn run(
     };
     let exit = cmd.execute()?;
 
-    // 3.0/Wave 1d: auto-detect is the default behaviour in --ci mode
-    // (it always was for interactive wizards). The legacy
-    // `--auto-detect` opt-in flag is preserved on the CLI surface for
-    // backward compat but no longer gates anything — the run-detectors
-    // path is on by default, and `--no-auto-detect` is the opt-out
-    // (TODO: clap flag rename in a follow-up; for now `auto_detect_flag`
-    // is read but always treated as on).
-    let _ = auto_detect_flag; // kept for future opt-out semantics
+    let _ = auto_detect_flag; // accepted for backward compat; auto-detect is always on in --ci.
     if exit == 0 {
         run_auto_detect()?;
     }
@@ -283,62 +249,16 @@ impl BootstrapCommand {
             return Ok(1);
         }
 
-        let mut bs_cfg = BootstrapConfiguration::default();
+        // Convert each project's internal_deps from `Commit(...)` to
+        // `Manual(version)` so the rewrite step has concrete versions
+        // to write into the manifest files.
         let mut versions = HashMap::new();
-
         let topo_ids: Vec<_> = sess.graph().toposorted().collect();
         for ident in topo_ids {
             let proj = sess.graph_mut().lookup_mut(ident);
-            bs_cfg.project.push(BootstrapProjectInfo {
-                qnames: proj.qualified_names().to_owned(),
-                version: proj.version.to_string(),
-                release_commit: None,
-            });
-
             versions.insert(proj.ident(), proj.version.clone());
-
             for dep in &mut proj.internal_deps[..] {
                 dep.belaf_requirement = DepRequirement::Manual(versions[&dep.ident].to_string());
-            }
-        }
-
-        let bs_text = atry!(
-            toml::to_string_pretty(&bs_cfg);
-            ["could not serialize bootstrap data into TOML format"]
-        );
-
-        {
-            let mut bs_path = repo.resolve_config_dir();
-            bs_path.push("bootstrap.toml");
-            info!("writing versioning bootstrap file `{}`", bs_path.display());
-
-            let f = match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&bs_path)
-            {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    if e.kind() == std::io::ErrorKind::AlreadyExists {
-                        warn!(
-                            "belaf bootstrap file `{}` already exists; not modifying it",
-                            bs_path.display()
-                        );
-                        None
-                    } else {
-                        return Err(Error::new(e).context(format!(
-                            "failed to open belaf bootstrap file `{}` for writing",
-                            bs_path.display()
-                        )));
-                    }
-                }
-            };
-
-            if let Some(mut f) = f {
-                atry!(
-                    f.write_all(bs_text.as_bytes());
-                    ["could not write bootstrap file `{}`", bs_path.display()]
-                );
             }
         }
 

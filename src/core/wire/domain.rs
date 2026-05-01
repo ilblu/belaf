@@ -114,7 +114,45 @@ pub struct Release {
     pub contributors: Vec<String>,
     pub first_time_contributors: Vec<String>,
     pub statistics: Option<ReleaseStatistics>,
+    /// File paths composing a multi-manifest ReleaseUnit (e.g. the
+    /// Tauri triplet). Empty for single-manifest units.
+    pub bundle_manifests: Vec<String>,
+    /// Set when this release's version comes from an external
+    /// command (plugin-managed Gradle, custom scripts).
+    pub external_versioner: Option<ExternalVersionerWire>,
+    /// How the version is encoded in the manifest file(s):
+    /// `cargo_toml` | `npm_package_json` | `tauri_conf_json` |
+    /// `gradle_properties` | `generic_regex`.
+    pub version_field_spec: Option<String>,
+    /// Set when this release was bumped because a cascade source
+    /// was bumped.
+    pub cascade_from: Option<CascadeFromWire>,
+    /// `public` (default) | `internal`.
+    pub visibility: Option<String>,
+    /// Repo-relative satellite directories that belong to this unit
+    /// but contain no version-bearing manifest of their own.
+    pub satellites: Vec<String>,
     pub x: Map<String, Value>,
+}
+
+/// Domain mirror of `wire::codegen::types::ExternalVersioner`. The
+/// wire-side type is opaque (typify-generated) so we mirror just the
+/// fields the rest of belaf cares about.
+#[derive(Debug, Clone)]
+pub struct ExternalVersionerWire {
+    pub tool: String,
+    pub read_command: Option<String>,
+    pub write_command: Option<String>,
+    pub cwd: Option<String>,
+    pub timeout_sec: Option<i64>,
+    pub env: Option<std::collections::HashMap<String, String>>,
+}
+
+/// Domain mirror of `wire::codegen::types::CascadeFrom`.
+#[derive(Debug, Clone)]
+pub struct CascadeFromWire {
+    pub source: String,
+    pub bump: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -224,20 +262,41 @@ impl From<Release> for WireRelease {
             contributors: r.contributors,
             first_time_contributors: r.first_time_contributors,
             statistics: r.statistics.map(Into::into),
-            // 3.0/Wave 2: new typed fields are emitted as None/empty
-            // until the producer side (CLI) starts populating them
-            // from ResolvedReleaseUnit metadata. github-app v3.0 sees
-            // them as optional and renders accordingly. The domain
-            // `Release` struct doesn't carry these yet — TODO once
-            // ResolvedReleaseUnit is plumbed through to manifest
-            // emission. Wave 2 ship-1 lands the wire shape; data
-            // flow follows in a focused PR.
-            bundle_manifests: Vec::new(),
-            external_versioner: None,
-            version_field_spec: None,
-            cascade_from: None,
-            visibility: None,
-            satellites: Vec::new(),
+            bundle_manifests: r
+                .bundle_manifests
+                .into_iter()
+                .map(|p| p.parse().expect("manifest path must be non-empty"))
+                .collect(),
+            external_versioner: r.external_versioner.map(|ext| codegen::ExternalVersioner {
+                tool: ext
+                    .tool
+                    .parse()
+                    .expect("external_versioner.tool must be non-empty"),
+                read_command: ext.read_command,
+                write_command: ext.write_command,
+                cwd: ext.cwd,
+                timeout_sec: ext
+                    .timeout_sec
+                    .and_then(|n| u64::try_from(n).ok())
+                    .and_then(std::num::NonZeroU64::new),
+                env: ext.env,
+                x: Map::new(),
+            }),
+            version_field_spec: r.version_field_spec,
+            cascade_from: r.cascade_from.map(|c| codegen::CascadeFrom {
+                source: c
+                    .source
+                    .parse()
+                    .expect("cascade_from.source must be non-empty"),
+                bump: c.bump.parse().expect("cascade_from.bump must be non-empty"),
+                x: Map::new(),
+            }),
+            visibility: r.visibility,
+            satellites: r
+                .satellites
+                .into_iter()
+                .map(|p| p.parse().expect("satellite path must be non-empty"))
+                .collect(),
             x: r.x,
         }
     }
@@ -260,6 +319,22 @@ impl From<WireRelease> for Release {
             contributors: r.contributors,
             first_time_contributors: r.first_time_contributors,
             statistics: r.statistics.map(Into::into),
+            bundle_manifests: r.bundle_manifests.into_iter().map(|p| p.into()).collect(),
+            external_versioner: r.external_versioner.map(|ext| ExternalVersionerWire {
+                tool: ext.tool.into(),
+                read_command: ext.read_command,
+                write_command: ext.write_command,
+                cwd: ext.cwd,
+                timeout_sec: ext.timeout_sec.map(|n| u64::from(n) as i64),
+                env: ext.env,
+            }),
+            version_field_spec: r.version_field_spec,
+            cascade_from: r.cascade_from.map(|c| CascadeFromWire {
+                source: c.source.into(),
+                bump: c.bump.into(),
+            }),
+            visibility: r.visibility,
+            satellites: r.satellites.into_iter().map(|p| p.into()).collect(),
             x: r.x,
         }
     }
@@ -330,6 +405,12 @@ mod tests {
             contributors: vec![],
             first_time_contributors: vec![],
             statistics: None,
+            bundle_manifests: Vec::new(),
+            external_versioner: None,
+            version_field_spec: None,
+            cascade_from: None,
+            visibility: None,
+            satellites: Vec::new(),
             x: Map::new(),
         });
         let json = m.to_json().expect("serialise");
@@ -357,6 +438,12 @@ mod tests {
             contributors: vec![],
             first_time_contributors: vec![],
             statistics: None,
+            bundle_manifests: Vec::new(),
+            external_versioner: None,
+            version_field_spec: None,
+            cascade_from: None,
+            visibility: None,
+            satellites: Vec::new(),
             x: Map::new(),
         });
         let json = m.to_json().expect("serialise");

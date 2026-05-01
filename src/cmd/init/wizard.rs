@@ -47,8 +47,6 @@ use self::{
     welcome::WelcomeStep,
 };
 
-use super::{BootstrapConfiguration, BootstrapProjectInfo};
-
 pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Result<i32> {
     let mut state = WizardState::new(force, preset);
 
@@ -275,7 +273,8 @@ fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
 
     let mut sess = AppSession::initialize_default()?;
 
-    let mut bs_cfg = BootstrapConfiguration::default();
+    // Update each project's internal_deps to `Manual(version)` so
+    // the rewrite step has concrete versions to write.
     let mut versions = HashMap::new();
     let selected_names: Vec<String> = state
         .selected_projects()
@@ -290,12 +289,6 @@ fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
             continue;
         }
 
-        bs_cfg.project.push(BootstrapProjectInfo {
-            qnames: proj.qualified_names().to_owned(),
-            version: proj.version.to_string(),
-            release_commit: None,
-        });
-
         versions.insert(proj.ident(), proj.version.clone());
 
         for dep in &mut proj.internal_deps[..] {
@@ -306,16 +299,6 @@ fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
                     .unwrap_or_default(),
             );
         }
-    }
-
-    let bs_text = toml::to_string_pretty(&bs_cfg)?;
-
-    let mut bs_path = repo.resolve_config_dir();
-    bs_path.push("bootstrap.toml");
-
-    if !bs_path.exists() {
-        let mut f = fs::File::create(&bs_path)?;
-        f.write_all(bs_text.as_bytes())?;
     }
 
     sess.rewrite()?;

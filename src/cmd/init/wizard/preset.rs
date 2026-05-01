@@ -91,9 +91,9 @@ impl Step for PresetSelectionStep {
                 } else {
                     Some(selected)
                 };
-                // 3.0/Wave 1d: ProjectSelectionStep is gone — unit
-                // selection happened in UnifiedSelectionStep before
-                // we got here. Route straight to upstream config.
+                // Unit selection happened upstream in
+                // UnifiedSelectionStep — route straight to upstream
+                // config.
                 StepResult::Next(Box::new(UpstreamConfigStep::new()))
             }
             (KeyCode::Esc, _) => StepResult::Back,

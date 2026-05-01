@@ -2,18 +2,9 @@
 //! configuration in the wizard. Plus the always-on drift detector
 //! that fires at `belaf prepare` time.
 //!
-//! Phase F of `BELAF_MASTER_PLAN.md`. Each `detect_*` function is a
-//! pure scan: takes a [`Repository`], returns a `Vec<DetectorMatch>`.
-//! [`detect_all`] aggregates them; the wizard (Phase I) renders the
-//! results as a confirmable list.
-//!
-//! TODO(belaf-3.0/wave1e): split this 1192-LOC file into
-//! `detector/{hexagonal,tauri,kotlin_jvm,mobile,sdk_cascade,
-//! single_project,nested_monorepo,drift,common}.rs` in a focused
-//! cleanup PR. The new detectors landed in Wave 1e directly here
-//! because each helper function (`is_covered`, `is_tauri_single_source`)
-//! is shared across detectors and needs careful visibility extraction
-//! before a physical split is safe.
+//! Each `detect_*` function is a pure scan: takes a [`Repository`],
+//! returns a `Vec<DetectorMatch>`. [`detect_all`] aggregates them;
+//! the wizard renders the result as a confirmable list.
 //!
 //! Drift detection in [`detect_drift`] runs at every prepare,
 //! regardless of TUI/CI mode (Phase H).

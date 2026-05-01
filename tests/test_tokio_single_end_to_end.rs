@@ -82,10 +82,7 @@ fn tokio_single_init_ci_succeeds_and_writes_config() {
 fn tokio_single_explain_reports_no_release_units() {
     let repo = TestRepo::new();
     fixtures::seed_tokio_single(&repo);
-    repo.write_file(
-        "belaf/config.toml",
-        "upstream_urls = [\"https://github.com/test/tokio-like\"]\n",
-    );
+    let _ = repo.run_belaf_command(&["init", "--force"]);
     repo.commit("seed config");
 
     let out = repo.run_belaf_command_with_env(

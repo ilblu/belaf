@@ -1,9 +1,8 @@
-//! 3.0/Wave 1d — `UnifiedSelectionStep`.
+//! Unified ReleaseUnit selection step.
 //!
-//! Replaces the 2.x split between `DetectorReviewStep` (auto-detected
-//! bundles) and `ProjectSelectionStep` (manual project list). The user
-//! sees one screen with a categorized list and one Space-toggle
-//! interaction model:
+//! One screen with three categories — auto-detected bundles, manual
+//! standalone projects, externally-managed mobile apps — and one
+//! Space-toggle interaction model:
 //!
 //!   🔍 Bundles               (multi-manifest auto-detected units)
 //!   📦 Standalone            (single-manifest projects from loaders)
@@ -13,11 +12,6 @@
 //! `state.detector_excluded` (so they get neither a `[[release_unit]]`
 //! block nor drift firing on them). Toggled-off Standalone items have
 //! their `selected` field set to false.
-//!
-//! Sub-menus for cascade-strategy / Tauri sub-classify / hexagonal-cargo
-//! face-pick are TODO (3.0 follow-up). The current ship handles the
-//! 90% case: review the auto-detected mix, accept-or-exclude, hand off
-//! to the rest of the wizard.
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{

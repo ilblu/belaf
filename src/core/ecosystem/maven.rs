@@ -1,15 +1,8 @@
 //! Maven (Java/Kotlin/Scala) projects.
 //!
-//! TODO(belaf-3.0/wave1b): split this 1521-LOC file into
-//! `maven/{pom_parser,property_resolver,pom_rewriter,util}.rs`. The
-//! Ecosystem trait + ReleaseUnitGraphBuilder rename in Wave 1a/1b
-//! shipped without needing this physical split, but the file should
-//! be modularized as part of a later cleanup PR before BOM-support
-//! and `settings.xml` work in 3.x crosses through it.
-//!
 //! Loads `pom.xml` files into the project graph, then rewrites them on
 //! release. Supports the subset of Maven that real CI-friendly projects
-//! actually need (plan §12):
+//! actually need:
 //!
 //! - Single-module POMs.
 //! - `<parent>` references — rewritten in the child when the parent's
@@ -52,7 +45,6 @@ use tracing::info;
 use crate::{
     atry,
     core::{
-        config::syntax::ProjectConfiguration,
         ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
@@ -135,11 +127,7 @@ impl MavenLoader {
     /// 4. Register one project per POM under user-facing name
     ///    `groupId:artifactId`.
     /// 5. Wire inter-project dependencies into the graph.
-    pub fn into_projects(
-        self,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
+    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
         if self.pom_paths.is_empty() {
             return Ok(());
         }
@@ -192,29 +180,28 @@ impl MavenLoader {
             let user_name = format!("{}:{}", r.group_id, r.artifact_id);
             let qnames = vec![user_name.clone(), "maven".to_owned()];
 
-            if let Some(pid) = app.graph.try_add_project(qnames, pconfig) {
-                let proj = app.graph.lookup_mut(pid);
+            let pid = app.graph.add_project(qnames);
+            let proj = app.graph.lookup_mut(pid);
 
-                let version = atry!(
-                    semver::Version::parse(&r.version)
-                        .map_err(|e| anyhow!("not semver: {e}"));
-                    ["Maven version `{}` for `{}` is not parseable as semver",
-                     r.version, user_name]
-                    (note "belaf 2.0 supports semver-shaped Maven versions only (e.g. 1.2.3, 1.0.0-SNAPSHOT). \
-                     Pure-numeric chains like `1.0` need a third component (`1.0.0`).")
-                );
-                proj.version = Some(Version::Semver(version));
+            let version = atry!(
+                semver::Version::parse(&r.version)
+                    .map_err(|e| anyhow!("not semver: {e}"));
+                ["Maven version `{}` for `{}` is not parseable as semver",
+                 r.version, user_name]
+                (note "belaf supports semver-shaped Maven versions only (e.g. 1.2.3, 1.0.0-SNAPSHOT). \
+                 Pure-numeric chains like `1.0` need a third component (`1.0.0`).")
+            );
+            proj.version = Some(Version::Semver(version));
 
-                let (prefix, _) = parsed[idx].repo_path.split_basename();
-                proj.prefix = Some(prefix.to_owned());
+            let (prefix, _) = parsed[idx].repo_path.split_basename();
+            proj.prefix = Some(prefix.to_owned());
 
-                proj.rewriters.push(Box::new(MavenRewriter::new(
-                    pid,
-                    parsed[idx].repo_path.clone(),
-                )));
+            proj.rewriters.push(Box::new(MavenRewriter::new(
+                pid,
+                parsed[idx].repo_path.clone(),
+            )));
 
-                idx_to_pid.insert(idx, pid);
-            }
+            idx_to_pid.insert(idx, pid);
         }
 
         // Phase 5: inter-project deps. Both `<dependencies>` and `<parent>`
@@ -296,18 +283,13 @@ impl Ecosystem for MavenLoader {
         _repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        _pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         self.record_path(dirname, basename);
         Ok(())
     }
 
-    fn finalize(
-        self: Box<Self>,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
-        (*self).into_projects(app, pconfig)
+    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
+        (*self).into_projects(app)
     }
 }
 

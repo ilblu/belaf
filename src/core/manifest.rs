@@ -95,8 +95,50 @@ impl ProjectRelease {
             contributors: Vec::new(),
             first_time_contributors: Vec::new(),
             statistics: None,
+            bundle_manifests: Vec::new(),
+            external_versioner: None,
+            version_field_spec: None,
+            cascade_from: None,
+            visibility: None,
+            satellites: Vec::new(),
             x: Map::new(),
         }
+    }
+
+    pub fn with_bundle_manifests(mut self, paths: Vec<String>) -> Self {
+        self.bundle_manifests = paths;
+        self
+    }
+
+    pub fn with_external_versioner(
+        mut self,
+        ext: crate::core::wire::domain::ExternalVersionerWire,
+    ) -> Self {
+        self.external_versioner = Some(ext);
+        self
+    }
+
+    pub fn with_version_field_spec(mut self, spec: impl Into<String>) -> Self {
+        self.version_field_spec = Some(spec.into());
+        self
+    }
+
+    pub fn with_cascade_from(
+        mut self,
+        cascade: crate::core::wire::domain::CascadeFromWire,
+    ) -> Self {
+        self.cascade_from = Some(cascade);
+        self
+    }
+
+    pub fn with_visibility(mut self, visibility: impl Into<String>) -> Self {
+        self.visibility = Some(visibility.into());
+        self
+    }
+
+    pub fn with_satellites(mut self, paths: Vec<String>) -> Self {
+        self.satellites = paths;
+        self
     }
 
     pub fn with_group_id(mut self, group_id: impl Into<String>) -> Self {

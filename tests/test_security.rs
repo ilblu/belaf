@@ -31,7 +31,8 @@ edition = "2021"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let bootstrap = repo.read_file("belaf/bootstrap.toml");
+    let status_output = repo.run_belaf_command(&["status"]);
+    let bootstrap = String::from_utf8_lossy(&status_output.stdout).to_string();
     assert!(
         bootstrap.contains("legitimate-package"),
         "Legitimate package should be detected"
@@ -106,7 +107,8 @@ edition = "2021"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let bootstrap = repo.read_file("belaf/bootstrap.toml");
+    let status_output = repo.run_belaf_command(&["status"]);
+    let bootstrap = String::from_utf8_lossy(&status_output.stdout).to_string();
     assert!(
         bootstrap.contains(&long_name),
         "Long package name should be detected"
@@ -220,7 +222,8 @@ edition = "2021"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let bootstrap = repo.read_file("belaf/bootstrap.toml");
+    let status_output = repo.run_belaf_command(&["status"]);
+    let bootstrap = String::from_utf8_lossy(&status_output.stdout).to_string();
     assert!(
         bootstrap.contains("deep-package"),
         "Deep package should be detected"
@@ -368,7 +371,8 @@ fn test_json_with_special_characters() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let bootstrap = repo.read_file("belaf/bootstrap.toml");
+    let status_output = repo.run_belaf_command(&["status"]);
+    let bootstrap = String::from_utf8_lossy(&status_output.stdout).to_string();
     assert!(
         bootstrap.contains("test-package"),
         "Package should be detected despite special chars in description"
@@ -436,7 +440,8 @@ edition = "2021"
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let bootstrap = repo.read_file("belaf/bootstrap.toml");
+    let status_output = repo.run_belaf_command(&["status"]);
+    let bootstrap = String::from_utf8_lossy(&status_output.stdout).to_string();
     let name_count = bootstrap.matches("shared-name").count();
     assert!(
         name_count >= 2,

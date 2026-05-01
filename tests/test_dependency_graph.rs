@@ -325,7 +325,8 @@ workspace-lib-a = { path = "../lib-a" }
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let bootstrap = repo.read_file("belaf/bootstrap.toml");
+    let status_output = repo.run_belaf_command(&["status"]);
+    let bootstrap = String::from_utf8_lossy(&status_output.stdout).to_string();
     assert!(
         bootstrap.contains("workspace-lib-a") || bootstrap.contains("lib-a"),
         "Should detect workspace-lib-a. Bootstrap: {bootstrap}"
@@ -385,7 +386,8 @@ fn test_npm_workspace_dependencies() {
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let bootstrap = repo.read_file("belaf/bootstrap.toml");
+    let status_output = repo.run_belaf_command(&["status"]);
+    let bootstrap = String::from_utf8_lossy(&status_output.stdout).to_string();
     assert!(
         bootstrap.contains("@myorg/core") || bootstrap.contains("core"),
         "Should detect @myorg/core"
@@ -448,7 +450,8 @@ setup()
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let bootstrap = repo.read_file("belaf/bootstrap.toml");
+    let status_output = repo.run_belaf_command(&["status"]);
+    let bootstrap = String::from_utf8_lossy(&status_output.stdout).to_string();
     assert!(
         bootstrap.contains("mixed-rust"),
         "Should detect Rust package"

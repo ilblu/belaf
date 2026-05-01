@@ -1,16 +1,13 @@
 //! `belaf explain` — print attribution per ReleaseUnit.
 //!
-//! Phase K of `BELAF_MASTER_PLAN.md`. Reads the config file,
-//! resolves all `[[release_unit]]` + `[[release_unit_glob]]` entries,
-//! and prints provenance for each one (which detector / TOML line /
-//! glob expansion produced it). Useful for debugging unexpected
-//! configs.
+//! Reads the config file, resolves all `[[release_unit]]` /
+//! `[[release_unit_glob]]` entries, and prints provenance for each
+//! one (detector / TOML line / glob expansion).
 //!
-//! 3.0/Wave 1g: `--format=json` emits a serde-derived payload that
-//! the github-app dashboard's `/api/cli/explain/:owner/:repo`
-//! endpoint will proxy to dashboard users. JSON shape is treated as
-//! a stable contract — additions land as new optional fields,
-//! removals require a 3.x → 4.x bump.
+//! `--format=json` emits a structured payload consumed by the
+//! github-app dashboard. The JSON shape is a stable contract —
+//! additions land as new optional fields, removals require a major
+//! bump.
 
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;

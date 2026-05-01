@@ -16,7 +16,7 @@ use petgraph::{
 use std::collections::{HashMap, HashSet};
 
 use crate::core::{
-    config::syntax::{GroupConfig, ProjectConfiguration},
+    config::syntax::GroupConfig,
     errors::Result,
     git::repository::{RepoHistory, Repository},
     group::{Group, GroupId, GroupSet},
@@ -220,43 +220,16 @@ impl ReleaseUnitGraphBuilder {
         }
     }
 
-    /// Request to register a new project with the graph.
-    ///
-    /// The request may be denied if the user has specified that
-    /// the project should be ignored.
-    pub fn try_add_project(
-        &mut self,
-        qnames: Vec<String>,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Option<ReleaseUnitId> {
-        // Not the most elegant ... I can't get join() to work here due to the
-        // rev(), though.
-
-        let mut full_name = String::new();
-
-        for term in qnames.iter().rev() {
-            if !full_name.is_empty() {
-                full_name.push(':')
-            }
-
-            full_name.push_str(term);
-        }
-
-        let ignore = pconfig
-            .get(&full_name)
-            .map(|c| c.ignore)
-            .unwrap_or_default();
-        if ignore {
-            return None;
-        }
-
+    /// Register a new project with the graph and return its
+    /// identifier.
+    pub fn add_project(&mut self, qnames: Vec<String>) -> ReleaseUnitId {
         let mut pbuilder = ResolvedReleaseUnitBuilder::new();
         pbuilder.qnames = qnames;
 
         let id = self.projects.len();
         self.projects.push(pbuilder);
         self.node_ixs.push(self.graph.add_node(id));
-        Some(id)
+        id
     }
 
     /// Get a mutable reference to a project buider from its ID.
@@ -626,13 +599,10 @@ mod tests {
     fn do_name_assignment_test(spec: &[(&[&str], &str)]) -> Result<()> {
         let mut graph = ReleaseUnitGraphBuilder::new();
         let mut ids = HashMap::new();
-        let empty_config = HashMap::new();
 
         for (qnames, user_facing) in spec {
             let qnames = qnames.iter().map(|s| (*s).to_owned()).collect();
-            let projid = graph
-                .try_add_project(qnames, &empty_config)
-                .expect("BUG: test project should be added successfully");
+            let projid = graph.add_project(qnames);
             let b = graph.lookup_mut(projid);
             b.version = Some(Version::Semver(semver::Version::new(0, 0, 0)));
             b.prefix = Some(RepoPathBuf::new(b""));
@@ -688,11 +658,8 @@ mod tests {
     }
 
     fn create_test_project(graph: &mut ReleaseUnitGraphBuilder, name: &str) -> ReleaseUnitId {
-        let empty_config = HashMap::new();
         let qnames = vec![name.to_owned(), "test".to_owned()];
-        let projid = graph
-            .try_add_project(qnames, &empty_config)
-            .expect("BUG: test project should be added successfully");
+        let projid = graph.add_project(qnames);
         let b = graph.lookup_mut(projid);
         b.version = Some(Version::Semver(semver::Version::new(0, 0, 0)));
         b.prefix = Some(RepoPathBuf::new(name.as_bytes()));

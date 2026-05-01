@@ -11,9 +11,9 @@ expression: out
 "│ │🔗 Repository                                 ││⚡ Actions                                    │ │" Hidden by multi-width symbols: [(4, " "), (52, " ")]
 "│ │   https://github.com/example/repo            ││                                              │ │"
 "│ │                                              ││   📄 Create belaf/config.toml                │ │" Hidden by multi-width symbols: [(55, " ")]
-"│ │📦 Projects (2)                               ││   📄 Create belaf/bootstrap.toml             │ │" Hidden by multi-width symbols: [(4, " "), (55, " ")]
-"│ │   ✅ alpha @ 0.1.0                           ││   ✏️  Update project version files           │ │" Hidden by multi-width symbols: [(7, " "), (55, " ")]
-"│ │   ✅ beta @ 0.2.3                            ││   🏷️  Create baseline Git tags               │ │" Hidden by multi-width symbols: [(7, " "), (55, " ")]
+"│ │📦 Projects (2)                               ││   ✏️  Update project version files           │ │" Hidden by multi-width symbols: [(4, " "), (55, " ")]
+"│ │   ✅ alpha @ 0.1.0                           ││   🏷️  Create baseline Git tags               │ │" Hidden by multi-width symbols: [(7, " "), (55, " ")]
+"│ │   ✅ beta @ 0.2.3                            ││                                              │ │" Hidden by multi-width symbols: [(7, " ")]
 "│ │                                              ││                                              │ │"
 "│ │                                              ││                                              │ │"
 "│ │                                              ││                                              │ │"

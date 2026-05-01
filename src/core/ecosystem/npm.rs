@@ -22,7 +22,6 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
     core::{
-        config::syntax::ProjectConfiguration,
         ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
@@ -57,7 +56,6 @@ impl NpmLoader {
         repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         if basename.as_ref() != b"package.json" {
             return Ok(());
@@ -118,7 +116,8 @@ impl NpmLoader {
 
         let qnames = vec![name.to_owned(), "npm".to_owned()];
 
-        if let Some(ident) = graph.try_add_project(qnames, pconfig) {
+        let ident = graph.add_project(qnames);
+        {
             let proj = graph.lookup_mut(ident);
             proj.prefix = Some(dirname.to_owned());
             proj.version = Some(Version::Semver(version));
@@ -141,17 +140,10 @@ impl NpmLoader {
         Ok(())
     }
 
-    pub fn into_projects(
-        self,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
+    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
         for (name, load_data) in &self.npm_to_graph {
-            let strict_validation = pconfig
-                .get(name)
-                .and_then(|c| c.npm.as_ref())
-                .map(|n| n.strict_dependency_validation)
-                .unwrap_or(false);
+            let _ = name;
+            let strict_validation = false;
 
             let maybe_internal_specs = load_data
                 .pkg_data
@@ -226,17 +218,12 @@ impl Ecosystem for NpmLoader {
         repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
-        self.record_path(repo, graph, repopath, dirname, basename, pconfig)
+        self.record_path(repo, graph, repopath, dirname, basename)
     }
 
-    fn finalize(
-        self: Box<Self>,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
-        (*self).into_projects(app, pconfig)
+    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
+        (*self).into_projects(app)
     }
 }
 

@@ -20,7 +20,6 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     a_ok_or, atry,
     core::{
-        config::syntax::ProjectConfiguration,
         ecosystem::registry::Ecosystem,
         errors::{Error, Result},
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
@@ -53,11 +52,7 @@ impl PypaLoader {
     }
 
     /// Drains the loader into the [`AppBuilder`].
-    pub fn into_projects(
-        self,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
+    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
         let mut pypa_projects: HashMap<String, PypaProjectData> = HashMap::new();
         let mut project_configs: HashMap<String, (Option<PyProjectBelaf>, RepoPathBuf)> =
             HashMap::new();
@@ -320,7 +315,8 @@ impl PypaLoader {
 
             let qnames = vec![name.clone(), "pypa".to_owned()];
 
-            if let Some(ident) = app.graph.try_add_project(qnames, pconfig) {
+            let ident = app.graph.add_project(qnames);
+            {
                 {
                     let proj = app.graph.lookup_mut(ident);
 
@@ -452,18 +448,13 @@ impl Ecosystem for PypaLoader {
         _repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        _pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         self.record_path(dirname, basename);
         Ok(())
     }
 
-    fn finalize(
-        self: Box<Self>,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
-        (*self).into_projects(app, pconfig)
+    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
+        (*self).into_projects(app)
     }
 }
 

@@ -1,6 +1,7 @@
 # ADR 0002 — `belaf/bootstrap.toml` retirement
 
-- **Status**: Accepted in principle, deferred in implementation (belaf 3.0)
+- **Status**: Implemented in 3.0 (writer retired; runtime reader kept
+  as an inert backward-compat shim for old configs)
 - **Date**: 2026-05-01
 
 ## Context
@@ -39,21 +40,29 @@ new module `core/release_unit/initial_state.rs`:
   resolver pipeline, populated against the freshly-derived initial
   states.
 
-## Status
+## Status (implemented in 3.0)
 
-**Deferred to a focused follow-up PR**, marked at the top of
-`src/cmd/init.rs` as `TODO(belaf-3.0/wave1f)`. Two reasons for the
-deferral:
+The init-time writer was retired in both `cmd::init::run` and
+`cmd::init::wizard::run`. The dep-requirement update walk (which
+converts each project's `internal_deps[i].belaf_requirement` from
+`Commit(...)` to `Manual(version)`) was inlined directly — no
+serialisation to disk.
 
-1. The bootstrap writer in `cmd::init::run` and `cmd::init::wizard::run`
-   walks the toposorted graph and sets `dep.belaf_requirement =
-   Manual(version)`. Retiring the writer requires routing that
-   dep-resolution through the resolver pipeline first — a self-contained
-   refactor that wants its own attention.
-2. `core/git/repository.rs` currently reads `bootstrap.toml`
-   conditionally (silently no-ops if missing); the runtime path is
-   functional with or without the file. Retiring it is architectural
-   cleanup, not a 3.0 functional blocker.
+Two pieces are intentionally **not** retired:
+
+1. The runtime reader in `core/git/repository.rs:281-309` stays. It
+   silently no-ops when the file doesn't exist (which is the new
+   default for fresh 3.0 installs) and reads the file when it does
+   (so 2.x configs that still have a bootstrap.toml continue to work
+   without surprise).
+2. The global `belaf-baseline` git tag stays. With the writer gone,
+   it's now the single source of truth for "before any
+   project-specific tag existed" — exactly what (1) was redundantly
+   tracking in the file. Per-unit `belaf-baseline-<name>` tags
+   remain a 3.x architectural improvement rather than a 3.0 ship-blocker.
+
+The `BootstrapConfiguration` / `BootstrapProjectInfo` types stay as
+inert backward-compat shims for the reader path.
 
 ## Consequences (when implemented)
 

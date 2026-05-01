@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use std::{
     fs::File,
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
 };
 use thiserror::Error as ThisError;
@@ -18,11 +18,10 @@ use uuid::Uuid;
 
 use crate::{
     atry,
-    cmd::init::BootstrapConfiguration,
     core::{
         bump::{extract_scope, ScopeMatcher},
         config::syntax::RepoConfiguration,
-        errors::{Error, Result},
+        errors::Result,
         resolved_release_unit::{DepRequirement, ResolvedReleaseUnit},
         version::Version,
     },
@@ -74,10 +73,6 @@ pub struct Repository {
     /// The name of the "upstream" remote.
     upstream_name: String,
 
-    /// "Bootstrap" versioning information used to tell us where versions were at
-    /// before the first Belaf release commit.
-    bootstrap_info: BootstrapConfiguration,
-
     /// Analysis configuration for LRU cache sizes.
     analysis_config: crate::core::config::syntax::AnalysisConfig,
 }
@@ -104,7 +99,6 @@ impl Repository {
         Ok(Repository {
             repo,
             upstream_name,
-            bootstrap_info: BootstrapConfiguration::default(),
             analysis_config: crate::core::config::syntax::AnalysisConfig {
                 commit_cache_size: 512,
                 tree_cache_size: 3,
@@ -155,7 +149,6 @@ impl Repository {
         Ok(Repository {
             repo,
             upstream_name: upstream_name.to_owned(),
-            bootstrap_info: BootstrapConfiguration::default(),
             analysis_config,
         })
     }
@@ -278,42 +271,6 @@ impl Repository {
         };
 
         self.analysis_config = cfg.analysis;
-
-        // While we're here, let's also read in the versioning bootstrap
-        // information, if it's available.
-
-        let mut bs_path = self.resolve_config_dir();
-        bs_path.push("bootstrap.toml");
-
-        let maybe_file = match File::open(&bs_path) {
-            Ok(f) => Some(f),
-
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    None
-                } else {
-                    return Err(Error::new(e).context(format!(
-                        "failed to open config file `{}`",
-                        bs_path.display()
-                    )));
-                }
-            }
-        };
-
-        if let Some(mut f) = maybe_file {
-            let mut text = String::new();
-            atry!(
-                f.read_to_string(&mut text);
-                ["failed to read bootstrap file `{}`", bs_path.display()]
-            );
-
-            self.bootstrap_info = atry!(
-                toml::from_str(&text);
-                ["could not parse bootstrap file `{}` as TOML", bs_path.display()]
-            );
-        }
-
-        // All done.
         Ok(())
     }
 
@@ -575,19 +532,10 @@ impl Repository {
     }
 
     /// Get a ReleaseCommitInfo corresponding to the project's history before
-    /// Belaf.
+    /// Belaf. Always empty in 3.0 — the per-project release history is
+    /// derived from git tags + the `belaf-baseline` tag.
     fn get_bootstrap_release_info(&self) -> ReleaseCommitInfo {
-        let mut rel_info = ReleaseCommitInfo::default();
-
-        for bs_info in &self.bootstrap_info.project[..] {
-            rel_info.projects.push(ReleasedProjectInfo {
-                qnames: bs_info.qnames.clone(),
-                version: bs_info.version.clone(),
-                age: 999,
-            })
-        }
-
-        rel_info
+        ReleaseCommitInfo::default()
     }
 
     pub fn get_signature(&self) -> Result<git2::Signature<'_>> {

@@ -537,6 +537,67 @@ impl<'a> ReleasePipeline<'a> {
                 release = release.with_group_id(g.id.as_str());
             }
 
+            // Carry typed wire fields from the ResolvedReleaseUnit, if
+            // the user declared one. Auto-detected projects (no source
+            // unit) leave the fields at their empty defaults.
+            if let Some(unit) = self
+                .sess
+                .resolved_release_units()
+                .iter()
+                .find(|r| r.unit.name == project.name)
+            {
+                if let crate::core::release_unit::VersionSource::Manifests(ms) = &unit.unit.source {
+                    let bundle: Vec<String> =
+                        ms.iter().map(|m| m.path.escaped().to_string()).collect();
+                    if !bundle.is_empty() {
+                        release = release.with_bundle_manifests(bundle);
+                    }
+                    // version_field_spec — use the first manifest's
+                    // spec as the unit-level value (multi-manifest
+                    // bundles share the same ecosystem and so the
+                    // same spec; mixed-spec is rejected by the
+                    // resolver in Phase B).
+                    if let Some(first) = ms.first() {
+                        release = release.with_version_field_spec(first.version_field.wire_key());
+                    }
+                }
+                if let crate::core::release_unit::VersionSource::External(ext) = &unit.unit.source {
+                    release = release.with_external_versioner(
+                        crate::core::wire::domain::ExternalVersionerWire {
+                            tool: ext.tool.clone(),
+                            read_command: Some(ext.read_command.clone()),
+                            write_command: Some(ext.write_command.clone()),
+                            cwd: ext.cwd.as_ref().map(|p| p.escaped().to_string()),
+                            timeout_sec: Some(ext.timeout_sec as i64),
+                            env: if ext.env.is_empty() {
+                                None
+                            } else {
+                                Some(ext.env.clone())
+                            },
+                        },
+                    );
+                }
+                if !unit.unit.satellites.is_empty() {
+                    release = release.with_satellites(
+                        unit.unit
+                            .satellites
+                            .iter()
+                            .map(|p| p.escaped().to_string())
+                            .collect(),
+                    );
+                }
+                if let Some(cascade) = &unit.unit.cascade_from {
+                    release =
+                        release.with_cascade_from(crate::core::wire::domain::CascadeFromWire {
+                            source: cascade.source.clone(),
+                            bump: cascade.bump.wire_key().to_string(),
+                        });
+                }
+                if unit.unit.visibility != crate::core::release_unit::Visibility::Public {
+                    release = release.with_visibility(unit.unit.visibility.wire_key());
+                }
+            }
+
             if let Some(base_url) = &github_base_url {
                 release = release.with_compare_url(base_url, |tag| self.sess.repo.tag_exists(tag));
             }
@@ -860,13 +921,12 @@ pub fn generate_changelog_entry(
 }
 
 /// Resolve the per-release tag name using the precedence chain:
-/// `[group.<id>.tag_format]` > the ecosystem trait's
-/// `tag_format_default()`. The legacy `[projects."name".tag_format]`
-/// fallback was removed in 3.0/Wave 1c. The ecosystem registry is
-/// instantiated fresh here (the Loader instances are stateless once
-/// `finalize` has run).
+/// `[[release_unit]].tag_format` > `[group.<id>.tag_format]` > the
+/// ecosystem trait's `tag_format_default()`. The ecosystem registry
+/// is instantiated fresh here
+/// (the Loader instances are stateless once `finalize` has run).
 fn build_tag_name(
-    _sess: &AppSession,
+    sess: &AppSession,
     project: &SelectedProject,
     groups: &GroupSet,
 ) -> Result<String> {
@@ -879,15 +939,17 @@ fn build_tag_name(
         )
     })?;
 
-    // 3.0/Wave 1c: dropped legacy `[projects."<name>"].tag_format`
-    // precedence — release-unit-level overrides now live exclusively
-    // on `[[release_unit]].tag_format` (plumbing TODO once
-    // ResolvedReleaseUnit carries the field). For 3.0 ship-1, only
-    // group-level + ecosystem-default precedence remains active.
+    // tag-format precedence: explicit [[release_unit]] > [group.<id>]
+    // > ecosystem default.
+    let unit_override = sess
+        .resolved_release_units()
+        .iter()
+        .find(|r| r.unit.name == project.name)
+        .and_then(|r| r.unit.tag_format.as_deref());
     let group_override = groups
         .group_of(project.ident)
         .and_then(|g| g.tag_format.as_deref());
-    let template = group_override;
+    let template = unit_override.or(group_override);
 
     let maven_coords = if eco_name == "maven" {
         split_maven_coords(&project.name)

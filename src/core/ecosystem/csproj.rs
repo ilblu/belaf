@@ -17,7 +17,6 @@ use tracing::{info, warn};
 use crate::{
     a_ok_or, atry,
     core::{
-        config::syntax::ProjectConfiguration,
         ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
@@ -69,11 +68,7 @@ impl CsProjLoader {
     }
 
     /// Drains the loader into the [`AppBuilder`].
-    pub fn into_projects(
-        mut self,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
+    pub fn into_projects(mut self, app: &mut AppBuilder) -> Result<()> {
         // Scan any vdproj files that might be associated with projects.
 
         let mut guid_to_vdproj: HashMap<String, Vec<RepoPathBuf>> = HashMap::new();
@@ -382,7 +377,8 @@ impl CsProjLoader {
 
             let qnames = vec![name.to_owned(), "csproj".to_owned()];
 
-            if let Some(ident) = app.graph.try_add_project(qnames, pconfig) {
+            let ident = app.graph.add_project(qnames);
+            {
                 let proj = app.graph.lookup_mut(ident);
                 proj.prefix = Some(repodir.to_owned());
                 proj.version = Some(version);
@@ -459,17 +455,12 @@ impl Ecosystem for CsProjLoader {
         repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        _pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         self.record_path(repo, repopath, dirname, basename)
     }
 
-    fn finalize(
-        self: Box<Self>,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
-        (*self).into_projects(app, pconfig)
+    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
+        (*self).into_projects(app)
     }
 }
 

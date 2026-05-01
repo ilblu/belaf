@@ -149,13 +149,6 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState) {
             Span::styled("Create belaf/config.toml", Style::default().fg(Color::Gray)),
         ]),
         Line::from(vec![
-            Span::styled("   📄 ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                "Create belaf/bootstrap.toml",
-                Style::default().fg(Color::Gray),
-            ),
-        ]),
-        Line::from(vec![
             Span::styled("   ✏️  ", Style::default().fg(Color::Yellow)),
             Span::styled(
                 "Update project version files",
