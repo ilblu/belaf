@@ -1,22 +1,23 @@
 ---
 source: src/cmd/init/wizard/unified_selection.rs
+assertion_line: 628
 expression: out
 ---
 "┌ ReleaseUnit Selection ───────────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
-"│                  📋 Review and toggle each ReleaseUnit you want belaf to manage                  │" Hidden by multi-width symbols: [(20, " ")]
+"│                   ❖ Review and toggle each ReleaseUnit you want belaf to manage                  │"
 "│                                            2 / 3 selected                                        │"
 "│                               • 1 mobile-app(s) → [allow_uncovered]                              │"
 "│┌────────────────────────────────────────────────────────────────────────────────────────────────┐│"
-"││ 🔍 Bundles                                                                                     ││" Hidden by multi-width symbols: [(4, " ")]
-"││  ✅ apps/desktop  tauri (single-source)                                                        ││" Hidden by multi-width symbols: [(5, " ")]
-"││ 📦 Standalone                                                                                  ││" Hidden by multi-width symbols: [(4, " ")]
-"││  ✅ alpha  @ 0.1.0 (crates/alpha)                                                              ││" Hidden by multi-width symbols: [(5, " ")]
-"││  ⬜ beta  @ 0.2.3 (crates/beta)                                                                ││" Hidden by multi-width symbols: [(5, " ")]
-"││ 📱 Externally-managed                                                                          ││" Hidden by multi-width symbols: [(4, " ")]
-"││  — apps/ios  iOS app — auto [allow_uncovered]                                                  ││"
+"││ ⬢  Bundles                                                                                     ││"
+"││    ● apps/desktop  tauri (single-source)                                                       ││"
 "││                                                                                                ││"
+"││ ◆  Standalone                                                                                  ││"
+"││    ● alpha         @ 0.1.0 (crates/alpha)                                                      ││"
+"││    ○ beta          @ 0.2.3 (crates/beta)                                                       ││"
 "││                                                                                                ││"
+"││ ◇  Externally-managed                                                                          ││"
+"││    — apps/ios      iOS app — auto [allow_uncovered]                                            ││"
 "││                                                                                                ││"
 "││                                                                                                ││"
 "││                                                                                                ││"

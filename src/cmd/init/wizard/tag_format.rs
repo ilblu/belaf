@@ -228,6 +228,7 @@ mod tests {
             version: "0.1.0".into(),
             prefix: "crates/alpha".into(),
             selected: true,
+            ecosystem: None,
         }];
         let mut step = TagFormatStep::new();
         let out = render_to_string(&mut step, &state, 80, 24);
@@ -241,6 +242,7 @@ mod tests {
             version: "1.0.0".to_string(),
             prefix: ".".to_string(),
             selected: true,
+            ecosystem: None,
         }];
         state.tag_format_override = tag_format.map(String::from);
         state

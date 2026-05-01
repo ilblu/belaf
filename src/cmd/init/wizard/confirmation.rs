@@ -202,12 +202,14 @@ mod tests {
                 version: "0.1.0".into(),
                 prefix: "crates/alpha".into(),
                 selected: true,
+                ecosystem: None,
             },
             DetectedUnit {
                 name: "beta".into(),
                 version: "0.2.3".into(),
                 prefix: "crates/beta".into(),
                 selected: true,
+                ecosystem: None,
             },
         ];
         let mut step = ConfirmationStep::new();

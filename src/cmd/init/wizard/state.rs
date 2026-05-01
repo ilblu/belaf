@@ -17,6 +17,10 @@ pub struct DetectedUnit {
     pub version: String,
     pub prefix: String,
     pub selected: bool,
+    /// Ecosystem identifier (`cargo`, `npm`, `pypa`, …) sourced from
+    /// the loader. Used by the wizard to pick a per-row icon when
+    /// `BELAF_ICONS=nerd` is set.
+    pub ecosystem: Option<String>,
 }
 
 #[derive(Debug)]

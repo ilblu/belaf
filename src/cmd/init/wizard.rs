@@ -6,6 +6,7 @@
 //! returned. Concrete steps live in their own modules.
 
 pub mod confirmation;
+pub mod glyphs;
 pub mod preset;
 pub mod single_mobile;
 pub mod state;
@@ -94,11 +95,18 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
             prefix.escaped()
         };
 
+        // qnames are `[<user-facing-name>, <ecosystem>]` per the loader
+        // contract (see e.g. `MavenLoader::into_projects`). The
+        // ecosystem string drives the per-row icon when nerd-mode is
+        // active.
+        let ecosystem = unit.qualified_names().get(1).cloned();
+
         state.standalone_units.push(DetectedUnit {
             name: unit.user_facing_name.clone(),
             version: unit.version.to_string(),
             prefix: prefix_str,
             selected: true,
+            ecosystem,
         });
     }
 

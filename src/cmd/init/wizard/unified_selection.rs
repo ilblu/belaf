@@ -59,6 +59,10 @@ struct Row {
     /// `state.detection.matches[i]` or `state.standalone_units[i]`. Mobile
     /// rows do not need a backref because they're read-only.
     backref: BackRef,
+    /// Loader ecosystem (`cargo`, `npm`, `pypa`, …) — drives the
+    /// per-row glyph in `BELAF_ICONS=nerd` mode. Empty in the
+    /// default Unicode mode (no ecosystem column rendered).
+    ecosystem: Option<String>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -96,12 +100,14 @@ impl UnifiedSelectionStep {
                 continue;
             }
             let kind_label = detector_kind_label(&m.kind);
+            let ecosystem = ecosystem_for_detector_kind(&m.kind);
             self.rows.push(Row {
                 category: RowCategory::Bundle,
                 label: m.path.escaped().to_string(),
                 secondary: kind_label,
                 selected: !state.detector_excluded.contains(&m.path),
                 backref: BackRef::Detection(idx),
+                ecosystem,
             });
         }
 
@@ -113,6 +119,7 @@ impl UnifiedSelectionStep {
                 secondary: format!("@ {} ({})", p.version, p.prefix),
                 selected: p.selected,
                 backref: BackRef::Standalone(idx),
+                ecosystem: p.ecosystem.clone(),
             });
         }
 
@@ -133,6 +140,10 @@ impl UnifiedSelectionStep {
                     // post-init.
                     selected: true,
                     backref: BackRef::Mobile,
+                    ecosystem: Some(match platform {
+                        MobilePlatform::Ios => "swift".to_string(),
+                        MobilePlatform::Android => "kotlin".to_string(),
+                    }),
                 });
             }
         }
@@ -290,6 +301,31 @@ impl Step for UnifiedSelectionStep {
     }
 }
 
+/// Map a detector match to the ecosystem identifier used by the
+/// glyph module. Returns `None` when the kind doesn't pin an
+/// ecosystem (e.g. nested-monorepo).
+fn ecosystem_for_detector_kind(kind: &DetectorKind) -> Option<String> {
+    use crate::core::release_unit::detector::SingleProjectEcosystem;
+    Some(match kind {
+        DetectorKind::HexagonalCargo { .. } => "hexagonal-cargo".to_string(),
+        DetectorKind::Tauri { .. } => "tauri".to_string(),
+        DetectorKind::JvmLibrary { .. } => "kotlin".to_string(),
+        DetectorKind::MobileApp { .. } => return None,
+        DetectorKind::NestedNpmWorkspace => "npm".to_string(),
+        DetectorKind::SdkCascadeMember => "cascade".to_string(),
+        DetectorKind::SingleProject { ecosystem } => match ecosystem {
+            SingleProjectEcosystem::Cargo => "cargo".to_string(),
+            SingleProjectEcosystem::Npm => "npm".to_string(),
+            SingleProjectEcosystem::Pypa => "pypa".to_string(),
+            SingleProjectEcosystem::Go => "go".to_string(),
+            SingleProjectEcosystem::Maven => "maven".to_string(),
+            SingleProjectEcosystem::Swift => "swift".to_string(),
+            SingleProjectEcosystem::Elixir => "elixir".to_string(),
+        },
+        DetectorKind::NestedMonorepo => return None,
+    })
+}
+
 fn detector_kind_label(kind: &DetectorKind) -> String {
     use crate::core::release_unit::detector::{HexagonalPrimary, JvmVersionSource};
     match kind {
@@ -328,6 +364,8 @@ fn detector_kind_label(kind: &DetectorKind) -> String {
 }
 
 fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
+    use super::glyphs;
+
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
@@ -368,7 +406,10 @@ fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
     let mut header = vec![
         Line::from(""),
         Line::from(vec![
-            Span::styled("📋 ", Style::default()),
+            Span::styled(
+                format!("{} ", glyphs::header_clipboard()),
+                Style::default().fg(Color::Cyan),
+            ),
             Span::styled(
                 "Review and toggle each ReleaseUnit you want belaf to manage",
                 Style::default().fg(Color::White),
@@ -404,28 +445,56 @@ fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
         chunks[0],
     );
 
-    // List, with per-category headers injected as non-selectable rows.
-    let mut items: Vec<ListItem> = Vec::with_capacity(rows.len() + 4);
+    // Compute the longest visible label per category so the secondary
+    // column lines up across rows.  Width is in *display columns* —
+    // we approximate via UnicodeSegmentation graphemes.  Good enough
+    // for the ASCII paths/names we render here.
+    let label_width = rows
+        .iter()
+        .map(|r| r.label.chars().count())
+        .max()
+        .unwrap_or(0);
+
+    let mut items: Vec<ListItem> = Vec::with_capacity(rows.len() + 8);
     let mut last_cat: Option<RowCategory> = None;
     for (idx, row) in rows.iter().enumerate() {
         if last_cat != Some(row.category) {
-            items.push(ListItem::new(Line::from(Span::styled(
-                category_header(row.category),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ))));
+            // Insert a blank visual separator before every category
+            // header except the first — gives the eye a clear break
+            // between Bundles / Standalone / Externally-managed.
+            if last_cat.is_some() {
+                items.push(ListItem::new(Line::from("")));
+            }
+            items.push(ListItem::new(Line::from(vec![
+                Span::styled(" ", Style::default()),
+                Span::styled(
+                    format!("{}  ", glyphs::category_glyph(category_name(row.category))),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    category_name(row.category).to_string(),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            ])));
             last_cat = Some(row.category);
         }
 
         let is_current = idx == cursor;
         let indicator = match row.category {
-            RowCategory::ExternallyManaged => "—",
+            RowCategory::ExternallyManaged => glyphs::locked(),
+            _ => glyphs::checkbox(row.selected),
+        };
+        let indicator_color = match row.category {
+            RowCategory::ExternallyManaged => Color::DarkGray,
             _ => {
                 if row.selected {
-                    "✅"
+                    Color::Green
                 } else {
-                    "⬜"
+                    Color::DarkGray
                 }
             }
         };
@@ -448,14 +517,27 @@ fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
             Style::default()
         };
 
+        // Build the row spans.  Indent + checkbox + ecosystem (nerd
+        // mode only) + padded label + secondary.
+        let eco_glyph = row
+            .ecosystem
+            .as_deref()
+            .map(glyphs::ecosystem)
+            .unwrap_or("");
+        let pad = label_width.saturating_sub(row.label.chars().count());
+        let padded_label = format!("{}{}", row.label, " ".repeat(pad));
+
         items.push(
             ListItem::new(Line::from(vec![
-                Span::styled(format!("  {} ", indicator), Style::default()),
-                Span::styled(row.label.clone(), label_style),
+                Span::styled("    ", Style::default()),
                 Span::styled(
-                    format!("  {}", row.secondary),
-                    Style::default().fg(Color::Gray),
+                    format!("{} ", indicator),
+                    Style::default().fg(indicator_color),
                 ),
+                Span::styled(eco_glyph, Style::default().fg(Color::DarkGray)),
+                Span::styled(padded_label, label_style),
+                Span::styled("  ", Style::default()),
+                Span::styled(row.secondary.clone(), Style::default().fg(Color::Gray)),
             ]))
             .style(bg),
         );
@@ -488,11 +570,11 @@ fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
     );
 }
 
-fn category_header(c: RowCategory) -> &'static str {
+fn category_name(c: RowCategory) -> &'static str {
     match c {
-        RowCategory::Bundle => " 🔍 Bundles ",
-        RowCategory::Standalone => " 📦 Standalone ",
-        RowCategory::ExternallyManaged => " 📱 Externally-managed ",
+        RowCategory::Bundle => "Bundles",
+        RowCategory::Standalone => "Standalone",
+        RowCategory::ExternallyManaged => "Externally-managed",
     }
 }
 
@@ -513,12 +595,14 @@ mod tests {
                 version: "0.1.0".into(),
                 prefix: "crates/alpha".into(),
                 selected: true,
+                ecosystem: None,
             },
             DetectedUnit {
                 name: "beta".into(),
                 version: "0.2.3".into(),
                 prefix: "crates/beta".into(),
                 selected: false,
+                ecosystem: None,
             },
         ];
         let mut report = DetectionReport::default();

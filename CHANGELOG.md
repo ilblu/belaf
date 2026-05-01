@@ -1,3 +1,53 @@
+## 3.0.1 (2026-05-02)
+
+Wizard polish — visual cleanup of the `belaf init` ReleaseUnit
+selection screen reported as cluttered after the 3.0 ship. No
+behavioural changes; pure rendering refactor + the icon-mode opt-in.
+
+### What changed
+
+- **Universal Unicode icons by default.** The selection screen used
+  emojis (`✅`, `⬜`, `🔍`, `📦`, `📱`) which render at variable widths
+  and break column alignment. Replaced with single-cell Unicode shapes
+  that work on every terminal + font without setup:
+  - `⬢` (Black Hexagon) for the Bundles header
+  - `◆` (Black Diamond) for Standalone
+  - `◇` (Outline Diamond) for Externally-managed
+  - `●` / `○` for checked / unchecked rows
+  - `—` em-dash for non-togglable mobile rows
+  - `❖` for the screen header banner
+- **Layout: blank-line spacing between categories** plus consistent
+  4-space indent under each header. Labels in each row are padded to
+  the longest-label width so the secondary column always lines up.
+- **Per-row ecosystem icon column** (rust crab, npm logo, TypeScript,
+  Swift, Kotlin, Java, Python, Go, Elixir, C#, Tauri) is **opt-in**
+  via `BELAF_ICONS=nerd`. Only renders when the user has a Nerd Font
+  installed; otherwise the column is empty and other modes still look
+  clean.
+- **`BELAF_ICONS=ascii`** — pure-ASCII fallback (`[x]`, `[ ]`, `[*]`)
+  for CI logs / SSH sessions / dumb terminals.
+- **`DetectedUnit.ecosystem: Option<String>`** — new field on the
+  wizard state struct, populated from the loader's qualified-name
+  pair so each row knows which language icon to show.
+
+### Scope of the icon-mode env var
+
+`BELAF_ICONS` is read once per process at first wizard render via
+`OnceLock` — switching it mid-session has no effect (the wizard is a
+short-lived flow anyway). Valid values: `unicode` (default), `nerd`,
+`ascii`. Any other value falls back to `unicode`.
+
+### Tests
+
+- Insta snapshot for the unified-selection layout regenerated.
+- New unit test in `wizard::glyphs` that asserts every glyph getter
+  returns a non-empty string in every mode (guards against silently
+  losing a category mapping when extending the enum).
+- Smoke run against `clikd-project/clikd` (37 ReleaseUnits) green —
+  all 5 phases (`init`, `status`, `explain`, `graph`, `prepare`).
+
+---
+
 ## 3.0.0 (2026-05-01)
 
 Belaf 3.0 — clean architectural reset across CLI, github-app API, and
