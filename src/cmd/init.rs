@@ -17,6 +17,18 @@ use crate::core::{
 };
 
 /// The toplevel bootstrap state structure.
+///
+/// TODO(belaf-3.0/wave1f): retire `belaf/bootstrap.toml` and replace
+/// the bootstrap-info pathway with `core/release_unit/initial_state.rs`
+/// (per-unit `initial_state(unit) = max(manifest_version, latest_matching_tag)`,
+/// plus per-unit `belaf-baseline-<name>` tags instead of the single
+/// global `belaf-baseline`). Defer is the safe choice — the bootstrap
+/// writer in `cmd::init::run` and `cmd::init::wizard::run` also updates
+/// each project's `internal_deps[i].belaf_requirement` to
+/// `Manual(version)`, so retiring the writer requires routing that
+/// dep-resolution through the resolver pipeline first. Bootstrap.toml
+/// is functional today; the cleanup is architectural, not a 3.0
+/// blocker.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct BootstrapConfiguration {
     pub project: Vec<BootstrapProjectInfo>,
