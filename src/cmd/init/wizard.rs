@@ -6,13 +6,12 @@
 //! returned. Concrete steps live in their own modules.
 
 pub mod confirmation;
-pub mod detector_review;
 pub mod preset;
-pub mod project;
 pub mod single_mobile;
 pub mod state;
 pub mod step;
 pub mod tag_format;
+pub mod unified_selection;
 pub mod upstream;
 pub mod welcome;
 

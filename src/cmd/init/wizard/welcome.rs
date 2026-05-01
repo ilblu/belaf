@@ -13,11 +13,10 @@ use ratatui::{
 };
 
 use super::{
-    detector_review::DetectorReviewStep,
     preset::PresetSelectionStep,
-    project::ProjectSelectionStep,
     state::WizardState,
     step::{Step, StepResult, WizardOutcome},
+    unified_selection::UnifiedSelectionStep,
 };
 
 #[derive(Default)]
@@ -55,10 +54,15 @@ impl Step for WelcomeStep {
                 // --force on top of an explicit Enter.
                 state.force = true;
                 state.error_message = None;
-                if !state.detection.matches.is_empty() {
-                    StepResult::Next(Box::new(DetectorReviewStep::new()))
-                } else if state.preset_from_cli {
-                    StepResult::Next(Box::new(ProjectSelectionStep::new()))
+                // 3.0/Wave 1d: UnifiedSelectionStep absorbs both
+                // ProjectSelectionStep (manual list) and
+                // DetectorReviewStep (auto-detected bundles). Even on
+                // a repo with no detector hits we still go through the
+                // unified screen so the muscle memory + UI stays
+                // consistent. If both lists are empty we fall through
+                // to PresetSelectionStep directly.
+                if !state.detection.matches.is_empty() || !state.projects.is_empty() {
+                    StepResult::Next(Box::new(UnifiedSelectionStep::new()))
                 } else {
                     StepResult::Next(Box::new(PresetSelectionStep::new(state)))
                 }

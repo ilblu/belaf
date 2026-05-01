@@ -92,11 +92,15 @@ pub fn run(
     };
     let exit = cmd.execute()?;
 
-    // Phase I.2 + I.5 — when --auto-detect is set in --ci mode, run
-    // the Phase F detectors and append release_unit blocks to the
-    // newly-bootstrapped config.toml. Mobile-app paths land in
-    // [allow_uncovered] so drift detection doesn't fire on them.
-    if exit == 0 && auto_detect_flag {
+    // 3.0/Wave 1d: auto-detect is the default behaviour in --ci mode
+    // (it always was for interactive wizards). The legacy
+    // `--auto-detect` opt-in flag is preserved on the CLI surface for
+    // backward compat but no longer gates anything — the run-detectors
+    // path is on by default, and `--no-auto-detect` is the opt-out
+    // (TODO: clap flag rename in a follow-up; for now `auto_detect_flag`
+    // is read but always treated as on).
+    let _ = auto_detect_flag; // kept for future opt-out semantics
+    if exit == 0 {
         run_auto_detect()?;
     }
     Ok(exit)

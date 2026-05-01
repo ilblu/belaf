@@ -13,9 +13,9 @@ use ratatui::{
 use crate::core::ui::components::toggle_panel::TogglePanel;
 
 use super::{
-    project::ProjectSelectionStep,
     state::WizardState,
     step::{MouseClick, Step, StepResult, WizardOutcome},
+    upstream::UpstreamConfigStep,
 };
 
 pub struct PresetSelectionStep {
@@ -91,7 +91,10 @@ impl Step for PresetSelectionStep {
                 } else {
                     Some(selected)
                 };
-                StepResult::Next(Box::new(ProjectSelectionStep::new()))
+                // 3.0/Wave 1d: ProjectSelectionStep is gone — unit
+                // selection happened in UnifiedSelectionStep before
+                // we got here. Route straight to upstream config.
+                StepResult::Next(Box::new(UpstreamConfigStep::new()))
             }
             (KeyCode::Esc, _) => StepResult::Back,
             _ => StepResult::Continue,
