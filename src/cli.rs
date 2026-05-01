@@ -78,6 +78,12 @@ pub enum Commands {
         long_about = "Generate changelog entries based on conventional commits.\n\nThis command generates changelogs without the full release workflow.\nUseful for previewing changes or generating changelogs as a separate step.\n\nModes:\n  • Default: Write changelog files to disk\n  • Preview (--preview): Show changelog without writing files\n  • Stdout (--stdout): Output to stdout instead of files\n\nExamples:\n  belaf changelog                    # Generate all changelogs\n  belaf changelog --preview          # Preview without writing\n  belaf changelog --project mylib    # Only for specific project\n  belaf changelog --stdout           # Output to terminal"
     )]
     Changelog(ChangelogArgs),
+
+    #[command(
+        about = "Explain why each ReleaseUnit was created",
+        long_about = "Print provenance for every resolved ReleaseUnit:\n  • Which detector matched (auto-detected)\n  • Which TOML line it came from (explicit [[release_unit]])\n  • Which glob expansion produced it ([[release_unit_glob]])\n\nUseful when a unit appears in your config and you don't remember\nwhy, or to debug unexpected glob expansions / name collisions."
+    )]
+    Explain,
 }
 
 #[derive(Subcommand)]
@@ -108,6 +114,12 @@ pub struct InitArgs {
         help = "Use a preset configuration template (keepachangelog, flat, minimal)"
     )]
     pub preset: Option<String>,
+
+    #[arg(
+        long,
+        help = "Run release_unit auto-detectors (hexagonal cargo, Tauri, JVM library, mobile-warning, nested workspace, SDK cascade) — required to opt-in in --ci mode"
+    )]
+    pub auto_detect: bool,
 }
 
 #[derive(Args)]

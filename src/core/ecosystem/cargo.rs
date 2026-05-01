@@ -35,6 +35,12 @@ use crate::utils::theme::PhaseSpinner;
 #[derive(Debug, Default)]
 pub struct CargoLoader {
     cargo_toml_paths: Vec<RepoPathBuf>,
+    /// Set by [`super::registry::EcosystemRegistry::set_skip_list`].
+    /// Cargo metadata enumerates `workspace_members` regardless of
+    /// which Cargo.toml triggered discovery, so filtering at the
+    /// registration loop is the right place — not at index-scan time.
+    /// Phase C.
+    skip_list: Vec<RepoPathBuf>,
 }
 
 impl CargoLoader {
@@ -98,6 +104,99 @@ impl CargoLoader {
             )?;
         }
 
+        // Phase C.4 — Bazel fallback. Any Cargo.toml that wasn't
+        // covered by `cargo metadata` (typically because the
+        // workspace declares deps Bazel resolves but cargo can't —
+        // e.g. hermetic C deps in Bazel-managed `third_party/`) is
+        // registered via direct parse without dependency resolution.
+        // Same skip-list filter applies.
+        let metadata_covered_manifests: std::collections::HashSet<PathBuf> = workspace_data
+            .iter()
+            .flat_map(|(_, meta)| {
+                meta.workspace_packages()
+                    .into_iter()
+                    .map(|p| p.manifest_path.clone().into_std_path_buf())
+            })
+            .collect();
+
+        for toml_repopath in &self.cargo_toml_paths {
+            if super::registry::is_path_inside_any(toml_repopath, &self.skip_list) {
+                continue;
+            }
+            let toml_abs = app.repo.resolve_workdir(toml_repopath);
+            if metadata_covered_manifests.contains(&toml_abs) {
+                continue;
+            }
+            self.register_via_direct_parse(toml_repopath, app, pconfig)?;
+        }
+
+        Ok(())
+    }
+
+    /// Phase C.4 — direct-parse fallback. Reads `[package].name` +
+    /// `[package].version` from the Cargo.toml without invoking
+    /// `cargo metadata`. Used for Bazel-managed workspaces where
+    /// metadata fails on hermetic C deps.
+    ///
+    /// Skips: virtual workspace roots (no `[package]` section),
+    /// non-semver versions, manifests with `version.workspace = true`
+    /// where the workspace root has no `[workspace.package].version`.
+    /// No inter-project dependency resolution — that's the trade-off
+    /// callers accept for Bazel-coexistence.
+    fn register_via_direct_parse(
+        &self,
+        toml_repopath: &RepoPathBuf,
+        app: &mut AppBuilder,
+        pconfig: &HashMap<String, ProjectConfiguration>,
+    ) -> Result<()> {
+        let toml_abs = app.repo.resolve_workdir(toml_repopath);
+        if !toml_abs.exists() {
+            return Ok(());
+        }
+
+        let content = match read_config_file(&toml_abs) {
+            Ok(c) => c,
+            Err(_) => return Ok(()),
+        };
+        let doc: DocumentMut = match content.parse() {
+            Ok(d) => d,
+            Err(_) => return Ok(()),
+        };
+
+        let pkg = match doc.get("package").and_then(|v| v.as_table()) {
+            Some(p) => p,
+            None => return Ok(()), // virtual workspace root or fragment
+        };
+
+        let name = pkg
+            .get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        if name.is_empty() {
+            return Ok(());
+        }
+
+        // version: explicit literal only — `version.workspace = true`
+        // would need workspace metadata to resolve and we're in the
+        // fallback path because metadata failed. Caller's choice.
+        let version_str = pkg.get("version").and_then(|v| v.as_str());
+        let version = match version_str.and_then(|s| s.parse::<semver::Version>().ok()) {
+            Some(v) => v,
+            None => return Ok(()),
+        };
+
+        let (prefix, _) = toml_repopath.split_basename();
+        let qnames = vec![name.clone(), "cargo".to_owned()];
+
+        if let Some(ident) = app.graph.try_add_project(qnames, pconfig) {
+            let proj = app.graph.lookup_mut(ident);
+            proj.version = Some(Version::Semver(version));
+            proj.prefix = Some(prefix.to_owned());
+
+            let cargo_rewrite = CargoRewriter::new(ident, toml_repopath.clone());
+            proj.rewriters.push(Box::new(cargo_rewrite));
+        }
         Ok(())
     }
 
@@ -297,6 +396,16 @@ impl CargoLoader {
                 }
 
                 let manifest_repopath = app.repo.convert_path(&pkg.manifest_path)?;
+
+                // Phase C — if this member's manifest is inside any
+                // ReleaseUnit's skip-list path, the ReleaseUnit owns it
+                // (as a satellite or its primary manifest). Skip
+                // standalone-project registration so the unit's atomic
+                // claim on the directory is respected.
+                if super::registry::is_path_inside_any(&manifest_repopath, &self.skip_list) {
+                    continue;
+                }
+
                 let (prefix, _) = manifest_repopath.split_basename();
 
                 let qnames = vec![pkg.name.to_string(), "cargo".to_owned()];
@@ -435,6 +544,14 @@ impl Ecosystem for CargoLoader {
         pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         (*self).into_projects(app, pconfig)
+    }
+
+    /// Phase C — receive the resolved release-unit skip-list.
+    /// Cargo enumerates workspace_members independent of the per-file
+    /// index scan, so it needs to filter against this list during
+    /// `finalize` (see [`Self::register_workspace_projects`]).
+    fn set_skip_list(&mut self, skip_list: &[RepoPathBuf]) {
+        self.skip_list = skip_list.to_vec();
     }
 }
 
@@ -596,6 +713,20 @@ impl Rewriter for CargoRewriter {
             let mut f = File::create(&toml_path)?;
             write!(f, "{doc}")?;
             changes.add_path(&self.toml_path);
+        }
+
+        // Phase J — refresh Cargo.lock so the bumped version
+        // propagates to the lockfile in the same prepare run. The
+        // `update_for_crate` helper runs `cargo update -p <name>
+        // --workspace`, falls back to `cargo update --workspace` if
+        // the per-crate target is unknown, and is a fast no-op when
+        // the version didn't change. We log + swallow errors here so
+        // a missing `cargo` binary or a Bazel-managed lockfile
+        // doesn't block the rewrite of other ecosystems.
+        let workspace_root = app.repo.resolve_workdir(&RepoPathBuf::new(b""));
+        let crate_name = &proj.qualified_names()[0];
+        if let Err(e) = crate::core::cargo_lock::update_for_crate(crate_name, &workspace_root) {
+            tracing::warn!("Cargo.lock update for `{crate_name}` failed (continuing): {e}",);
         }
 
         Ok(())

@@ -1,0 +1,28 @@
+---
+source: src/cmd/init/wizard/upstream.rs
+expression: out
+---
+"┌ Step 3: Repository Configuration ────────────────────────────────────────────┐"
+"│                                                                              │"
+"│                 🔗 Configure the upstream Git repository URL                 │" Hidden by multi-width symbols: [(19, " ")]
+"│                 Used for changelog links and release references              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│        ┌ ✏️  Editing URL ───────────────────────────────────────────┐        │" Hidden by multi-width symbols: [(12, " ")]
+"│        │                                                            │        │"
+"│        │  git@github.com:example/repo.git▌                          │        │"
+"│        │                                                            │        │"
+"│        │                                                            │        │"
+"│        │                                                            │        │"
+"│        │                                                            │        │"
+"│        └────────────────────────────────────────────────────────────┘        │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│          Type to enter URL  Backspace delete  Tab/Esc finish editing         │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"

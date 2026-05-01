@@ -7,6 +7,11 @@ pub mod syntax {
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
 
+    use crate::core::release_unit::syntax::{
+        AllowUncoveredConfig, EcosystemsConfig, ExplicitReleaseUnitConfig, GlobReleaseUnitConfig,
+        IgnorePathsConfig,
+    };
+
     #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct ReleaseConfiguration {
         pub repo: RepoConfiguration,
@@ -48,6 +53,39 @@ pub mod syntax {
 
         #[serde(default, rename = "bump_source", skip_serializing_if = "Vec::is_empty")]
         pub bump_sources: Vec<BumpSourceConfig>,
+
+        /// `[[release_unit]]` — explicit ReleaseUnit entries. Plan
+        /// Part I + II.
+        #[serde(
+            default,
+            rename = "release_unit",
+            skip_serializing_if = "Vec::is_empty"
+        )]
+        pub release_units: Vec<ExplicitReleaseUnitConfig>,
+
+        /// `[[release_unit_glob]]` — glob-form ReleaseUnit entries
+        /// expanded at resolve-time into N units, one per matching dir.
+        /// Plan §2.3.
+        #[serde(
+            default,
+            rename = "release_unit_glob",
+            skip_serializing_if = "Vec::is_empty"
+        )]
+        pub release_unit_globs: Vec<GlobReleaseUnitConfig>,
+
+        /// `[ignore_paths]` — paths belaf does not scan inside.
+        #[serde(default, skip_serializing_if = "IgnorePathsConfig::is_empty")]
+        pub ignore_paths: IgnorePathsConfig,
+
+        /// `[allow_uncovered]` — paths belaf scans but explicitly
+        /// accepts as not mapping to any ReleaseUnit. Mobile apps go
+        /// here on init.
+        #[serde(default, skip_serializing_if = "AllowUncoveredConfig::is_empty")]
+        pub allow_uncovered: AllowUncoveredConfig,
+
+        /// `[ecosystems.*]` — per-ecosystem smart-default knobs.
+        #[serde(default, skip_serializing_if = "EcosystemsConfig::is_empty")]
+        pub ecosystems: EcosystemsConfig,
     }
 
     /// `[[group]]` table: bundles projects that must release together.
@@ -322,6 +360,11 @@ pub struct ConfigurationFile {
     pub projects: HashMap<String, syntax::ProjectConfiguration>,
     pub groups: Vec<syntax::GroupConfig>,
     pub bump_sources: Vec<syntax::BumpSourceConfig>,
+    pub release_units: Vec<crate::core::release_unit::syntax::ExplicitReleaseUnitConfig>,
+    pub release_unit_globs: Vec<crate::core::release_unit::syntax::GlobReleaseUnitConfig>,
+    pub ignore_paths: crate::core::release_unit::syntax::IgnorePathsConfig,
+    pub allow_uncovered: crate::core::release_unit::syntax::AllowUncoveredConfig,
+    pub ecosystems: crate::core::release_unit::syntax::EcosystemsConfig,
 }
 
 impl ConfigurationFile {
@@ -351,6 +394,11 @@ impl ConfigurationFile {
             projects: cfg.projects,
             groups: cfg.groups.into_normalised(),
             bump_sources: cfg.bump_sources,
+            release_units: cfg.release_units,
+            release_unit_globs: cfg.release_unit_globs,
+            ignore_paths: cfg.ignore_paths,
+            allow_uncovered: cfg.allow_uncovered,
+            ecosystems: cfg.ecosystems,
         })
     }
 
@@ -365,6 +413,11 @@ impl ConfigurationFile {
             // canonical written-out config matches `belaf init`'s output.
             groups: syntax::GroupsForm::Array(self.groups),
             bump_sources: self.bump_sources,
+            release_units: self.release_units,
+            release_unit_globs: self.release_unit_globs,
+            ignore_paths: self.ignore_paths,
+            allow_uncovered: self.allow_uncovered,
+            ecosystems: self.ecosystems,
         };
         Ok(atry!(
             toml::to_string_pretty(&cfg);

@@ -1,0 +1,28 @@
+---
+source: src/cmd/init/wizard/tag_format.rs
+expression: out
+---
+"┌ Tag Format (single-project repo) ────────────────────────────────────────────┐"
+"│                                                                              │"
+"│                       🏷  Detected single project: alpha                      │"
+"│                   Choose how release tags should be formatted                │"
+"│                                                                              │"
+"│┌ Options ───────────────────────────────────────────────────────────────────┐│"
+"││ ▶ v{version}                                                               ││"
+"││       Simple — recommended for single-project repos                        ││"
+"││   {name}-v{version}                                                        ││"
+"││       Namespaced — ecosystem default; safer when more crates are added late││"
+"││                                                                            ││"
+"││                                                                            ││"
+"││                                                                            ││"
+"││                                                                            ││"
+"││                                                                            ││"
+"││                                                                            ││"
+"││                                                                            ││"
+"││                                                                            ││"
+"││                                                                            ││"
+"││                                                                            ││"
+"│└────────────────────────────────────────────────────────────────────────────┘│"
+"│                  ↑↓ select  Enter continue  Esc back  q quit                 │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"

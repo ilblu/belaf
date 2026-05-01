@@ -18,10 +18,31 @@ use std::collections::HashMap;
 use crate::core::{
     config::syntax::ProjectConfiguration,
     errors::Result,
-    git::repository::{RepoPath, Repository},
+    git::repository::{RepoPath, RepoPathBuf, Repository},
     graph::ProjectGraphBuilder,
     session::AppBuilder,
 };
+
+/// Returns `true` if `path` equals or is inside (strict child of) any
+/// path in `skip_list`. Used to silence ecosystem-level scanning for
+/// paths already covered by a `[[release_unit]]` (its manifests +
+/// satellites). Phase C.
+pub fn is_path_inside_any(path: &RepoPath, skip_list: &[RepoPathBuf]) -> bool {
+    let path_bytes = path.as_ref();
+    skip_list.iter().any(|s| {
+        let s_bytes: &[u8] = s.as_ref();
+        if path_bytes == s_bytes {
+            return true;
+        }
+        if path_bytes.len() > s_bytes.len()
+            && path_bytes.starts_with(s_bytes)
+            && path_bytes[s_bytes.len()] == b'/'
+        {
+            return true;
+        }
+        false
+    })
+}
 
 /// Per-language loader/rewriter contract.
 ///
@@ -81,6 +102,15 @@ pub trait Ecosystem: Send + Sync + std::fmt::Debug {
         app: &mut AppBuilder,
         pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()>;
+
+    /// Receive the resolved release-unit skip-list for this session.
+    /// Called by [`EcosystemRegistry::set_skip_list`] before any
+    /// `process_index_item` / `finalize` work. Default: ignore.
+    ///
+    /// Loaders that perform their own workspace enumeration (e.g.
+    /// the Cargo loader's `cargo metadata` walk in `finalize`) override
+    /// this to remember the list and filter accordingly. Plan §C.
+    fn set_skip_list(&mut self, _skip_list: &[RepoPathBuf]) {}
 }
 
 /// Owning collection of ecosystem implementations.
@@ -91,6 +121,13 @@ pub trait Ecosystem: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Default)]
 pub struct EcosystemRegistry {
     ecosystems: Vec<Box<dyn Ecosystem>>,
+    /// Paths already covered by resolved `[[release_unit]]`s.
+    ///
+    /// Set via [`Self::set_skip_list`] before
+    /// [`Self::process_index_item`] runs. Loaders ignore index entries
+    /// inside any of these paths so the ReleaseUnit's atomic claim on
+    /// the directory is respected.
+    skip_list: Vec<RepoPathBuf>,
 }
 
 impl EcosystemRegistry {
@@ -122,6 +159,23 @@ impl EcosystemRegistry {
         self.ecosystems.push(eco);
     }
 
+    /// Install the resolved release-unit skip-list. Forwards it to
+    /// every registered loader via [`Ecosystem::set_skip_list`] so
+    /// loaders that perform their own workspace enumeration (Cargo)
+    /// can filter accordingly. Plan Phase C.
+    pub fn set_skip_list(&mut self, skip_list: Vec<RepoPathBuf>) {
+        for eco in &mut self.ecosystems {
+            eco.set_skip_list(&skip_list);
+        }
+        self.skip_list = skip_list;
+    }
+
+    /// Read-only access to the configured skip-list. Useful for tests
+    /// and `belaf config explain`.
+    pub fn skip_list(&self) -> &[RepoPathBuf] {
+        &self.skip_list
+    }
+
     pub fn names(&self) -> Vec<&'static str> {
         self.ecosystems.iter().map(|e| e.name()).collect()
     }
@@ -134,6 +188,9 @@ impl EcosystemRegistry {
     }
 
     /// Dispatch one git-index entry through every registered ecosystem.
+    /// Phase C: paths inside any [`Self::skip_list`] entry are silently
+    /// ignored so the ReleaseUnit's atomic claim on its directory is
+    /// respected.
     pub fn process_index_item(
         &mut self,
         repo: &Repository,
@@ -143,6 +200,9 @@ impl EcosystemRegistry {
         basename: &RepoPath,
         pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
+        if is_path_inside_any(repopath, &self.skip_list) {
+            return Ok(());
+        }
         for eco in &mut self.ecosystems {
             eco.process_index_item(repo, graph, repopath, dirname, basename, pconfig)?;
         }
@@ -203,5 +263,57 @@ mod tests {
     fn lookup_unknown_returns_none() {
         let r = EcosystemRegistry::with_defaults();
         assert!(r.lookup("gradle").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase C — skip-list helper coverage.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_path_inside_any_matches_exact_paths() {
+        let list = vec![
+            RepoPathBuf::new(b"apps/services/aura/crates"),
+            RepoPathBuf::new(b"sdks/kotlin"),
+        ];
+        let path = RepoPathBuf::new(b"apps/services/aura/crates");
+        assert!(is_path_inside_any(&path, &list));
+    }
+
+    #[test]
+    fn is_path_inside_any_matches_strict_children() {
+        let list = vec![RepoPathBuf::new(b"apps/services/aura/crates")];
+        // child of an entry
+        let child = RepoPathBuf::new(b"apps/services/aura/crates/api/Cargo.toml");
+        assert!(is_path_inside_any(&child, &list));
+        // deep child
+        let deep = RepoPathBuf::new(b"apps/services/aura/crates/api/src/lib.rs");
+        assert!(is_path_inside_any(&deep, &list));
+    }
+
+    #[test]
+    fn is_path_inside_any_rejects_unrelated_paths() {
+        let list = vec![RepoPathBuf::new(b"apps/services/aura/crates")];
+        // sibling — wrong dir
+        let sibling = RepoPathBuf::new(b"apps/services/ekko/crates/bin/Cargo.toml");
+        assert!(!is_path_inside_any(&sibling, &list));
+        // partial-prefix lookalike — apps/services/aura-extra (NOT
+        // a child of aura/crates)
+        let lookalike = RepoPathBuf::new(b"apps/services/aura-extra/Cargo.toml");
+        assert!(!is_path_inside_any(&lookalike, &list));
+    }
+
+    #[test]
+    fn is_path_inside_any_empty_list_never_matches() {
+        let path = RepoPathBuf::new(b"some/deep/path");
+        assert!(!is_path_inside_any(&path, &[]));
+    }
+
+    #[test]
+    fn set_skip_list_propagates_to_loaders() {
+        let mut r = EcosystemRegistry::with_defaults();
+        let list = vec![RepoPathBuf::new(b"apps/services/aura/crates")];
+        r.set_skip_list(list.clone());
+        assert_eq!(r.skip_list().len(), 1);
+        assert_eq!(r.skip_list()[0].escaped(), "apps/services/aura/crates");
     }
 }

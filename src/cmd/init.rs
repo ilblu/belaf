@@ -3,7 +3,7 @@
 
 //! Boostrapping Belaf on a preexisting repository.
 
-use anyhow::bail;
+use anyhow::{bail, Context};
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, io::Write};
@@ -51,9 +51,22 @@ pub struct BootstrapCommand {
     preset: Option<String>,
 }
 
+// `pub` only because the `tests/test_clikd_shape.rs` and
+// `tests/test_explain_clikd.rs` integration tests call `auto_detect::run`
+// directly to verify snippet emission against fixtures. Keeping it
+// crate-private would force those tests to go through the wizard's
+// runtime entry point, which needs a live tty.
+pub mod auto_detect;
+mod toml_util;
 mod wizard;
 
-pub fn run(force: bool, upstream: Option<String>, ci: bool, preset: Option<String>) -> Result<i32> {
+pub fn run(
+    force: bool,
+    upstream: Option<String>,
+    ci: bool,
+    preset: Option<String>,
+    auto_detect_flag: bool,
+) -> Result<i32> {
     use crate::core::embed::EmbeddedPresets;
     use crate::core::ui::utils::is_interactive_terminal;
 
@@ -77,7 +90,40 @@ pub fn run(force: bool, upstream: Option<String>, ci: bool, preset: Option<Strin
         upstream_name: upstream,
         preset,
     };
-    cmd.execute()
+    let exit = cmd.execute()?;
+
+    // Phase I.2 + I.5 — when --auto-detect is set in --ci mode, run
+    // the Phase F detectors and append release_unit blocks to the
+    // newly-bootstrapped config.toml. Mobile-app paths land in
+    // [allow_uncovered] so drift detection doesn't fire on them.
+    if exit == 0 && auto_detect_flag {
+        run_auto_detect()?;
+    }
+    Ok(exit)
+}
+
+fn run_auto_detect() -> Result<()> {
+    let repo = crate::core::git::repository::Repository::open_from_env()
+        .context("auto-detect: belaf is not in a Git working directory")?;
+
+    let result = auto_detect::run(&repo);
+
+    let mut cfg_path = repo.resolve_config_dir();
+    cfg_path.push("config.toml");
+    auto_detect::append_to_config(&cfg_path, &result.toml_snippet)
+        .with_context(|| format!("auto-detect: failed to append to {}", cfg_path.display()))?;
+
+    info!(
+        "auto-detect: {} ReleaseUnit candidates ({} hexagonal cargo, {} tauri, {} jvm-library, {} sdk-cascade), {} mobile-app warnings → [allow_uncovered]",
+        result.counters.total_release_unit_candidates(),
+        result.counters.hexagonal_cargo,
+        result.counters.tauri_single_source + result.counters.tauri_legacy,
+        result.counters.jvm_library,
+        result.counters.sdk_cascade_member,
+        result.counters.total_mobile_warnings(),
+    );
+
+    Ok(())
 }
 
 impl BootstrapCommand {

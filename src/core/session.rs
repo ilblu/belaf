@@ -138,11 +138,55 @@ impl AppBuilder {
             .with_context(|| "failed to finalize repository setup")?;
 
         let proj_config = config.projects;
+        let ignore_paths = config.ignore_paths.paths.clone();
+        let allow_uncovered = config.allow_uncovered.paths.clone();
+        let mut resolved_units: Vec<crate::core::release_unit::ResolvedReleaseUnit> = Vec::new();
 
         // Now auto-detect everything in the repo index.
 
         if self.populate_graph {
             let mut registry = crate::core::ecosystem::registry::EcosystemRegistry::with_defaults();
+
+            // Phase C — resolve [[release_unit]] / [[release_unit_glob]]
+            // BEFORE the index scan so the resulting skip-list silences
+            // ecosystem-level scanning of paths the units already cover
+            // (manifests + satellites). Plus [ignore_paths] entries.
+            resolved_units = crate::core::release_unit::resolver::resolve(
+                &self.repo,
+                &config.release_units,
+                &config.release_unit_globs,
+            )
+            .map_err(|e| {
+                crate::core::errors::Error::msg(format!("release_unit resolution: {e}"))
+            })?;
+            let mut skip_list: Vec<crate::core::git::repository::RepoPathBuf> = Vec::new();
+            for r in &resolved_units {
+                if let crate::core::release_unit::VersionSource::Manifests(ms) = &r.unit.source {
+                    for m in ms {
+                        // Skip the parent directory of the manifest
+                        // (the unit's "anchor"), so the loader silences
+                        // every sibling/child file under it.
+                        let escaped = m.path.escaped().to_string();
+                        if let Some(parent) = std::path::Path::new(&escaped).parent() {
+                            let parent_str = parent.to_string_lossy().to_string();
+                            if !parent_str.is_empty() {
+                                skip_list.push(crate::core::git::repository::RepoPathBuf::new(
+                                    parent_str.as_bytes(),
+                                ));
+                            }
+                        }
+                    }
+                }
+                for sat in &r.unit.satellites {
+                    skip_list.push(sat.clone());
+                }
+            }
+            for p in &config.ignore_paths.paths {
+                skip_list.push(crate::core::git::repository::RepoPathBuf::new(
+                    p.trim_end_matches('/').as_bytes(),
+                ));
+            }
+            registry.set_skip_list(skip_list);
 
             // Dumb hack around the borrowchecker to allow mutable reference to
             // the graph while iterating over the repo:
@@ -203,6 +247,10 @@ impl AppBuilder {
             bump_config: config.bump,
             bump_sources: config.bump_sources,
             project_configs: proj_config,
+            resolved_release_units: resolved_units,
+            ignore_paths,
+            allow_uncovered,
+            detection_cache: std::sync::OnceLock::new(),
             is_ci: self.is_ci,
         })
     }
@@ -226,6 +274,23 @@ pub struct AppSession {
     /// `[project."<name>"]` entries from `belaf/config.toml`. Read at
     /// manifest-emission time for `tag_format` overrides (B10).
     project_configs: HashMap<String, super::config::syntax::ProjectConfiguration>,
+    /// Resolved `[[release_unit]]` / `[[release_unit_glob]]` entries.
+    /// Held so [`Self::pre_prepare_drift_check`] can compare detected
+    /// bundles against the configured coverage set without re-running
+    /// the resolver.
+    resolved_release_units: Vec<crate::core::release_unit::ResolvedReleaseUnit>,
+    /// `[ignore_paths] paths` from `belaf/config.toml` — paths the
+    /// drift check should silence even though a detector matches.
+    ignore_paths: Vec<String>,
+    /// `[allow_uncovered] paths` from `belaf/config.toml` — explicit
+    /// "yes I see this is uncovered, leave it alone" list.
+    allow_uncovered: Vec<String>,
+    /// Cached output of [`crate::core::release_unit::detector::detect_all`]
+    /// — first call materialises it, subsequent calls reuse. Avoids
+    /// the full filesystem walk on every `belaf prepare` invocation
+    /// (the wizard + drift-check would otherwise traverse the same
+    /// tree twice).
+    detection_cache: std::sync::OnceLock<crate::core::release_unit::detector::DetectionReport>,
     graph: ProjectGraph,
     is_ci: bool,
 }
@@ -285,6 +350,41 @@ impl AppSession {
     /// `[project."<name>"]` entries declared in `belaf/config.toml`.
     pub fn project_configs(&self) -> &HashMap<String, super::config::syntax::ProjectConfiguration> {
         &self.project_configs
+    }
+
+    /// Resolved `[[release_unit]]` / `[[release_unit_glob]]` entries.
+    pub fn resolved_release_units(&self) -> &[crate::core::release_unit::ResolvedReleaseUnit] {
+        &self.resolved_release_units
+    }
+
+    /// Phase H — run the drift detector against the working tree and
+    /// return an `Err(message)` when an uncovered detector hit exists.
+    /// Wired into [`crate::cmd::prepare::run`] so every prepare run
+    /// (CI or interactive) catches new bundles that aren't claimed by
+    /// any `[[release_unit]]` / `[ignore_paths]` / `[allow_uncovered]`.
+    /// Reuses [`Self::detection_report`] to avoid walking the
+    /// filesystem twice within one process.
+    pub fn pre_prepare_drift_check(&self) -> std::result::Result<(), String> {
+        let report = self.detection_report();
+        let drift = crate::core::release_unit::detector::detect_drift_from_report(
+            report,
+            &self.resolved_release_units,
+            &self.ignore_paths,
+            &self.allow_uncovered,
+        );
+        if drift.is_empty() {
+            Ok(())
+        } else {
+            Err(drift.format_error())
+        }
+    }
+
+    /// Cached [`detect_all`](crate::core::release_unit::detector::detect_all)
+    /// output. The first caller pays the filesystem-walk cost; the
+    /// rest reuse the materialised report.
+    pub fn detection_report(&self) -> &crate::core::release_unit::detector::DetectionReport {
+        self.detection_cache
+            .get_or_init(|| crate::core::release_unit::detector::detect_all(&self.repo))
     }
 
     pub fn graph(&self) -> &ProjectGraph {

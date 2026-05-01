@@ -1,0 +1,28 @@
+---
+source: src/cmd/init/wizard/welcome.rs
+expression: out
+---
+"┌ Welcome ─────────────────────────────────────────────────────────────────────┐"
+"│                                                                              │"
+"│                   ██████╗ ███████╗██╗      █████╗ ███████╗                   │"
+"│                   ██╔══██╗██╔════╝██║     ██╔══██╗██╔════╝                   │"
+"│                   ██████╔╝█████╗  ██║     ███████║█████╗                     │"
+"│                   ██╔══██╗██╔══╝  ██║     ██╔══██║██╔══╝                     │"
+"│                   ██████╔╝███████╗███████╗██║  ██║██║                        │"
+"│                   ╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝                        │"
+"│                                    Release Management                        │"
+"│                                                                              │"
+"│                                                                              │"
+"│                            📦 Detected: 0 projects                           │" Hidden by multi-width symbols: [(30, " ")]
+"│                                                                              │"
+"│         ⚠️  Warning: uncommitted changes detected (e.g.: src/foo.rs)         │" Hidden by multi-width symbols: [(11, " ")]
+"│                                                                              │"
+"│        ❌ Repository has uncommitted changes. Use --force to override.       │" Hidden by multi-width symbols: [(10, " ")]
+"│                                                                              │"
+"│                                                                              │"
+"│                      This wizard will guide you through:                     │"
+"│                Press ENTER to override and start  •  Q to quit               │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"

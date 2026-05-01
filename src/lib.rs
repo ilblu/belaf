@@ -5,6 +5,7 @@ pub mod cmd {
     pub mod changelog;
     pub mod completions;
     pub mod dashboard;
+    pub mod explain;
     pub mod graph;
     pub mod init;
     pub mod install;
@@ -17,6 +18,7 @@ pub mod core {
 
     pub mod bump;
     pub mod bump_source;
+    pub mod cargo_lock;
     pub mod config;
     pub mod embed;
     pub mod env;
@@ -25,10 +27,12 @@ pub mod core {
     pub mod group;
     pub mod manifest;
     pub mod project;
+    pub mod release_unit;
     pub mod rewriters;
     pub mod session;
     pub mod tag_format;
     pub mod version;
+    pub mod version_field;
     pub mod workflow;
 
     pub mod api;
@@ -120,7 +124,13 @@ pub async fn execute(cli: Cli) -> Result<()> {
             Ok(())
         }
         Commands::Init(args) => {
-            let exit_code = cmd::init::run(args.force, args.upstream, args.ci, args.preset)?;
+            let exit_code = cmd::init::run(
+                args.force,
+                args.upstream,
+                args.ci,
+                args.preset,
+                args.auto_detect,
+            )?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }
@@ -161,6 +171,13 @@ pub async fn execute(cli: Cli) -> Result<()> {
                 args.unreleased,
                 args.ci,
             )?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
+        Commands::Explain => {
+            let exit_code = cmd::explain::run()?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }
