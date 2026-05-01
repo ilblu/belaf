@@ -57,6 +57,7 @@ pub struct BootstrapCommand {
 // crate-private would force those tests to go through the wizard's
 // runtime entry point, which needs a live tty.
 pub mod auto_detect;
+mod toml_util;
 mod wizard;
 
 pub fn run(

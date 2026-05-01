@@ -120,7 +120,18 @@ pub fn seed_clikd_shape<R: Seedable>(repo: &R) {
     );
     repo.write_file(
         "sdks/swift/Package.swift",
-        "// swift-tools-version:5.5\nimport PackageDescription\n",
+        "// swift-tools-version:5.5\n\
+         import PackageDescription\n\
+         \n\
+         let package = Package(\n  \
+           name: \"clikd-swift-sdk\",\n  \
+           products: [.library(name: \"ClikdSwiftSdk\", targets: [\"ClikdSwiftSdk\"])],\n  \
+           targets: [.target(name: \"ClikdSwiftSdk\")]\n\
+         )\n",
+    );
+    repo.write_file(
+        "sdks/swift/Sources/ClikdSwiftSdk/ClikdSwiftSdk.swift",
+        "public struct ClikdSwiftSdk {}\n",
     );
 
     // Schema satellite — generates SDKs but isn't a release unit on its own

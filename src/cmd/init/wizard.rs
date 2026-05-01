@@ -251,17 +251,7 @@ fn execute_bootstrap_with_output(state: &WizardState, repo: &Repository) -> Resu
     }
 }
 
-/// Phase I.3 — when the user picked a tag-format override on the
-/// single-project tag-format step, build the per-project override
-/// snippet that gets appended to `belaf/config.toml`.
-fn build_tag_format_snippet(state: &WizardState) -> Option<String> {
-    let format = state.tag_format_override.as_ref()?;
-    let project = state.selected_projects().into_iter().next()?;
-    Some(format!(
-        "\n[projects.\"{name}\"]\ntag_format = \"{format}\"\n",
-        name = project.name,
-    ))
-}
+use self::tag_format::build_tag_format_snippet;
 
 fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
     use crate::core::embed::{EmbeddedConfig, EmbeddedPresets};

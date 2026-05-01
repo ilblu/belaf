@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
+use super::toml_util::toml_quote;
 use crate::core::git::repository::{RepoPathBuf, Repository};
 use crate::core::release_unit::detector::{
     self, DetectorKind, DetectorMatch, HexagonalPrimary, JvmVersionSource, MobilePlatform,
@@ -60,28 +61,6 @@ impl DetectionCounters {
 const AUTO_DETECT_MARKER: &str =
     "# belaf:auto-detect-marker (do not remove — used for idempotency)";
 
-/// Wrap `s` as a TOML basic-string. Properly escapes embedded `"`
-/// and `\` plus control characters, so a path / name containing
-/// shell-or-TOML metacharacters can't break out of its slot and
-/// inject arbitrary structure into the emitted config.
-fn toml_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str(r#"\""#),
-            '\\' => out.push_str(r"\\"),
-            '\n' => out.push_str(r"\n"),
-            '\r' => out.push_str(r"\r"),
-            '\t' => out.push_str(r"\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
-            c => out.push(c),
-        }
-    }
-    out.push('"');
-    out
-}
-
 pub fn run(repo: &Repository) -> AutoDetectResult {
     let report = detector::detect_all(repo);
     let mut snippet = String::new();
@@ -91,7 +70,10 @@ pub fn run(repo: &Repository) -> AutoDetectResult {
     // Group hexagonal cargo matches into a single glob block per
     // common parent (e.g. `apps/services/*`) when at least 2
     // matches share the same parent — clikd-shape collapses 13
-    // services into 1 glob block.
+    // services into 1 glob block. We use a sorted Vec instead of
+    // HashMap iteration to keep the snippet output byte-deterministic
+    // across runs (DoD #7) — `HashMap` iteration order is unspecified
+    // and would shuffle the emitted blocks.
     let mut hex_by_parent: HashMap<String, Vec<&DetectorMatch>> = HashMap::new();
     for m in &report.matches {
         if matches!(m.kind, DetectorKind::HexagonalCargo { .. }) {
@@ -100,13 +82,23 @@ pub fn run(repo: &Repository) -> AutoDetectResult {
             hex_by_parent.entry(parent).or_default().push(m);
         }
     }
-    for (parent, matches) in hex_by_parent {
+    let mut hex_groups: Vec<(String, Vec<&DetectorMatch>)> = hex_by_parent.into_iter().collect();
+    hex_groups.sort_by(|a, b| a.0.cmp(&b.0));
+    for (parent, matches) in hex_groups {
         if matches.len() >= 2 && !parent.is_empty() {
-            // Glob block.
-            let primary = match &matches[0].kind {
-                DetectorKind::HexagonalCargo { primary } => *primary,
-                _ => unreachable!(),
-            };
+            // Glob block — pick the primary by majority vote so the
+            // emitted `manifests = […]` matches most members. Ties
+            // break in favour of `Bin` (the convention), then `Lib`,
+            // then `Workers`. The `fallback_manifests` line below
+            // catches the outlier (e.g. clikd's `mondo` has only
+            // `crates/workers`, while aura/ekko have `crates/bin`).
+            let mut votes: HashMap<HexagonalPrimary, usize> = HashMap::new();
+            for m in &matches {
+                if let DetectorKind::HexagonalCargo { primary } = m.kind {
+                    *votes.entry(primary).or_insert(0) += 1;
+                }
+            }
+            let primary = pick_majority_primary(&votes);
             let primary_str = match primary {
                 HexagonalPrimary::Bin => "bin",
                 HexagonalPrimary::Lib => "lib",
@@ -296,6 +288,26 @@ pub fn append_to_config(config_path: &Path, snippet: &str) -> std::io::Result<()
     }
     content.push_str(snippet);
     std::fs::write(config_path, content)
+}
+
+/// Vote-based primary picker for the hexagonal-cargo glob block.
+/// Tie-break order: `Bin` (the convention) > `Lib` > `Workers` >
+/// `BaseName`.
+fn pick_majority_primary(votes: &HashMap<HexagonalPrimary, usize>) -> HexagonalPrimary {
+    let priority = |p: HexagonalPrimary| match p {
+        HexagonalPrimary::Bin => 4,
+        HexagonalPrimary::Lib => 3,
+        HexagonalPrimary::Workers => 2,
+        HexagonalPrimary::BaseName => 1,
+    };
+    votes
+        .iter()
+        .max_by(|a, b| {
+            a.1.cmp(b.1)
+                .then_with(|| priority(*a.0).cmp(&priority(*b.0)))
+        })
+        .map(|(k, _)| *k)
+        .unwrap_or(HexagonalPrimary::Bin)
 }
 
 fn parent_of(path: &RepoPathBuf) -> Option<String> {
