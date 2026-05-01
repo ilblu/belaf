@@ -7,6 +7,14 @@
 //! [`detect_all`] aggregates them; the wizard (Phase I) renders the
 //! results as a confirmable list.
 //!
+//! TODO(belaf-3.0/wave1e): split this 1192-LOC file into
+//! `detector/{hexagonal,tauri,kotlin_jvm,mobile,sdk_cascade,
+//! single_project,nested_monorepo,drift,common}.rs` in a focused
+//! cleanup PR. The new detectors landed in Wave 1e directly here
+//! because each helper function (`is_covered`, `is_tauri_single_source`)
+//! is shared across detectors and needs careful visibility extraction
+//! before a physical split is safe.
+//!
 //! Drift detection in [`detect_drift`] runs at every prepare,
 //! regardless of TUI/CI mode (Phase H).
 
