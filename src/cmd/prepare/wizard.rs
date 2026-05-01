@@ -33,19 +33,20 @@ use crate::core::{
     ui::{components::toggle_panel::TogglePanel, markdown, utils::centered_rect},
     wire::known::Ecosystem,
     workflow::{
-        generate_changelog_entry, BumpChoice, PrepareContext, ProjectCandidate, ProjectSelection,
+        generate_changelog_entry, BumpChoice, PrepareContext, ReleaseUnitCandidate,
+        ReleaseUnitSelection,
     },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WizardStep {
-    ProjectSelection,
-    ProjectConfig { project_index: usize },
+    ReleaseUnitSelection,
+    UnitConfig { unit_index: usize },
     Confirmation,
 }
 
-struct ProjectItem {
-    candidate: ProjectCandidate,
+struct ReleaseUnitItem {
+    candidate: ReleaseUnitCandidate,
     selected: bool,
     chosen_bump: Option<BumpChoice>,
     cached_changelog: Option<String>,
@@ -65,7 +66,7 @@ struct ProjectItem {
 #[derive(Debug, Clone)]
 enum DisplayRow {
     Solo {
-        project_idx: usize,
+        unit_idx: usize,
     },
     Group {
         id: String,
@@ -73,8 +74,8 @@ enum DisplayRow {
     },
 }
 
-impl ProjectItem {
-    fn from_candidate(candidate: ProjectCandidate, existing_changelog: String) -> Self {
+impl ReleaseUnitItem {
+    fn from_candidate(candidate: ReleaseUnitCandidate, existing_changelog: String) -> Self {
         Self {
             candidate,
             selected: true,
@@ -109,7 +110,7 @@ impl ProjectItem {
         &self.candidate.commits
     }
 
-    fn project_type(&self) -> &Ecosystem {
+    fn ecosystem(&self) -> &Ecosystem {
         &self.candidate.ecosystem
     }
 
@@ -169,8 +170,8 @@ fn calculate_patch_version(current: &str) -> String {
 
 struct WizardState {
     step: WizardStep,
-    projects: Vec<ProjectItem>,
-    project_list_state: ListState,
+    units: Vec<ReleaseUnitItem>,
+    unit_list_state: ListState,
     bump_list_state: ListState,
     show_changelog: bool,
     show_help: bool,
@@ -185,22 +186,22 @@ struct WizardState {
 
 impl WizardState {
     fn new(
-        projects: Vec<ProjectItem>,
+        projects: Vec<ReleaseUnitItem>,
         changelog_config: ChangelogConfiguration,
         bump_config: BumpConfiguration,
     ) -> Self {
-        let mut project_list_state = ListState::default();
+        let mut unit_list_state = ListState::default();
         if !projects.is_empty() {
-            project_list_state.select(Some(0));
+            unit_list_state.select(Some(0));
         }
 
         let mut bump_list_state = ListState::default();
         bump_list_state.select(Some(0));
 
         Self {
-            step: WizardStep::ProjectSelection,
-            projects,
-            project_list_state,
+            step: WizardStep::ReleaseUnitSelection,
+            units: projects,
+            unit_list_state,
             bump_list_state,
             show_changelog: false,
             show_help: false,
@@ -310,45 +311,39 @@ impl WizardState {
         self.loading_receiver = None;
     }
 
-    fn get_current_project(&self) -> Option<&ProjectItem> {
-        if let WizardStep::ProjectConfig { project_index } = self.step {
-            self.projects
-                .iter()
-                .filter(|p| p.selected)
-                .nth(project_index)
+    fn get_current_project(&self) -> Option<&ReleaseUnitItem> {
+        if let WizardStep::UnitConfig { unit_index } = self.step {
+            self.units.iter().filter(|p| p.selected).nth(unit_index)
         } else {
             None
         }
     }
 
-    fn get_current_project_mut(&mut self) -> Option<&mut ProjectItem> {
-        if let WizardStep::ProjectConfig { project_index } = self.step {
-            self.projects
-                .iter_mut()
-                .filter(|p| p.selected)
-                .nth(project_index)
+    fn get_current_project_mut(&mut self) -> Option<&mut ReleaseUnitItem> {
+        if let WizardStep::UnitConfig { unit_index } = self.step {
+            self.units.iter_mut().filter(|p| p.selected).nth(unit_index)
         } else {
             None
         }
     }
 
     fn selected_count(&self) -> usize {
-        self.projects.iter().filter(|p| p.selected).count()
+        self.units.iter().filter(|p| p.selected).count()
     }
 
     /// Compute the per-render display rows. Delegates to the free
     /// `compute_display_rows` so tests can exercise the layout
     /// algorithm without standing up a full WizardState.
     fn display_rows(&self) -> Vec<DisplayRow> {
-        compute_display_rows(&self.projects)
+        compute_display_rows(&self.units)
     }
 
-    /// Project indices the row at `display_idx` represents — one for
+    /// ResolvedReleaseUnit indices the row at `display_idx` represents — one for
     /// solo, all members for a group.
     fn projects_for_display_row(&self, display_idx: usize) -> Vec<usize> {
         let rows = self.display_rows();
         match rows.get(display_idx) {
-            Some(DisplayRow::Solo { project_idx }) => vec![*project_idx],
+            Some(DisplayRow::Solo { unit_idx }) => vec![*unit_idx],
             Some(DisplayRow::Group { member_indices, .. }) => member_indices.clone(),
             None => Vec::new(),
         }
@@ -364,16 +359,16 @@ impl WizardState {
         }
 
         match &self.step {
-            WizardStep::ProjectSelection => {
+            WizardStep::ReleaseUnitSelection => {
                 if self.selected_count() == 0 {
                     return false;
                 }
-                self.step = WizardStep::ProjectConfig { project_index: 0 };
+                self.step = WizardStep::UnitConfig { unit_index: 0 };
                 self.show_changelog = false;
                 self.bump_list_state.select(Some(0));
                 true
             }
-            WizardStep::ProjectConfig { project_index } => {
+            WizardStep::UnitConfig { unit_index } => {
                 if !self.show_changelog {
                     if let Some(selected) = self.bump_list_state.selected() {
                         let choice = BumpChoice::all()[selected];
@@ -385,7 +380,7 @@ impl WizardState {
                         if let Some(project) = self.get_current_project() {
                             let group_id = project.group_id().map(str::to_string);
                             if let Some(gid) = group_id {
-                                for p in &mut self.projects {
+                                for p in &mut self.units {
                                     if p.group_id() == Some(gid.as_str()) {
                                         p.chosen_bump = Some(choice);
                                     }
@@ -399,9 +394,9 @@ impl WizardState {
                     self.start_background_changelog_generation();
                     true
                 } else {
-                    if *project_index + 1 < self.selected_count() {
-                        self.step = WizardStep::ProjectConfig {
-                            project_index: project_index + 1,
+                    if *unit_index + 1 < self.selected_count() {
+                        self.step = WizardStep::UnitConfig {
+                            unit_index: unit_index + 1,
                         };
                         self.show_changelog = false;
                         self.bump_list_state.select(Some(0));
@@ -418,17 +413,17 @@ impl WizardState {
 
     fn prev_step(&mut self) -> bool {
         match &self.step {
-            WizardStep::ProjectSelection => false,
-            WizardStep::ProjectConfig { project_index } => {
+            WizardStep::ReleaseUnitSelection => false,
+            WizardStep::UnitConfig { unit_index } => {
                 if self.show_changelog {
                     self.show_changelog = false;
                     true
-                } else if *project_index == 0 {
-                    self.step = WizardStep::ProjectSelection;
+                } else if *unit_index == 0 {
+                    self.step = WizardStep::ReleaseUnitSelection;
                     true
                 } else {
-                    self.step = WizardStep::ProjectConfig {
-                        project_index: project_index - 1,
+                    self.step = WizardStep::UnitConfig {
+                        unit_index: unit_index - 1,
                     };
                     self.show_changelog = true;
                     true
@@ -436,8 +431,8 @@ impl WizardState {
             }
             WizardStep::Confirmation => {
                 let last_idx = self.selected_count().saturating_sub(1);
-                self.step = WizardStep::ProjectConfig {
-                    project_index: last_idx,
+                self.step = WizardStep::UnitConfig {
+                    unit_index: last_idx,
                 };
                 self.show_changelog = true;
                 true
@@ -445,43 +440,43 @@ impl WizardState {
         }
     }
 
-    fn selected_projects(&self) -> Vec<&ProjectItem> {
-        self.projects.iter().filter(|p| p.selected).collect()
+    fn selected_projects(&self) -> Vec<&ReleaseUnitItem> {
+        self.units.iter().filter(|p| p.selected).collect()
     }
 
-    fn handle_key_project_selection(&mut self, key: KeyCode) -> bool {
+    fn handle_key_unit_selection(&mut self, key: KeyCode) -> bool {
         // Cursor is in **display-row** space, not project space (plan §5).
         // A 5-member group is one row, so Up/Down skips past members.
         let row_count = self.display_rows().len();
         match key {
             KeyCode::Up => {
-                if let Some(selected) = self.project_list_state.selected() {
+                if let Some(selected) = self.unit_list_state.selected() {
                     if selected > 0 {
-                        self.project_list_state.select(Some(selected - 1));
+                        self.unit_list_state.select(Some(selected - 1));
                     }
                 }
             }
             KeyCode::Down => {
-                if let Some(selected) = self.project_list_state.selected() {
+                if let Some(selected) = self.unit_list_state.selected() {
                     if selected + 1 < row_count {
-                        self.project_list_state.select(Some(selected + 1));
+                        self.unit_list_state.select(Some(selected + 1));
                     }
                 }
             }
             KeyCode::Char(' ') => {
-                if let Some(selected) = self.project_list_state.selected() {
+                if let Some(selected) = self.unit_list_state.selected() {
                     // Toggle all projects backed by this display row —
                     // group rows flip every member at once.
                     let indices = self.projects_for_display_row(selected);
-                    let all_currently_on = indices.iter().all(|&i| self.projects[i].selected);
+                    let all_currently_on = indices.iter().all(|&i| self.units[i].selected);
                     for i in indices {
-                        self.projects[i].selected = !all_currently_on;
+                        self.units[i].selected = !all_currently_on;
                     }
                 }
             }
             KeyCode::Char('a') => {
-                let all_selected = self.projects.iter().all(|p| p.selected);
-                for project in &mut self.projects {
+                let all_selected = self.units.iter().all(|p| p.selected);
+                for project in &mut self.units {
                     project.selected = !all_selected;
                 }
             }
@@ -496,7 +491,7 @@ impl WizardState {
         false
     }
 
-    fn handle_key_project_config(&mut self, key: KeyCode) -> bool {
+    fn handle_key_unit_config(&mut self, key: KeyCode) -> bool {
         match key {
             KeyCode::Tab => {
                 self.show_changelog = !self.show_changelog;
@@ -587,7 +582,7 @@ pub fn run_with_overrides_and_decisions(
         return Ok(0);
     }
 
-    let projects: Vec<ProjectItem> = ctx
+    let projects: Vec<ReleaseUnitItem> = ctx
         .candidates
         .iter()
         .map(|candidate| {
@@ -600,7 +595,7 @@ pub fn run_with_overrides_and_decisions(
             let changelog_repo_path = RepoPathBuf::new(changelog_rel_path.as_bytes());
             let changelog_path = ctx.resolve_workdir(changelog_repo_path.as_ref());
             let existing_changelog = parse_existing_changelog(&changelog_path).unwrap_or_default();
-            let mut item = ProjectItem::from_candidate(candidate.clone(), existing_changelog);
+            let mut item = ReleaseUnitItem::from_candidate(candidate.clone(), existing_changelog);
             item.group_id = groups
                 .group_of(candidate.ident)
                 .map(|g| g.id.as_str().to_string());
@@ -641,9 +636,9 @@ pub fn run_with_overrides_and_decisions(
         return Ok(0);
     }
 
-    let selections: Vec<ProjectSelection> = selected_items
+    let selections: Vec<ReleaseUnitSelection> = selected_items
         .into_iter()
-        .map(|item| ProjectSelection {
+        .map(|item| ReleaseUnitSelection {
             candidate: item.candidate,
             bump_choice: item.chosen_bump.unwrap_or(BumpChoice::Auto),
             cached_changelog: item.cached_changelog,
@@ -705,10 +700,10 @@ fn print_no_changes_message() {
 }
 
 fn run_wizard_ui(
-    projects: Vec<ProjectItem>,
+    projects: Vec<ReleaseUnitItem>,
     changelog_config: ChangelogConfiguration,
     bump_config: BumpConfiguration,
-) -> Result<Option<Vec<ProjectItem>>> {
+) -> Result<Option<Vec<ReleaseUnitItem>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -727,7 +722,7 @@ fn run_wizard_ui(
     terminal.show_cursor()?;
 
     if result? {
-        let selected = state.projects.into_iter().filter(|p| p.selected).collect();
+        let selected = state.units.into_iter().filter(|p| p.selected).collect();
         Ok(Some(selected))
     } else {
         Ok(None)
@@ -787,8 +782,8 @@ fn run_app(
                 }
 
                 let result = match &state.step {
-                    WizardStep::ProjectSelection => state.handle_key_project_selection(code),
-                    WizardStep::ProjectConfig { .. } => state.handle_key_project_config(code),
+                    WizardStep::ReleaseUnitSelection => state.handle_key_unit_selection(code),
+                    WizardStep::UnitConfig { .. } => state.handle_key_unit_config(code),
                     WizardStep::Confirmation => {
                         let (step_changed, confirmed) = state.handle_key_confirmation(code);
                         if confirmed {
@@ -829,8 +824,8 @@ fn render_step(f: &mut Frame, area: Rect, state: &mut WizardState) {
     let step = state.step.clone();
     let show_changelog = state.show_changelog;
     match step {
-        WizardStep::ProjectSelection => render_project_selection(f, area, state),
-        WizardStep::ProjectConfig { .. } => {
+        WizardStep::ReleaseUnitSelection => render_project_selection(f, area, state),
+        WizardStep::UnitConfig { .. } => {
             if show_changelog {
                 render_project_changelog(f, area, state);
             } else {
@@ -842,14 +837,14 @@ fn render_step(f: &mut Frame, area: Rect, state: &mut WizardState) {
 }
 
 fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) {
-    let selected_count = state.projects.iter().filter(|p| p.selected).count();
-    let total_count = state.projects.len();
+    let selected_count = state.units.iter().filter(|p| p.selected).count();
+    let total_count = state.units.len();
 
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
         .title(Span::styled(
-            " Step 1: Project Selection ",
+            " Step 1: ReleaseUnit Selection ",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -904,15 +899,15 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
         .iter()
         .enumerate()
         .map(|(row_idx, row)| {
-            let is_current = state.project_list_state.selected() == Some(row_idx);
+            let is_current = state.unit_list_state.selected() == Some(row_idx);
 
             match row {
-                DisplayRow::Solo { project_idx } => {
-                    let project = &state.projects[*project_idx];
+                DisplayRow::Solo { unit_idx } => {
+                    let project = &state.units[*unit_idx];
                     render_solo_row(project, is_current)
                 }
                 DisplayRow::Group { id, member_indices } => {
-                    render_group_row(id, member_indices, &state.projects, is_current)
+                    render_group_row(id, member_indices, &state.units, is_current)
                 }
             }
         })
@@ -930,7 +925,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
         )
         .highlight_symbol("");
 
-    f.render_stateful_widget(list, chunks[1], &mut state.project_list_state);
+    f.render_stateful_widget(list, chunks[1], &mut state.unit_list_state);
 
     let hints = Line::from(vec![
         Span::styled("↑↓", Style::default().fg(Color::Cyan)),
@@ -952,10 +947,10 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
 
 /// Solo projects are one row each; grouped projects collapse into one
 /// row per group with member indices in original-order. Plan §5.
-fn compute_display_rows(projects: &[ProjectItem]) -> Vec<DisplayRow> {
+fn compute_display_rows(units: &[ReleaseUnitItem]) -> Vec<DisplayRow> {
     let mut out: Vec<DisplayRow> = Vec::new();
     let mut group_pos: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for (i, p) in projects.iter().enumerate() {
+    for (i, p) in units.iter().enumerate() {
         match p.group_id() {
             Some(gid) => {
                 if let Some(&pos) = group_pos.get(gid) {
@@ -970,14 +965,14 @@ fn compute_display_rows(projects: &[ProjectItem]) -> Vec<DisplayRow> {
                     });
                 }
             }
-            None => out.push(DisplayRow::Solo { project_idx: i }),
+            None => out.push(DisplayRow::Solo { unit_idx: i }),
         }
     }
     out
 }
 
 /// Render one ungrouped project as a single list row.
-fn render_solo_row(project: &ProjectItem, is_current: bool) -> ListItem<'_> {
+fn render_solo_row(project: &ReleaseUnitItem, is_current: bool) -> ListItem<'_> {
     let checkbox = if project.selected { "✅" } else { "⬜" };
     let (suggestion_text, suggestion_color) = match project.suggested_bump() {
         BumpRecommendation::Major => ("MAJOR", Color::Red),
@@ -1028,16 +1023,16 @@ fn render_solo_row(project: &ProjectItem, is_current: bool) -> ListItem<'_> {
 ///      └─ com.org:schema        (maven)
 /// ```
 ///
-/// Member ecosystems are pulled off the underlying `ProjectItem` via
+/// Member ecosystems are pulled off the underlying `ReleaseUnitItem` via
 /// `project_type().as_str()` so the dashboard's display name matches
 /// the wire format.
 fn render_group_row(
     group_id: &str,
     member_indices: &[usize],
-    projects: &[ProjectItem],
+    projects: &[ReleaseUnitItem],
     is_current: bool,
 ) -> ListItem<'static> {
-    let members: Vec<&ProjectItem> = member_indices.iter().map(|i| &projects[*i]).collect();
+    let members: Vec<&ReleaseUnitItem> = member_indices.iter().map(|i| &projects[*i]).collect();
     if members.is_empty() {
         return ListItem::new(Line::from(""));
     }
@@ -1104,7 +1099,7 @@ fn render_group_row(
         } else {
             "    ├─ "
         };
-        let eco_label = m.project_type().display_name();
+        let eco_label = m.ecosystem().display_name();
         lines.push(Line::from(vec![
             Span::styled(connector, Style::default().fg(Color::DarkGray)),
             Span::styled(m.name().to_string(), Style::default().fg(Color::Gray)),
@@ -1143,7 +1138,7 @@ fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardSta
         .unwrap_or(BumpChoice::Auto);
 
     let current_project_idx = match &state.step {
-        WizardStep::ProjectConfig { project_index } => *project_index + 1,
+        WizardStep::UnitConfig { unit_index } => *unit_index + 1,
         _ => 1,
     };
     let total_projects = state.selected_count();
@@ -1581,7 +1576,7 @@ fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) 
     }
 
     let current_project_idx = match &state.step {
-        WizardStep::ProjectConfig { project_index } => *project_index + 1,
+        WizardStep::UnitConfig { unit_index } => *unit_index + 1,
         _ => 1,
     };
     let total_projects = state.selected_count();
@@ -1799,7 +1794,7 @@ fn render_confirmation(f: &mut Frame, area: Rect, state: &WizardState) {
 
     let mut ecosystems: std::collections::HashSet<Ecosystem> = std::collections::HashSet::new();
     for project in &selected_projects {
-        ecosystems.insert(project.project_type().clone());
+        ecosystems.insert(project.ecosystem().clone());
     }
 
     for ecosystem in &ecosystems {
@@ -1849,11 +1844,11 @@ fn render_help_popup(f: &mut Frame, state: &WizardState) {
     let area = centered_rect(60, 70, f.area());
 
     let help_text = match &state.step {
-        WizardStep::ProjectSelection => {
-            "Project Selection Help\n\n\
-             • Use ↑/↓ arrows to navigate projects\n\
-             • Press Space to toggle project selection\n\
-             • Press 'a' to toggle all projects\n\
+        WizardStep::ReleaseUnitSelection => {
+            "ReleaseUnit Selection Help\n\n\
+             • Use ↑/↓ arrows to navigate units\n\
+             • Press Space to toggle unit selection\n\
+             • Press 'a' to toggle all units\n\
              • Press Enter to proceed to next step\n\
              • At least one project must be selected\n\n\
              The wizard analyzes your commits using\n\
@@ -1861,7 +1856,7 @@ fn render_help_popup(f: &mut Frame, state: &WizardState) {
              Each selected project will be configured\n\
              individually in the next steps."
         }
-        WizardStep::ProjectConfig { .. } => {
+        WizardStep::UnitConfig { .. } => {
             if state.show_changelog {
                 "Changelog Preview Help\n\n\
                  This shows what will be added to the\n\
@@ -1936,7 +1931,7 @@ fn parse_existing_changelog(path: &Path) -> Option<String> {
 }
 
 fn apply_decisions_to_items(
-    projects: &mut [ProjectItem],
+    projects: &mut [ReleaseUnitItem],
     decisions: &[crate::core::bump_source::BumpDecision],
 ) -> Result<()> {
     if decisions.is_empty() {
@@ -1944,10 +1939,10 @@ fn apply_decisions_to_items(
     }
     let names: Vec<String> = projects.iter().map(|p| p.name().to_string()).collect();
     for d in decisions {
-        let Some(p) = projects.iter_mut().find(|p| p.name() == d.project) else {
+        let Some(p) = projects.iter_mut().find(|p| p.name() == d.release_unit) else {
             return Err(anyhow::anyhow!(
                 "bump-source decision for `{}` does not match any project. Available: {}",
-                d.project,
+                d.release_unit,
                 names.join(", ")
             ));
         };
@@ -1958,19 +1953,23 @@ fn apply_decisions_to_items(
             other => {
                 return Err(anyhow::anyhow!(
                     "bump-source decision for `{}` has invalid bump value `{}`",
-                    d.project,
+                    d.release_unit,
                     other
                 ));
             }
         };
-        info!("bump-source decision: {} -> {}", d.project, choice.as_str());
+        info!(
+            "bump-source decision: {} -> {}",
+            d.release_unit,
+            choice.as_str()
+        );
         p.chosen_bump = Some(choice);
     }
     Ok(())
 }
 
 fn apply_project_overrides_to_items(
-    projects: &mut [ProjectItem],
+    projects: &mut [ReleaseUnitItem],
     overrides: &[String],
 ) -> Result<()> {
     let project_names: Vec<String> = projects.iter().map(|p| p.name().to_string()).collect();
@@ -2025,12 +2024,12 @@ mod tests {
     use crate::core::bump::BumpRecommendation;
     use crate::core::wire::known::Ecosystem;
 
-    /// Build a minimal `ProjectItem` for layout tests. We don't need
+    /// Build a minimal `ReleaseUnitItem` for layout tests. We don't need
     /// realistic Commit / config state — the layout algorithm only
     /// reads `group_id()`.
-    fn item(name: &str, group_id: Option<&str>) -> ProjectItem {
-        ProjectItem {
-            candidate: ProjectCandidate {
+    fn item(name: &str, group_id: Option<&str>) -> ReleaseUnitItem {
+        ReleaseUnitItem {
+            candidate: ReleaseUnitCandidate {
                 ident: 0,
                 name: name.into(),
                 prefix: String::new(),
@@ -2067,7 +2066,7 @@ mod tests {
             rows.len(),
         );
         match &rows[0] {
-            DisplayRow::Solo { project_idx } => assert_eq!(*project_idx, 0),
+            DisplayRow::Solo { unit_idx } => assert_eq!(*unit_idx, 0),
             other => panic!("row 0 should be Solo, got {other:?}"),
         }
         match &rows[1] {
@@ -2078,7 +2077,7 @@ mod tests {
             other => panic!("row 1 should be Group(schema-bundle), got {other:?}"),
         }
         match &rows[2] {
-            DisplayRow::Solo { project_idx } => assert_eq!(*project_idx, 3),
+            DisplayRow::Solo { unit_idx } => assert_eq!(*unit_idx, 3),
             other => panic!("row 2 should be Solo(cli), got {other:?}"),
         }
     }

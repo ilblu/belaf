@@ -46,25 +46,25 @@ pub fn open_browser(output_path: Option<&str>) -> Result<i32> {
     let mut edges = Vec::new();
 
     for &ident in &idents {
-        let proj = sess.graph().lookup(ident);
-        let has_deps = !proj.internal_deps.is_empty();
+        let unit = sess.graph().lookup(ident);
+        let has_deps = !unit.internal_deps.is_empty();
 
         nodes.push(GraphNode {
-            id: proj.user_facing_name.clone(),
-            label: proj.user_facing_name.clone(),
+            id: unit.user_facing_name.clone(),
+            label: unit.user_facing_name.clone(),
             node_type: if has_deps {
                 "app".to_string()
             } else {
                 "package".to_string()
             },
-            version: proj.version.to_string(),
-            deps_count: proj.internal_deps.len(),
+            version: unit.version.to_string(),
+            deps_count: unit.internal_deps.len(),
         });
 
-        for dep in &proj.internal_deps {
+        for dep in &unit.internal_deps {
             let dep_proj = sess.graph().lookup(dep.ident);
             edges.push(GraphEdge {
-                source: proj.user_facing_name.clone(),
+                source: unit.user_facing_name.clone(),
                 target: dep_proj.user_facing_name.clone(),
             });
         }
@@ -76,7 +76,7 @@ pub fn open_browser(output_path: Option<&str>) -> Result<i32> {
     let project_name = std::env::current_dir()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "Project".to_string());
+        .unwrap_or_else(|| "ReleaseUnit".to_string());
 
     let html_content = HTML_TEMPLATE
         .replace("/*GRAPH_DATA_PLACEHOLDER*/", &json_data)

@@ -52,7 +52,7 @@ fn bump_source_file_overrides_conventional_commits() {
         r#"{
   "version": 1,
   "decisions": [
-    { "project": "my-crate", "bump": "major",
+    { "release_unit": "my-crate", "bump": "major",
       "reason": "external schema break detected", "source": "test" }
   ]
 }
@@ -82,7 +82,7 @@ fn project_override_beats_bump_source() {
         "belaf/decisions.json",
         r#"{
   "version": 1,
-  "decisions": [{ "project": "my-crate", "bump": "major" }]
+  "decisions": [{ "release_unit": "my-crate", "bump": "major" }]
 }
 "#,
     );
@@ -95,7 +95,7 @@ fn project_override_beats_bump_source() {
         "--ci",
         "--bump-source",
         "belaf/decisions.json",
-        "--project",
+        "--release-unit",
         "my-crate:minor",
     ]);
 
@@ -103,7 +103,7 @@ fn project_override_beats_bump_source() {
     let releases = manifest["releases"].as_array().unwrap();
     assert_eq!(
         releases[0]["bump_type"], "minor",
-        "--project override must beat --bump-source"
+        "--release-unit override must beat --bump-source"
     );
 }
 
@@ -116,7 +116,7 @@ fn bump_source_cmd_executes_subprocess() {
     repo.commit("chore: noop");
 
     // Inline command emits a v1 envelope on stdout.
-    let cmd = r#"printf '{"version":1,"decisions":[{"project":"my-crate","bump":"minor"}]}'"#;
+    let cmd = r#"printf '{"version":1,"decisions":[{"release_unit":"my-crate","bump":"minor"}]}'"#;
 
     let _ = repo.run_belaf_command(&["prepare", "--ci", "--bump-source-cmd", cmd]);
 
@@ -172,7 +172,7 @@ fn unknown_project_in_decision_is_hard_error() {
     repo.write_file(
         "belaf/d.json",
         r#"{ "version": 1,
-             "decisions": [{ "project": "ghost-pkg", "bump": "patch" }] }"#,
+             "decisions": [{ "release_unit": "ghost-pkg", "bump": "patch" }] }"#,
     );
     repo.write_file("src/feat.rs", "pub fn feat() {}\n");
     repo.commit("fix: bug");
@@ -193,7 +193,7 @@ fn config_bump_source_runs_by_default() {
 
     let cfg = repo.read_file("belaf/config.toml");
     let cfg_with_source = format!(
-        "{cfg}\n[[bump_source]]\ncmd = \"printf '{{\\\"version\\\":1,\\\"decisions\\\":[{{\\\"project\\\":\\\"my-crate\\\",\\\"bump\\\":\\\"major\\\"}}]}}'\"\ntimeout_sec = 10\n"
+        "{cfg}\n[[bump_source]]\ncmd = \"printf '{{\\\"version\\\":1,\\\"decisions\\\":[{{\\\"release_unit\\\":\\\"my-crate\\\",\\\"bump\\\":\\\"major\\\"}}]}}'\"\ntimeout_sec = 10\n"
     );
     repo.write_file("belaf/config.toml", &cfg_with_source);
     repo.write_file("src/feat.rs", "pub fn feat() {}\n");

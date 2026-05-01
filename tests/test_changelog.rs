@@ -206,7 +206,7 @@ edition = "2021"
 
 ### Added
 
-- Project scaffolding
+- ResolvedReleaseUnit scaffolding
 "#;
 
     repo.write_file("CHANGELOG.md", existing_changelog);
@@ -241,7 +241,7 @@ edition = "2021"
         updated_changelog
     );
     assert!(
-        updated_changelog.contains("Project scaffolding"),
+        updated_changelog.contains("ResolvedReleaseUnit scaffolding"),
         "Older entry content should be preserved. Content:\n{}",
         updated_changelog
     );

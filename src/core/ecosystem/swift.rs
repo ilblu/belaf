@@ -1,6 +1,5 @@
 use anyhow::anyhow;
 use std::{
-    collections::HashMap,
     fs::File,
     io::{BufRead, BufReader},
 };
@@ -13,11 +12,10 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
     core::{
-        config::syntax::ProjectConfiguration,
         ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{RepoPath, RepoPathBuf, Repository},
-        graph::ProjectGraphBuilder,
+        graph::ReleaseUnitGraphBuilder,
         session::AppBuilder,
         version::Version,
     },
@@ -31,7 +29,7 @@ pub struct SwiftLoader {
 impl SwiftLoader {
     /// Inherent helper used by both the [`Ecosystem`] trait impl and the
     /// loader's unit tests (which can call this without constructing a real
-    /// `Repository`/`ProjectGraphBuilder`).
+    /// `Repository`/`ReleaseUnitGraphBuilder`).
     pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
         if basename.as_ref() != b"Package.swift" {
             return;
@@ -44,11 +42,7 @@ impl SwiftLoader {
 
     /// Drains the loader into the [`AppBuilder`]. The trait's `finalize`
     /// shim calls this after consuming the `Box<Self>`.
-    pub fn into_projects(
-        self,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
+    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
         for package_swift_path in self.package_swift_paths {
             let (prefix, _) = package_swift_path.split_basename();
             let fs_path = app.repo.resolve_workdir(&package_swift_path);
@@ -79,11 +73,10 @@ impl SwiftLoader {
 
             let qnames = vec![package_name, "swift".to_owned()];
 
-            if let Some(ident) = app.graph.try_add_project(qnames, pconfig) {
-                let proj = app.graph.lookup_mut(ident);
-                proj.version = Some(Version::Semver(semver::Version::new(0, 0, 0)));
-                proj.prefix = Some(prefix.to_owned());
-            }
+            let ident = app.graph.add_project(qnames);
+            let unit = app.graph.lookup_mut(ident);
+            unit.version = Some(Version::Semver(semver::Version::new(0, 0, 0)));
+            unit.prefix = Some(prefix.to_owned());
         }
 
         Ok(())
@@ -107,22 +100,17 @@ impl Ecosystem for SwiftLoader {
     fn process_index_item(
         &mut self,
         _repo: &Repository,
-        _graph: &mut ProjectGraphBuilder,
+        _graph: &mut ReleaseUnitGraphBuilder,
         _repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        _pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         self.record_path(dirname, basename);
         Ok(())
     }
 
-    fn finalize(
-        self: Box<Self>,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
-        (*self).into_projects(app, pconfig)
+    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
+        (*self).into_projects(app)
     }
 }
 

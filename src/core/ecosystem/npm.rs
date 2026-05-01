@@ -22,12 +22,11 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
     core::{
-        config::syntax::ProjectConfiguration,
         ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::{GraphQueryBuilder, ProjectGraphBuilder},
-        project::{DepRequirement, DependencyTarget, ProjectId},
+        graph::{GraphQueryBuilder, ReleaseUnitGraphBuilder},
+        resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
         version::Version,
@@ -44,7 +43,7 @@ pub struct NpmLoader {
 
 #[derive(Debug)]
 struct PackageLoadData {
-    ident: ProjectId,
+    ident: ReleaseUnitId,
     json_path: RepoPathBuf,
     pkg_data: serde_json::Map<String, serde_json::Value>,
 }
@@ -53,11 +52,10 @@ impl NpmLoader {
     pub fn record_path(
         &mut self,
         repo: &Repository,
-        graph: &mut crate::core::graph::ProjectGraphBuilder,
+        graph: &mut crate::core::graph::ReleaseUnitGraphBuilder,
         repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         if basename.as_ref() != b"package.json" {
             return Ok(());
@@ -118,14 +116,15 @@ impl NpmLoader {
 
         let qnames = vec![name.to_owned(), "npm".to_owned()];
 
-        if let Some(ident) = graph.try_add_project(qnames, pconfig) {
-            let proj = graph.lookup_mut(ident);
-            proj.prefix = Some(dirname.to_owned());
-            proj.version = Some(Version::Semver(version));
+        let ident = graph.add_project(qnames);
+        {
+            let unit = graph.lookup_mut(ident);
+            unit.prefix = Some(dirname.to_owned());
+            unit.version = Some(Version::Semver(version));
 
             // Auto-register a rewriter to update this package's package.json.
             let rewrite = PackageJsonRewriter::new(ident, repopath.to_owned());
-            proj.rewriters.push(Box::new(rewrite));
+            unit.rewriters.push(Box::new(rewrite));
 
             // Save the info for dep-linking later.
             self.npm_to_graph.insert(
@@ -141,17 +140,10 @@ impl NpmLoader {
         Ok(())
     }
 
-    pub fn into_projects(
-        self,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
+    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
         for (name, load_data) in &self.npm_to_graph {
-            let strict_validation = pconfig
-                .get(name)
-                .and_then(|c| c.npm.as_ref())
-                .map(|n| n.strict_dependency_validation)
-                .unwrap_or(false);
+            let _ = name;
+            let strict_validation = false;
 
             let maybe_internal_specs = load_data
                 .pkg_data
@@ -222,35 +214,30 @@ impl Ecosystem for NpmLoader {
     fn process_index_item(
         &mut self,
         repo: &Repository,
-        graph: &mut ProjectGraphBuilder,
+        graph: &mut ReleaseUnitGraphBuilder,
         repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
-        self.record_path(repo, graph, repopath, dirname, basename, pconfig)
+        self.record_path(repo, graph, repopath, dirname, basename)
     }
 
-    fn finalize(
-        self: Box<Self>,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
-        (*self).into_projects(app, pconfig)
+    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
+        (*self).into_projects(app)
     }
 }
 
 /// Rewrite `package.json` to include real version numbers.
 #[derive(Debug)]
 pub struct PackageJsonRewriter {
-    proj_id: ProjectId,
+    unit_id: ReleaseUnitId,
     json_path: RepoPathBuf,
 }
 
 impl PackageJsonRewriter {
     /// Create a new `package.json` rewriter.
-    pub fn new(proj_id: ProjectId, json_path: RepoPathBuf) -> Self {
-        PackageJsonRewriter { proj_id, json_path }
+    pub fn new(unit_id: ReleaseUnitId, json_path: RepoPathBuf) -> Self {
+        PackageJsonRewriter { unit_id, json_path }
     }
 }
 
@@ -274,10 +261,10 @@ impl Rewriter for PackageJsonRewriter {
         // qname, not the user-facing name, since that is what is used in
         // NPM-land.
 
-        let proj = app.graph().lookup(self.proj_id);
+        let unit = app.graph().lookup(self.unit_id);
         let mut internal_reqs = HashMap::new();
 
-        for dep in &proj.internal_deps[..] {
+        for dep in &unit.internal_deps[..] {
             let req_text = match dep.belaf_requirement {
                 DepRequirement::Manual(ref t) => t.clone(),
 
@@ -324,7 +311,7 @@ impl Rewriter for PackageJsonRewriter {
 
         // Update everything.
 
-        pkg_data["version"] = serde_json::Value::String(proj.version.to_string());
+        pkg_data["version"] = serde_json::Value::String(unit.version.to_string());
 
         for dep_key in DEPENDENCY_KEYS {
             if let Some(dep_map) = pkg_data.get_mut(*dep_key).and_then(|v| v.as_object_mut()) {
@@ -360,7 +347,7 @@ impl Rewriter for PackageJsonRewriter {
         // as done below, we don't clear unexpected entries in the
         // internal_dep_versions block. Should we do that?
 
-        if app.graph().lookup(self.proj_id).internal_deps.is_empty() {
+        if app.graph().lookup(self.unit_id).internal_deps.is_empty() {
             return Ok(());
         }
 
@@ -399,9 +386,9 @@ impl Rewriter for PackageJsonRewriter {
         };
 
         let graph = app.graph();
-        let proj = graph.lookup(self.proj_id);
+        let unit = graph.lookup(self.unit_id);
 
-        for dep in &proj.internal_deps {
+        for dep in &unit.internal_deps {
             let target = &graph.lookup(dep.ident).qualified_names()[0];
 
             let spec = match &dep.belaf_requirement {
@@ -530,7 +517,7 @@ impl LernaWorkaroundCommand {
         let mut sess = AppSession::initialize_default()?;
 
         let mut q = GraphQueryBuilder::default();
-        q.only_project_type("npm");
+        q.only_ecosystem("npm");
         let idents = sess
             .graph()
             .query(q)
@@ -541,12 +528,12 @@ impl LernaWorkaroundCommand {
         let mut changes = ChangeList::default();
 
         for ident in &idents {
-            let proj = sess.graph().lookup(*ident);
+            let unit = sess.graph().lookup(*ident);
 
-            for rw in &proj.rewriters {
+            for rw in &unit.rewriters {
                 atry!(
                     rw.rewrite(&sess, &mut changes);
-                    ["failed to rewrite metadata for `{}`", proj.user_facing_name]
+                    ["failed to rewrite metadata for `{}`", unit.user_facing_name]
                 );
             }
         }

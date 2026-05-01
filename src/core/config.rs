@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path};
+use std::path::Path;
 
 use crate::atry;
 use crate::core::errors::{Error, Result};
@@ -13,6 +13,7 @@ pub mod syntax {
     };
 
     #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[serde(deny_unknown_fields)]
     pub struct ReleaseConfiguration {
         pub repo: RepoConfiguration,
 
@@ -22,9 +23,10 @@ pub mod syntax {
 
         pub commit_attribution: CommitAttributionConfiguration,
 
-        #[serde(default)]
-        pub projects: HashMap<String, ProjectConfiguration>,
-
+        // The `[projects.*]` config table was removed; per-unit
+        // overrides (tag_format etc.) live on `[[release_unit]]`.
+        // `deny_unknown_fields` makes a stray `[projects.*]` block in
+        // an old config fail to load with a clear error.
         /// Two TOML surfaces, one Rust shape. Either:
         ///
         /// ```toml
@@ -90,7 +92,7 @@ pub mod syntax {
 
     /// `[[group]]` table: bundles projects that must release together.
     /// `id` is the wire-format group id (lowercased pattern); `members`
-    /// are user-facing project names (resolved to `ProjectId`s after the
+    /// are user-facing project names (resolved to `ReleaseUnitId`s after the
     /// graph is built).
     #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct GroupConfig {
@@ -159,14 +161,14 @@ pub mod syntax {
 
     /// `[[bump_source]]` table: a subprocess belaf runs by default to
     /// gather externally-computed bump decisions (e.g. `graphql-inspector
-    /// diff`). At least one of `cmd` is required; `project` / `group` are
-    /// pure diagnostic labels (the JSON output's own `project` field is
-    /// what wires decisions to projects).
+    /// diff`). `cmd` is required; `release_unit` / `group` are pure
+    /// diagnostic labels (the JSON output's own `release_unit` field is
+    /// what wires decisions to ReleaseUnits).
     #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct BumpSourceConfig {
         pub cmd: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub project: Option<String>,
+        pub release_unit: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub group: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -314,41 +316,6 @@ pub mod syntax {
 
         pub tree_cache_size: usize,
     }
-
-    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-    pub struct ProjectConfiguration {
-        #[serde(default)]
-        pub ignore: bool,
-
-        /// Per-project tag-format override. Wins over the group default
-        /// and the ecosystem default. Variables: `{name}`, `{version}`,
-        /// `{ecosystem}` everywhere, plus `{groupId}` / `{artifactId}`
-        /// for Maven and `{module}` for Go. An unsupported variable for
-        /// the project's ecosystem is a hard error at release time.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub tag_format: Option<String>,
-
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub npm: Option<NpmProjectConfig>,
-
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        pub cargo: Option<CargoProjectConfig>,
-    }
-
-    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-    pub struct NpmProjectConfig {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        pub internal_dep_protocol: Option<String>,
-
-        #[serde(default)]
-        pub strict_dependency_validation: bool,
-    }
-
-    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
-    pub struct CargoProjectConfig {
-        #[serde(default)]
-        pub publish: bool,
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -357,7 +324,6 @@ pub struct ConfigurationFile {
     pub changelog: syntax::ChangelogConfiguration,
     pub bump: syntax::BumpConfiguration,
     pub commit_attribution: syntax::CommitAttributionConfiguration,
-    pub projects: HashMap<String, syntax::ProjectConfiguration>,
     pub groups: Vec<syntax::GroupConfig>,
     pub bump_sources: Vec<syntax::BumpSourceConfig>,
     pub release_units: Vec<crate::core::release_unit::syntax::ExplicitReleaseUnitConfig>,
@@ -391,7 +357,6 @@ impl ConfigurationFile {
             changelog: cfg.changelog,
             bump: cfg.bump,
             commit_attribution: cfg.commit_attribution,
-            projects: cfg.projects,
             groups: cfg.groups.into_normalised(),
             bump_sources: cfg.bump_sources,
             release_units: cfg.release_units,
@@ -408,7 +373,6 @@ impl ConfigurationFile {
             changelog: self.changelog,
             bump: self.bump,
             commit_attribution: self.commit_attribution,
-            projects: self.projects,
             // Always serialise back as the array-of-tables form so the
             // canonical written-out config matches `belaf init`'s output.
             groups: syntax::GroupsForm::Array(self.groups),

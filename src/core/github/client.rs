@@ -108,7 +108,7 @@ impl Clone for ApiClient {
     }
 }
 
-fn parse_github_url(url: &str) -> Result<(String, String)> {
+pub fn parse_github_url(url: &str) -> Result<(String, String)> {
     if let Some(rest) = url.strip_prefix("git@github.com:") {
         let repo = rest.trim_end_matches(".git");
         let parts: Vec<&str> = repo.split('/').collect();

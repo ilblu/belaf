@@ -20,7 +20,7 @@ use crate::cli::ReleaseOutputFormat;
 use crate::core::ui::components::table::Table;
 use crate::core::{graph::GraphQueryBuilder, session::AppSession};
 
-struct ProjectStatus {
+struct ReleaseUnitStatus {
     name: String,
     version: Option<String>,
     commits_count: usize,
@@ -45,28 +45,28 @@ impl SelectablePanel {
 
 struct TuiState {
     selected_panel: SelectablePanel,
-    selected_project_index: usize,
+    selected_unit_index: usize,
     commit_scroll_offset: usize,
-    project_data: Vec<ProjectStatus>,
+    unit_data: Vec<ReleaseUnitStatus>,
     should_quit: bool,
     show_help: bool,
 }
 
 impl TuiState {
-    fn new(project_data: Vec<ProjectStatus>) -> Self {
+    fn new(unit_data: Vec<ReleaseUnitStatus>) -> Self {
         Self {
             selected_panel: SelectablePanel::Projects,
-            selected_project_index: 0,
+            selected_unit_index: 0,
             commit_scroll_offset: 0,
-            project_data,
+            unit_data,
             should_quit: false,
             show_help: false,
         }
     }
 
     fn current_project_commits(&self) -> usize {
-        self.project_data
-            .get(self.selected_project_index)
+        self.unit_data
+            .get(self.selected_unit_index)
             .map(|p| p.commits.len())
             .unwrap_or(0)
     }
@@ -98,9 +98,9 @@ impl TuiState {
             }
             (KeyCode::Down | KeyCode::Char('j'), _) => match self.selected_panel {
                 SelectablePanel::Projects => {
-                    if !self.project_data.is_empty() {
-                        self.selected_project_index =
-                            (self.selected_project_index + 1) % self.project_data.len();
+                    if !self.unit_data.is_empty() {
+                        self.selected_unit_index =
+                            (self.selected_unit_index + 1) % self.unit_data.len();
                         self.commit_scroll_offset = 0;
                     }
                 }
@@ -114,11 +114,11 @@ impl TuiState {
             },
             (KeyCode::Up | KeyCode::Char('k'), _) => match self.selected_panel {
                 SelectablePanel::Projects => {
-                    if !self.project_data.is_empty() {
-                        self.selected_project_index = if self.selected_project_index == 0 {
-                            self.project_data.len() - 1
+                    if !self.unit_data.is_empty() {
+                        self.selected_unit_index = if self.selected_unit_index == 0 {
+                            self.unit_data.len() - 1
                         } else {
-                            self.selected_project_index - 1
+                            self.selected_unit_index - 1
                         };
                         self.commit_scroll_offset = 0;
                     }
@@ -130,13 +130,13 @@ impl TuiState {
                 }
             },
             (KeyCode::Home | KeyCode::Char('g'), _) => match self.selected_panel {
-                SelectablePanel::Projects => self.selected_project_index = 0,
+                SelectablePanel::Projects => self.selected_unit_index = 0,
                 SelectablePanel::Commits => self.commit_scroll_offset = 0,
             },
             (KeyCode::End | KeyCode::Char('G'), KeyModifiers::SHIFT) => match self.selected_panel {
                 SelectablePanel::Projects => {
-                    if !self.project_data.is_empty() {
-                        self.selected_project_index = self.project_data.len() - 1;
+                    if !self.unit_data.is_empty() {
+                        self.selected_unit_index = self.unit_data.len() - 1;
                     }
                 }
                 SelectablePanel::Commits => {
@@ -277,7 +277,7 @@ impl TuiState {
     }
 
     fn render_projects(&self, frame: &mut ratatui::Frame, area: Rect) {
-        if self.project_data.is_empty() {
+        if self.unit_data.is_empty() {
             return;
         }
 
@@ -293,7 +293,7 @@ impl TuiState {
 
     fn render_project_list(&self, frame: &mut ratatui::Frame, area: Rect) {
         let header = Row::new(vec![
-            Cell::from("  Project"),
+            Cell::from("  ReleaseUnit"),
             Cell::from("Version"),
             Cell::from("Commits"),
         ])
@@ -304,11 +304,11 @@ impl TuiState {
         );
 
         let rows: Vec<Row> = self
-            .project_data
+            .unit_data
             .iter()
             .enumerate()
-            .map(|(idx, proj)| {
-                let is_selected = idx == self.selected_project_index;
+            .map(|(idx, unit)| {
+                let is_selected = idx == self.selected_unit_index;
                 let indicator = if is_selected { "▶ " } else { "  " };
 
                 let style = if is_selected {
@@ -323,17 +323,17 @@ impl TuiState {
                     Style::default().fg(Color::Gray)
                 };
 
-                let commits_style = if proj.commits_count > 0 {
+                let commits_style = if unit.commits_count > 0 {
                     Style::default().fg(Color::Yellow)
                 } else {
                     Style::default().fg(Color::Gray)
                 };
 
                 Row::new(vec![
-                    Cell::from(format!("{}{}", indicator, proj.name)).style(style),
-                    Cell::from(proj.version.clone().unwrap_or_else(|| "—".to_string()))
+                    Cell::from(format!("{}{}", indicator, unit.name)).style(style),
+                    Cell::from(unit.version.clone().unwrap_or_else(|| "—".to_string()))
                         .style(version_style),
-                    Cell::from(proj.commits_count.to_string()).style(commits_style),
+                    Cell::from(unit.commits_count.to_string()).style(commits_style),
                 ])
             })
             .collect();
@@ -350,7 +350,7 @@ impl TuiState {
             Color::Gray
         };
 
-        let title = format!(" 📦 Projects ({}) ", self.project_data.len());
+        let title = format!(" 📦 Projects ({}) ", self.unit_data.len());
 
         let block = Block::default()
             .title(title)
@@ -363,7 +363,7 @@ impl TuiState {
     }
 
     fn render_project_details(&self, frame: &mut ratatui::Frame, area: Rect) {
-        if let Some(proj) = self.project_data.get(self.selected_project_index) {
+        if let Some(unit) = self.unit_data.get(self.selected_unit_index) {
             let header = Row::new(vec![Cell::from(" #"), Cell::from("Commit Summary")]).style(
                 Style::default()
                     .fg(Color::Cyan)
@@ -372,9 +372,9 @@ impl TuiState {
 
             let available_height = area.height.saturating_sub(3);
             let visible_start = self.commit_scroll_offset;
-            let visible_end = (visible_start + available_height as usize).min(proj.commits.len());
+            let visible_end = (visible_start + available_height as usize).min(unit.commits.len());
 
-            let rows: Vec<Row> = proj
+            let rows: Vec<Row> = unit
                 .commits
                 .iter()
                 .enumerate()
@@ -397,19 +397,19 @@ impl TuiState {
 
             let widths = [Constraint::Length(5), Constraint::Percentage(95)];
 
-            let scroll_indicator = if proj.commits.len() > available_height as usize {
+            let scroll_indicator = if unit.commits.len() > available_height as usize {
                 format!(
                     " [{}-{}/{}]",
                     visible_start + 1,
                     visible_end,
-                    proj.commits.len()
+                    unit.commits.len()
                 )
             } else {
                 String::new()
             };
 
-            let version_info = if let Some(version) = &proj.version {
-                if proj.age.unwrap_or(0) == 0 {
+            let version_info = if let Some(version) = &unit.version {
+                if unit.age.unwrap_or(0) == 0 {
                     format!("since {}", version)
                 } else {
                     format!("since {} (inexact)", version)
@@ -420,7 +420,7 @@ impl TuiState {
 
             let title = format!(
                 " 📝 {} — {} commit(s) {} {}",
-                proj.name, proj.commits_count, version_info, scroll_indicator
+                unit.name, unit.commits_count, version_info, scroll_indicator
             );
 
             let border_color = if self.selected_panel == SelectablePanel::Commits {
@@ -449,17 +449,13 @@ impl TuiState {
     }
 
     fn render_hints(&self, frame: &mut ratatui::Frame, area: Rect) {
-        let (panel_name, count_text) = if self.project_data.is_empty() {
+        let (panel_name, count_text) = if self.unit_data.is_empty() {
             ("Projects", "No projects".to_string())
         } else {
             match self.selected_panel {
                 SelectablePanel::Projects => (
                     "📦 Projects",
-                    format!(
-                        "{}/{}",
-                        self.selected_project_index + 1,
-                        self.project_data.len()
-                    ),
+                    format!("{}/{}", self.selected_unit_index + 1, self.unit_data.len()),
                 ),
                 SelectablePanel::Commits => {
                     let total_commits = self.current_project_commits();
@@ -506,10 +502,10 @@ impl TuiState {
 
 fn run_tui(sess: &AppSession, idents: &[usize]) -> Result<()> {
     let histories = sess.analyze_histories()?;
-    let mut project_data = Vec::new();
+    let mut unit_data = Vec::new();
 
     for ident in idents {
-        let proj = sess.graph().lookup(*ident);
+        let unit = sess.graph().lookup(*ident);
         let history = histories.lookup(*ident);
         let n = history.n_commits();
         let rel_info = history.release_info(&sess.repo)?;
@@ -520,14 +516,14 @@ fn run_tui(sess: &AppSession, idents: &[usize]) -> Result<()> {
             commits.push(summary);
         }
 
-        let (version, age) = if let Some(this_info) = rel_info.lookup_project(proj) {
+        let (version, age) = if let Some(this_info) = rel_info.lookup_project(unit) {
             (Some(this_info.version.to_string()), Some(this_info.age))
         } else {
             (None, None)
         };
 
-        project_data.push(ProjectStatus {
-            name: proj.user_facing_name.clone(),
+        unit_data.push(ReleaseUnitStatus {
+            name: unit.user_facing_name.clone(),
             version,
             commits_count: n,
             age,
@@ -541,7 +537,7 @@ fn run_tui(sess: &AppSession, idents: &[usize]) -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut state = TuiState::new(project_data);
+    let mut state = TuiState::new(unit_data);
 
     loop {
         terminal.draw(|frame| state.render(frame))?;
@@ -601,7 +597,7 @@ pub fn run(format: Option<ReleaseOutputFormat>, ci: bool) -> Result<i32> {
             let mut projects = Vec::new();
 
             for ident in &idents {
-                let proj = sess.graph().lookup(*ident);
+                let unit = sess.graph().lookup(*ident);
                 let history = histories.lookup(*ident);
                 let n = history.n_commits();
                 let rel_info = history.release_info(&sess.repo)?;
@@ -612,9 +608,9 @@ pub fn run(format: Option<ReleaseOutputFormat>, ci: bool) -> Result<i32> {
                     commits.push(summary);
                 }
 
-                let project_data = if let Some(this_info) = rel_info.lookup_project(proj) {
+                let unit_data = if let Some(this_info) = rel_info.lookup_project(unit) {
                     json!({
-                        "name": proj.user_facing_name,
+                        "name": unit.user_facing_name,
                         "current_version": this_info.version.to_string(),
                         "commits_count": n,
                         "commits": commits,
@@ -622,7 +618,7 @@ pub fn run(format: Option<ReleaseOutputFormat>, ci: bool) -> Result<i32> {
                     })
                 } else {
                     json!({
-                        "name": proj.user_facing_name,
+                        "name": unit.user_facing_name,
                         "current_version": null,
                         "commits_count": n,
                         "commits": commits,
@@ -630,7 +626,7 @@ pub fn run(format: Option<ReleaseOutputFormat>, ci: bool) -> Result<i32> {
                     })
                 };
 
-                projects.push(project_data);
+                projects.push(unit_data);
             }
 
             let output = json!({
@@ -641,34 +637,34 @@ pub fn run(format: Option<ReleaseOutputFormat>, ci: bool) -> Result<i32> {
         }
         _ => {
             for ident in idents {
-                let proj = sess.graph().lookup(ident);
+                let unit = sess.graph().lookup(ident);
                 let history = histories.lookup(ident);
                 let n = history.n_commits();
                 let rel_info = history.release_info(&sess.repo)?;
 
-                if let Some(this_info) = rel_info.lookup_project(proj) {
+                if let Some(this_info) = rel_info.lookup_project(unit) {
                     if this_info.age == 0 {
                         if n == 0 {
                             println!(
                                 "{}: no relevant commits since {}",
-                                proj.user_facing_name, this_info.version
+                                unit.user_facing_name, this_info.version
                             );
                         } else {
                             println!(
                                 "{}: {} relevant commit(s) since {}",
-                                proj.user_facing_name, n, this_info.version
+                                unit.user_facing_name, n, this_info.version
                             );
                         }
                     } else {
                         println!(
                             "{}: no more than {} relevant commit(s) since {} (unable to track in detail)",
-                            proj.user_facing_name, n, this_info.version
+                            unit.user_facing_name, n, this_info.version
                         );
                     }
                 } else {
                     println!(
                         "{}: {} relevant commit(s) since start of history (no releases on record)",
-                        proj.user_facing_name, n
+                        unit.user_facing_name, n
                     );
                 }
 

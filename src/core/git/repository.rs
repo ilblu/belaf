@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use std::{
     fs::File,
-    io::{BufRead, BufReader, Read},
+    io::{BufRead, BufReader},
     path::{Path, PathBuf},
 };
 use thiserror::Error as ThisError;
@@ -18,12 +18,11 @@ use uuid::Uuid;
 
 use crate::{
     atry,
-    cmd::init::BootstrapConfiguration,
     core::{
         bump::{extract_scope, ScopeMatcher},
         config::syntax::RepoConfiguration,
-        errors::{Error, Result},
-        project::{DepRequirement, Project},
+        errors::Result,
+        resolved_release_unit::{DepRequirement, ResolvedReleaseUnit},
         version::Version,
     },
 };
@@ -74,10 +73,6 @@ pub struct Repository {
     /// The name of the "upstream" remote.
     upstream_name: String,
 
-    /// "Bootstrap" versioning information used to tell us where versions were at
-    /// before the first Belaf release commit.
-    bootstrap_info: BootstrapConfiguration,
-
     /// Analysis configuration for LRU cache sizes.
     analysis_config: crate::core::config::syntax::AnalysisConfig,
 }
@@ -104,7 +99,6 @@ impl Repository {
         Ok(Repository {
             repo,
             upstream_name,
-            bootstrap_info: BootstrapConfiguration::default(),
             analysis_config: crate::core::config::syntax::AnalysisConfig {
                 commit_cache_size: 512,
                 tree_cache_size: 3,
@@ -155,7 +149,6 @@ impl Repository {
         Ok(Repository {
             repo,
             upstream_name: upstream_name.to_owned(),
-            bootstrap_info: BootstrapConfiguration::default(),
             analysis_config,
         })
     }
@@ -278,42 +271,6 @@ impl Repository {
         };
 
         self.analysis_config = cfg.analysis;
-
-        // While we're here, let's also read in the versioning bootstrap
-        // information, if it's available.
-
-        let mut bs_path = self.resolve_config_dir();
-        bs_path.push("bootstrap.toml");
-
-        let maybe_file = match File::open(&bs_path) {
-            Ok(f) => Some(f),
-
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    None
-                } else {
-                    return Err(Error::new(e).context(format!(
-                        "failed to open config file `{}`",
-                        bs_path.display()
-                    )));
-                }
-            }
-        };
-
-        if let Some(mut f) = maybe_file {
-            let mut text = String::new();
-            atry!(
-                f.read_to_string(&mut text);
-                ["failed to read bootstrap file `{}`", bs_path.display()]
-            );
-
-            self.bootstrap_info = atry!(
-                toml::from_str(&text);
-                ["could not parse bootstrap file `{}` as TOML", bs_path.display()]
-            );
-        }
-
-        // All done.
         Ok(())
     }
 
@@ -575,19 +532,10 @@ impl Repository {
     }
 
     /// Get a ReleaseCommitInfo corresponding to the project's history before
-    /// Belaf.
+    /// Belaf. Always empty in 3.0 — the per-project release history is
+    /// derived from git tags + the `belaf-baseline` tag.
     fn get_bootstrap_release_info(&self) -> ReleaseCommitInfo {
-        let mut rel_info = ReleaseCommitInfo::default();
-
-        for bs_info in &self.bootstrap_info.project[..] {
-            rel_info.projects.push(ReleasedProjectInfo {
-                qnames: bs_info.qnames.clone(),
-                version: bs_info.version.clone(),
-                age: 999,
-            })
-        }
-
-        rel_info
+        ReleaseCommitInfo::default()
     }
 
     pub fn get_signature(&self) -> Result<git2::Signature<'_>> {
@@ -743,7 +691,7 @@ impl Repository {
     /// the history from HEAD to its most recent release commit. I worry about
     /// the efficiency of this so we trace all the histories at once to try to
     /// improve that.
-    pub fn analyze_histories(&self, projects: &[Project]) -> Result<Vec<RepoHistory>> {
+    pub fn analyze_histories(&self, projects: &[ResolvedReleaseUnit]) -> Result<Vec<RepoHistory>> {
         let mut histories = vec![
             RepoHistory {
                 commits: Vec::new(),
@@ -755,14 +703,14 @@ impl Repository {
         let baseline_tag_oid = self.find_baseline_tag()?;
         let is_single_project = projects.len() == 1;
 
-        for (i, proj) in projects.iter().enumerate() {
+        for (i, unit) in projects.iter().enumerate() {
             if let Some((tag_oid, tag_name)) =
-                self.find_latest_tag_for_project(&proj.user_facing_name, is_single_project)?
+                self.find_latest_tag_for_project(&unit.user_facing_name, is_single_project)?
             {
                 let version = Self::parse_version_from_tag(&tag_name);
                 info!(
                     "found release tag for {}: {} (v{})",
-                    proj.user_facing_name, tag_name, version
+                    unit.user_facing_name, tag_name, version
                 );
                 histories[i].boundary = Some(HistoryBoundary::ReleaseTag {
                     commit: CommitId(tag_oid),
@@ -772,7 +720,7 @@ impl Repository {
             } else if let Some(baseline_oid) = baseline_tag_oid {
                 info!(
                     "no release tag for {}, using baseline tag belaf-baseline",
-                    proj.user_facing_name
+                    unit.user_facing_name
                 );
                 histories[i].boundary = Some(HistoryBoundary::Baseline {
                     commit: CommitId(baseline_oid),
@@ -780,7 +728,7 @@ impl Repository {
             } else {
                 warn!(
                     "no release tag or baseline found for {}, analyzing all commits since repo start",
-                    proj.user_facing_name
+                    unit.user_facing_name
                 );
             }
         }
@@ -802,12 +750,12 @@ impl Repository {
             .collect();
         let scope_matcher = ScopeMatcher::default();
 
-        // note that we don't "know" that proj_idx = project.ident
-        for proj_idx in 0..projects.len() {
+        // note that we don't "know" that unit_idx = project.ident
+        for unit_idx in 0..projects.len() {
             let mut walk = self.repo.revwalk()?;
             walk.push_head()?;
 
-            if let Some(boundary_commit) = histories[proj_idx].boundary_commit() {
+            if let Some(boundary_commit) = histories[unit_idx].boundary_commit() {
                 walk.hide(boundary_commit.0)?;
             }
 
@@ -870,8 +818,8 @@ impl Repository {
                                 if let Some(matched_name) =
                                     scope_matcher.find_matching_project(&scope, &project_names)
                                 {
-                                    for (idx, proj) in projects.iter().enumerate() {
-                                        if &proj.user_facing_name == matched_name {
+                                    for (idx, unit) in projects.iter().enumerate() {
+                                        if &unit.user_facing_name == matched_name {
                                             hit_buf[idx] = true;
                                             scope_matched = true;
                                             break;
@@ -886,8 +834,8 @@ impl Repository {
                                 for file in &[delta.old_file(), delta.new_file()] {
                                     if let Some(path_bytes) = file.path_bytes() {
                                         let path = RepoPath::new(path_bytes);
-                                        for (idx, proj) in projects.iter().enumerate() {
-                                            if proj.repo_paths.repo_path_matches(path) {
+                                        for (idx, unit) in projects.iter().enumerate() {
+                                            if unit.repo_paths.repo_path_matches(path) {
                                                 hit_buf[idx] = true;
                                             }
                                         }
@@ -904,8 +852,8 @@ impl Repository {
                     .get(&oid)
                     .expect("BUG: commit data should be in cache after put()");
 
-                if hits[proj_idx] {
-                    histories[proj_idx].commits.push(CommitId(oid));
+                if hits[unit_idx] {
+                    histories[unit_idx].commits.push(CommitId(oid));
                 }
             }
         }
@@ -1054,16 +1002,16 @@ pub enum ReleaseAvailability {
 impl Repository {
     pub fn find_earliest_release_containing(
         &self,
-        proj: &Project,
+        unit: &ResolvedReleaseUnit,
         cid: &CommitId,
         is_single_project: bool,
     ) -> Result<ReleaseAvailability> {
         if let Some((tag_oid, tag_name)) =
-            self.find_latest_tag_for_project(&proj.user_facing_name, is_single_project)?
+            self.find_latest_tag_for_project(&unit.user_facing_name, is_single_project)?
         {
             if self.repo.graph_descendant_of(tag_oid, cid.0)? || tag_oid == cid.0 {
                 let version = Self::parse_version_from_tag(&tag_name);
-                let v = Version::parse_like(&proj.version, version.to_string())?;
+                let v = Version::parse_like(&unit.version, version.to_string())?;
                 return Ok(ReleaseAvailability::ExistingRelease(v));
             }
         }
@@ -1103,18 +1051,18 @@ impl ReleaseCommitInfo {
     ///
     /// Information may be missing if the project was only added to the
     /// repository after this information was recorded.
-    pub fn lookup_project(&self, proj: &Project) -> Option<&ReleasedProjectInfo> {
+    pub fn lookup_project(&self, unit: &ResolvedReleaseUnit) -> Option<&ReleasedProjectInfo> {
         self.projects
             .iter()
-            .find(|&rpi| rpi.qnames == *proj.qualified_names())
+            .find(|&rpi| rpi.qnames == *unit.qualified_names())
     }
 
     /// Find information about a project release if it occurred at this moment.
     ///
     /// This function is like `lookup_project()`, but also returns None if the
     /// "age" of any identified release is not zero.
-    pub fn lookup_if_released(&self, proj: &Project) -> Option<&ReleasedProjectInfo> {
-        self.lookup_project(proj).filter(|rel| rel.age == 0)
+    pub fn lookup_if_released(&self, unit: &ResolvedReleaseUnit) -> Option<&ReleasedProjectInfo> {
+        self.lookup_project(unit).filter(|rel| rel.age == 0)
     }
 }
 
@@ -1122,7 +1070,7 @@ impl ReleaseCommitInfo {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ReleasedProjectInfo {
     /// The qualified names of this project, equivalent to the same-named
-    /// property of the Project struct.
+    /// property of the ResolvedReleaseUnit struct.
     pub qnames: Vec<String>,
 
     /// The version of the project in this commit, as text.

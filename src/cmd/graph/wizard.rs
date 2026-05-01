@@ -18,7 +18,7 @@ use crate::core::{graph::GraphQueryBuilder, session::AppSession};
 
 use super::browser;
 
-struct ProjectInfo {
+struct ReleaseUnitInfo {
     name: String,
     version: String,
     deps: Vec<String>,
@@ -26,7 +26,7 @@ struct ProjectInfo {
 }
 
 struct App {
-    projects: Vec<ProjectInfo>,
+    projects: Vec<ReleaseUnitInfo>,
     list_state: ListState,
     release_order: Vec<String>,
     show_help: bool,
@@ -38,13 +38,13 @@ impl App {
         let mut name_to_idx: HashMap<String, usize> = HashMap::new();
 
         for (idx, &ident) in idents.iter().enumerate() {
-            let proj = sess.graph().lookup(ident);
-            name_to_idx.insert(proj.user_facing_name.clone(), idx);
+            let unit = sess.graph().lookup(ident);
+            name_to_idx.insert(unit.user_facing_name.clone(), idx);
         }
 
         for &ident in idents.iter() {
-            let proj = sess.graph().lookup(ident);
-            let deps: Vec<String> = proj
+            let unit = sess.graph().lookup(ident);
+            let deps: Vec<String> = unit
                 .internal_deps
                 .iter()
                 .map(|d| {
@@ -68,9 +68,9 @@ impl App {
                 })
                 .collect();
 
-            projects.push(ProjectInfo {
-                name: proj.user_facing_name.clone(),
-                version: proj.version.to_string(),
+            projects.push(ReleaseUnitInfo {
+                name: unit.user_facing_name.clone(),
+                version: unit.version.to_string(),
                 deps,
                 dependents,
             });
@@ -97,7 +97,7 @@ impl App {
         self.list_state.selected().unwrap_or(0)
     }
 
-    fn selected_project(&self) -> Option<&ProjectInfo> {
+    fn selected_project(&self) -> Option<&ReleaseUnitInfo> {
         self.projects.get(self.selected_idx())
     }
 
@@ -460,7 +460,7 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let Some(proj) = selected else {
+    let Some(unit) = selected else {
         let no_selection = Paragraph::new(Line::from(vec![
             Span::styled("  ⚠ ", Style::default().fg(Color::Yellow)),
             Span::styled("No project selected", Style::default().fg(Color::Gray)),
@@ -469,15 +469,15 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
         return;
     };
 
-    let release_pos = app.release_position(&proj.name).unwrap_or(0);
+    let release_pos = app.release_position(&unit.name).unwrap_or(0);
     let total = app.release_order.len();
-    let is_root = proj.deps.is_empty();
+    let is_root = unit.deps.is_empty();
 
     let mut lines = vec![
         Line::from(vec![
             Span::styled(" 🏷️  Version: ", Style::default().fg(Color::Gray)),
             Span::styled(
-                &proj.version,
+                &unit.version,
                 Style::default()
                     .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
@@ -499,7 +499,7 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
         Line::from(vec![
             Span::styled(" ⬇️  ", Style::default()),
             Span::styled(
-                format!("Dependencies ({})", proj.deps.len()),
+                format!("Dependencies ({})", unit.deps.len()),
                 Style::default()
                     .fg(Color::Green)
                     .add_modifier(Modifier::BOLD),
@@ -507,13 +507,13 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
         ]),
     ];
 
-    if proj.deps.is_empty() {
+    if unit.deps.is_empty() {
         lines.push(Line::from(Span::styled(
             "     ✨ No dependencies",
             Style::default().fg(Color::Gray),
         )));
     } else {
-        for dep in &proj.deps {
+        for dep in &unit.deps {
             lines.push(Line::from(vec![
                 Span::styled("     → ", Style::default().fg(Color::Green)),
                 Span::styled(dep, Style::default().fg(Color::White)),
@@ -525,20 +525,20 @@ fn render_details_panel(f: &mut Frame, app: &App, area: Rect) {
     lines.push(Line::from(vec![
         Span::styled(" ⬆️  ", Style::default()),
         Span::styled(
-            format!("Dependents ({})", proj.dependents.len()),
+            format!("Dependents ({})", unit.dependents.len()),
             Style::default()
                 .fg(Color::Magenta)
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
 
-    if proj.dependents.is_empty() {
+    if unit.dependents.is_empty() {
         lines.push(Line::from(Span::styled(
             "     ✨ No dependents",
             Style::default().fg(Color::Gray),
         )));
     } else {
-        for dep in &proj.dependents {
+        for dep in &unit.dependents {
             lines.push(Line::from(vec![
                 Span::styled("     ← ", Style::default().fg(Color::Magenta)),
                 Span::styled(dep, Style::default().fg(Color::White)),

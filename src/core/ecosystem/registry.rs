@@ -13,13 +13,10 @@
 //!
 //! See plan §11 for the full spec.
 
-use std::collections::HashMap;
-
 use crate::core::{
-    config::syntax::ProjectConfiguration,
     errors::Result,
     git::repository::{RepoPath, RepoPathBuf, Repository},
-    graph::ProjectGraphBuilder,
+    graph::ReleaseUnitGraphBuilder,
     session::AppBuilder,
 };
 
@@ -85,31 +82,24 @@ pub trait Ecosystem: Send + Sync + std::fmt::Debug {
     fn process_index_item(
         &mut self,
         _repo: &Repository,
-        _graph: &mut ProjectGraphBuilder,
+        _graph: &mut ReleaseUnitGraphBuilder,
         _repopath: &RepoPath,
         _dirname: &RepoPath,
         _basename: &RepoPath,
-        _pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         Ok(())
     }
 
-    /// Consume the loader and register its discovered projects + rewriters
-    /// with the [`AppBuilder`]. Runs after the index scan, in registry
-    /// insertion order.
-    fn finalize(
-        self: Box<Self>,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()>;
+    /// Consume the loader and register its discovered projects +
+    /// rewriters with the [`AppBuilder`]. Runs after the index scan,
+    /// in registry insertion order.
+    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()>;
 
     /// Receive the resolved release-unit skip-list for this session.
-    /// Called by [`EcosystemRegistry::set_skip_list`] before any
-    /// `process_index_item` / `finalize` work. Default: ignore.
-    ///
+    /// Called before any `process_index_item` / `finalize` work.
     /// Loaders that perform their own workspace enumeration (e.g.
-    /// the Cargo loader's `cargo metadata` walk in `finalize`) override
-    /// this to remember the list and filter accordingly. Plan §C.
+    /// the Cargo loader's `cargo metadata` walk in `finalize`)
+    /// override this to filter accordingly.
     fn set_skip_list(&mut self, _skip_list: &[RepoPathBuf]) {}
 }
 
@@ -187,36 +177,31 @@ impl EcosystemRegistry {
             .map(|e| e.as_ref())
     }
 
-    /// Dispatch one git-index entry through every registered ecosystem.
-    /// Phase C: paths inside any [`Self::skip_list`] entry are silently
+    /// Dispatch one git-index entry through every registered
+    /// ecosystem. Paths inside any `skip_list` entry are silently
     /// ignored so the ReleaseUnit's atomic claim on its directory is
     /// respected.
     pub fn process_index_item(
         &mut self,
         repo: &Repository,
-        graph: &mut ProjectGraphBuilder,
+        graph: &mut ReleaseUnitGraphBuilder,
         repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         if is_path_inside_any(repopath, &self.skip_list) {
             return Ok(());
         }
         for eco in &mut self.ecosystems {
-            eco.process_index_item(repo, graph, repopath, dirname, basename, pconfig)?;
+            eco.process_index_item(repo, graph, repopath, dirname, basename)?;
         }
         Ok(())
     }
 
     /// Consume all registered ecosystems, draining them into the graph.
-    pub fn finalize_all(
-        self,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
+    pub fn finalize_all(self, app: &mut AppBuilder) -> Result<()> {
         for eco in self.ecosystems {
-            eco.finalize(app, pconfig)?;
+            eco.finalize(app)?;
         }
         Ok(())
     }

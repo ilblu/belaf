@@ -81,9 +81,26 @@ pub enum Commands {
 
     #[command(
         about = "Explain why each ReleaseUnit was created",
-        long_about = "Print provenance for every resolved ReleaseUnit:\n  • Which detector matched (auto-detected)\n  • Which TOML line it came from (explicit [[release_unit]])\n  • Which glob expansion produced it ([[release_unit_glob]])\n\nUseful when a unit appears in your config and you don't remember\nwhy, or to debug unexpected glob expansions / name collisions."
+        long_about = "Print provenance for every resolved ReleaseUnit:\n  • Which detector matched (auto-detected)\n  • Which TOML line it came from (explicit [[release_unit]])\n  • Which glob expansion produced it ([[release_unit_glob]])\n\nUseful when a unit appears in your config and you don't remember\nwhy, or to debug unexpected glob expansions / name collisions.\n\nUse --format=json for machine-readable output (consumed by the\ngithub-app dashboard's /api/cli/explain endpoint in 3.0)."
     )]
-    Explain,
+    Explain(ExplainArgs),
+}
+
+#[derive(Args)]
+pub struct ExplainArgs {
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        help = "Output format (default: text). `json` emits a structured payload that the github-app dashboard renders."
+    )]
+    pub format: Option<ExplainOutputFormat>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+pub enum ExplainOutputFormat {
+    Text,
+    Json,
 }
 
 #[derive(Subcommand)]
@@ -140,12 +157,12 @@ pub struct PrepareArgs {
     pub ci: bool,
 
     #[arg(
-        short,
-        long,
+        short = 'p',
+        long = "release-unit",
         value_delimiter = ',',
-        help = "Override bump for specific projects (e.g., gate:major,core:minor)"
+        help = "Override bump for specific ReleaseUnits (e.g., gate:major,core:minor)"
     )]
-    pub project: Option<Vec<String>>,
+    pub release_unit: Option<Vec<String>>,
 
     #[arg(
         long,
@@ -185,8 +202,12 @@ pub struct ChangelogArgs {
     #[arg(long, help = "Output changelog to stdout instead of files")]
     pub stdout: bool,
 
-    #[arg(short, long, help = "Generate changelog only for specific project")]
-    pub project: Option<String>,
+    #[arg(
+        short = 'p',
+        long = "release-unit",
+        help = "Generate changelog only for a specific ReleaseUnit"
+    )]
+    pub release_unit: Option<String>,
 
     #[arg(short, long, help = "Custom output file path (overrides config)")]
     pub output: Option<String>,

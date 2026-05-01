@@ -50,7 +50,7 @@ impl Step for ConfirmationStep {
 }
 
 fn render(frame: &mut Frame, area: Rect, state: &WizardState) {
-    let selected = state.selected_projects();
+    let selected = state.selected_units();
 
     let block = Block::default()
         .borders(Borders::ALL)
@@ -112,12 +112,12 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState) {
         ]),
     ];
 
-    for proj in selected.iter().take(8) {
+    for unit in selected.iter().take(8) {
         summary_lines.push(Line::from(vec![
             Span::styled("   ✅ ", Style::default().fg(Color::Green)),
-            Span::styled(proj.name.clone(), Style::default().fg(Color::White)),
+            Span::styled(unit.name.clone(), Style::default().fg(Color::White)),
             Span::styled(
-                format!(" @ {}", proj.version),
+                format!(" @ {}", unit.version),
                 Style::default().fg(Color::Gray),
             ),
         ]));
@@ -147,13 +147,6 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState) {
         Line::from(vec![
             Span::styled("   📄 ", Style::default().fg(Color::Cyan)),
             Span::styled("Create belaf/config.toml", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled("   📄 ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                "Create belaf/bootstrap.toml",
-                Style::default().fg(Color::Gray),
-            ),
         ]),
         Line::from(vec![
             Span::styled("   ✏️  ", Style::default().fg(Color::Yellow)),
@@ -194,7 +187,7 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState) {
 #[cfg(test)]
 mod tests {
     use super::super::{
-        state::{DetectedProject, WizardState},
+        state::{DetectedUnit, WizardState},
         step::test_support::render_to_string,
     };
     use super::*;
@@ -203,14 +196,14 @@ mod tests {
     fn renders_confirmation_with_projects() {
         let mut state = WizardState::new(false, None);
         state.upstream_url = "https://github.com/example/repo".into();
-        state.projects = vec![
-            DetectedProject {
+        state.standalone_units = vec![
+            DetectedUnit {
                 name: "alpha".into(),
                 version: "0.1.0".into(),
                 prefix: "crates/alpha".into(),
                 selected: true,
             },
-            DetectedProject {
+            DetectedUnit {
                 name: "beta".into(),
                 version: "0.2.3".into(),
                 prefix: "crates/beta".into(),

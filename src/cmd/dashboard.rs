@@ -90,7 +90,7 @@ pub enum DashboardAction {
 }
 
 struct DashboardStats {
-    project_count: usize,
+    unit_count: usize,
     pending_commits: usize,
     current_branch: String,
     is_initialized: bool,
@@ -99,7 +99,7 @@ struct DashboardStats {
 impl Default for DashboardStats {
     fn default() -> Self {
         Self {
-            project_count: 0,
+            unit_count: 0,
             pending_commits: 0,
             current_branch: String::from("unknown"),
             is_initialized: false,
@@ -138,7 +138,7 @@ fn load_stats() -> DashboardStats {
 
         if stats.is_initialized {
             if let Ok(session) = AppSession::initialize_default() {
-                stats.project_count = session.graph().projects().count();
+                stats.unit_count = session.graph().projects().count();
                 stats.pending_commits = count_pending_commits(&session);
             }
         }
@@ -267,7 +267,7 @@ fn render_stats(frame: &mut Frame, area: Rect, stats: &DashboardStats) {
             Span::raw("         "),
             Span::styled("⚡ ", Style::default().fg(Color::Yellow)),
             Span::styled(
-                format!("{} projects", stats.project_count),
+                format!("{} projects", stats.unit_count),
                 Style::default().fg(Color::Gray),
             ),
             Span::styled(" │ ", Style::default().fg(Color::Gray)),

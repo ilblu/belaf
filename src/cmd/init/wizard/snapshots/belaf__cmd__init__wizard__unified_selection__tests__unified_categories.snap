@@ -1,0 +1,28 @@
+---
+source: src/cmd/init/wizard/unified_selection.rs
+expression: out
+---
+"┌ ReleaseUnit Selection ───────────────────────────────────────────────────────────────────────────┐"
+"│                                                                                                  │"
+"│                  📋 Review and toggle each ReleaseUnit you want belaf to manage                  │" Hidden by multi-width symbols: [(20, " ")]
+"│                                            2 / 3 selected                                        │"
+"│                               • 1 mobile-app(s) → [allow_uncovered]                              │"
+"│┌────────────────────────────────────────────────────────────────────────────────────────────────┐│"
+"││ 🔍 Bundles                                                                                     ││" Hidden by multi-width symbols: [(4, " ")]
+"││  ✅ apps/desktop  tauri (single-source)                                                        ││" Hidden by multi-width symbols: [(5, " ")]
+"││ 📦 Standalone                                                                                  ││" Hidden by multi-width symbols: [(4, " ")]
+"││  ✅ alpha  @ 0.1.0 (crates/alpha)                                                              ││" Hidden by multi-width symbols: [(5, " ")]
+"││  ⬜ beta  @ 0.2.3 (crates/beta)                                                                ││" Hidden by multi-width symbols: [(5, " ")]
+"││ 📱 Externally-managed                                                                          ││" Hidden by multi-width symbols: [(4, " ")]
+"││  — apps/ios  iOS app — auto [allow_uncovered]                                                  ││"
+"││                                                                                                ││"
+"││                                                                                                ││"
+"││                                                                                                ││"
+"││                                                                                                ││"
+"││                                                                                                ││"
+"││                                                                                                ││"
+"││                                                                                                ││"
+"│└────────────────────────────────────────────────────────────────────────────────────────────────┘│"
+"│             ↑↓ navigate  Space toggle  a/n all/none  Enter continue  Esc back  q quit            │"
+"│                                                                                                  │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

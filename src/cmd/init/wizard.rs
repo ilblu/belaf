@@ -6,13 +6,12 @@
 //! returned. Concrete steps live in their own modules.
 
 pub mod confirmation;
-pub mod detector_review;
 pub mod preset;
-pub mod project;
 pub mod single_mobile;
 pub mod state;
 pub mod step;
 pub mod tag_format;
+pub mod unified_selection;
 pub mod upstream;
 pub mod welcome;
 
@@ -33,8 +32,8 @@ use crate::{
     atry,
     core::{
         git::repository::{PathMatcher, RepoPathBuf, Repository},
-        project::DepRequirement,
         release_unit::detector,
+        resolved_release_unit::DepRequirement,
         session::{AppBuilder, AppSession},
     },
 };
@@ -43,12 +42,10 @@ use super::auto_detect;
 
 use self::{
     single_mobile::SingleMobileStep,
-    state::{DetectedProject, WizardState},
+    state::{DetectedUnit, WizardState},
     step::{MouseClick, Step, StepResult, WizardOutcome},
     welcome::WelcomeStep,
 };
-
-use super::{BootstrapConfiguration, BootstrapProjectInfo};
 
 pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Result<i32> {
     let mut state = WizardState::new(force, preset);
@@ -89,17 +86,17 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
     let sess = AppBuilder::new()?.with_progress(true).initialize()?;
 
     for ident in sess.graph().toposorted() {
-        let proj = sess.graph().lookup(ident);
-        let prefix = proj.prefix();
+        let unit = sess.graph().lookup(ident);
+        let prefix = unit.prefix();
         let prefix_str = if prefix.is_empty() {
             "root".to_string()
         } else {
             prefix.escaped()
         };
 
-        state.projects.push(DetectedProject {
-            name: proj.user_facing_name.clone(),
-            version: proj.version.to_string(),
+        state.standalone_units.push(DetectedUnit {
+            name: unit.user_facing_name.clone(),
+            version: unit.version.to_string(),
             prefix: prefix_str,
             selected: true,
         });
@@ -276,30 +273,25 @@ fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
 
     let mut sess = AppSession::initialize_default()?;
 
-    let mut bs_cfg = BootstrapConfiguration::default();
+    // Update each project's internal_deps to `Manual(version)` so
+    // the rewrite step has concrete versions to write.
     let mut versions = HashMap::new();
     let selected_names: Vec<String> = state
-        .selected_projects()
+        .selected_units()
         .iter()
         .map(|p| p.name.clone())
         .collect();
 
     let topo_ids: Vec<_> = sess.graph().toposorted().collect();
     for ident in topo_ids {
-        let proj = sess.graph_mut().lookup_mut(ident);
-        if !selected_names.contains(&proj.user_facing_name) {
+        let unit = sess.graph_mut().lookup_mut(ident);
+        if !selected_names.contains(&unit.user_facing_name) {
             continue;
         }
 
-        bs_cfg.project.push(BootstrapProjectInfo {
-            qnames: proj.qualified_names().to_owned(),
-            version: proj.version.to_string(),
-            release_commit: None,
-        });
+        versions.insert(unit.ident(), unit.version.clone());
 
-        versions.insert(proj.ident(), proj.version.clone());
-
-        for dep in &mut proj.internal_deps[..] {
+        for dep in &mut unit.internal_deps[..] {
             dep.belaf_requirement = DepRequirement::Manual(
                 versions
                     .get(&dep.ident)
@@ -309,22 +301,12 @@ fn execute_bootstrap(state: &WizardState, repo: &Repository) -> Result<String> {
         }
     }
 
-    let bs_text = toml::to_string_pretty(&bs_cfg)?;
-
-    let mut bs_path = repo.resolve_config_dir();
-    bs_path.push("bootstrap.toml");
-
-    if !bs_path.exists() {
-        let mut f = fs::File::create(&bs_path)?;
-        f.write_all(bs_text.as_bytes())?;
-    }
-
     sess.rewrite()?;
 
     let topo_ids: Vec<_> = sess.graph().toposorted().collect();
     for ident in topo_ids {
-        let proj = sess.graph_mut().lookup_mut(ident);
-        for dep in &mut proj.internal_deps[..] {
+        let unit = sess.graph_mut().lookup_mut(ident);
+        for dep in &mut unit.internal_deps[..] {
             dep.belaf_requirement = DepRequirement::Manual(dep.literal.clone());
         }
     }

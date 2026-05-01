@@ -18,12 +18,11 @@ use toml_edit::{DocumentMut, Item, Table};
 use tracing::info;
 
 use crate::core::{
-    config::syntax::ProjectConfiguration,
     ecosystem::registry::Ecosystem,
     errors::Result,
     git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-    graph::ProjectGraphBuilder,
-    project::{DepRequirement, DependencyTarget, ProjectId},
+    graph::ReleaseUnitGraphBuilder,
+    resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
     rewriters::Rewriter,
     session::{AppBuilder, AppSession},
     version::Version,
@@ -61,11 +60,7 @@ impl CargoLoader {
     ///
     /// Discovers ALL workspace roots and loads each one separately.
     /// Uses two-phase loading: first register all projects, then resolve dependencies.
-    pub fn into_projects(
-        self,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
+    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
         if self.cargo_toml_paths.is_empty() {
             return Ok(());
         }
@@ -80,14 +75,13 @@ impl CargoLoader {
         info!("found {} Cargo workspace root(s)", workspace_data.len());
 
         let mut all_cargo_to_graph = HashMap::new();
-        let mut name_to_project: HashMap<String, ProjectId> = HashMap::new();
+        let mut name_to_project: HashMap<String, ReleaseUnitId> = HashMap::new();
 
         for (workspace_root, cargo_meta) in &workspace_data {
             info!("loading Cargo workspace: {}", workspace_root.display());
 
             self.register_workspace_projects(
                 app,
-                pconfig,
                 cargo_meta,
                 workspace_root,
                 &mut all_cargo_to_graph,
@@ -127,7 +121,7 @@ impl CargoLoader {
             if metadata_covered_manifests.contains(&toml_abs) {
                 continue;
             }
-            self.register_via_direct_parse(toml_repopath, app, pconfig)?;
+            self.register_via_direct_parse(toml_repopath, app)?;
         }
 
         Ok(())
@@ -147,7 +141,6 @@ impl CargoLoader {
         &self,
         toml_repopath: &RepoPathBuf,
         app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         let toml_abs = app.repo.resolve_workdir(toml_repopath);
         if !toml_abs.exists() {
@@ -189,13 +182,14 @@ impl CargoLoader {
         let (prefix, _) = toml_repopath.split_basename();
         let qnames = vec![name.clone(), "cargo".to_owned()];
 
-        if let Some(ident) = app.graph.try_add_project(qnames, pconfig) {
-            let proj = app.graph.lookup_mut(ident);
-            proj.version = Some(Version::Semver(version));
-            proj.prefix = Some(prefix.to_owned());
+        let ident = app.graph.add_project(qnames);
+        {
+            let unit = app.graph.lookup_mut(ident);
+            unit.version = Some(Version::Semver(version));
+            unit.prefix = Some(prefix.to_owned());
 
             let cargo_rewrite = CargoRewriter::new(ident, toml_repopath.clone());
-            proj.rewriters.push(Box::new(cargo_rewrite));
+            unit.rewriters.push(Box::new(cargo_rewrite));
         }
         Ok(())
     }
@@ -306,11 +300,10 @@ impl CargoLoader {
     fn register_workspace_projects(
         &self,
         app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
         cargo_meta: &cargo_metadata::Metadata,
         workspace_root: &Path,
-        cargo_to_graph: &mut HashMap<cargo_metadata::PackageId, ProjectId>,
-        name_to_project: &mut HashMap<String, ProjectId>,
+        cargo_to_graph: &mut HashMap<cargo_metadata::PackageId, ReleaseUnitId>,
+        name_to_project: &mut HashMap<String, ReleaseUnitId>,
     ) -> Result<()> {
         let content = read_config_file(workspace_root)?;
         let doc: DocumentMut = content.parse()?;
@@ -353,11 +346,12 @@ impl CargoLoader {
 
                 let qnames = vec![name.clone(), "cargo".to_owned()];
 
-                if let Some(ident) = app.graph.try_add_project(qnames, pconfig) {
-                    let proj = app.graph.lookup_mut(ident);
+                let ident = app.graph.add_project(qnames);
+                {
+                    let unit = app.graph.lookup_mut(ident);
 
-                    proj.version = Some(Version::Semver(version));
-                    proj.prefix = Some(prefix.to_owned());
+                    unit.version = Some(Version::Semver(version));
+                    unit.prefix = Some(prefix.to_owned());
 
                     let workspace_member_ids: std::collections::HashSet<_> =
                         cargo_meta.workspace_members.iter().collect();
@@ -370,7 +364,7 @@ impl CargoLoader {
                     }
 
                     let cargo_rewrite = CargoRewriter::new(ident, manifest_repopath);
-                    proj.rewriters.push(Box::new(cargo_rewrite));
+                    unit.rewriters.push(Box::new(cargo_rewrite));
                 }
             }
         } else {
@@ -410,16 +404,17 @@ impl CargoLoader {
 
                 let qnames = vec![pkg.name.to_string(), "cargo".to_owned()];
 
-                if let Some(ident) = app.graph.try_add_project(qnames, pconfig) {
-                    let proj = app.graph.lookup_mut(ident);
+                let ident = app.graph.add_project(qnames);
+                {
+                    let unit = app.graph.lookup_mut(ident);
 
-                    proj.version = Some(Version::Semver(pkg.version.clone()));
-                    proj.prefix = Some(prefix.to_owned());
+                    unit.version = Some(Version::Semver(pkg.version.clone()));
+                    unit.prefix = Some(prefix.to_owned());
                     cargo_to_graph.insert(pkg.id.clone(), ident);
                     name_to_project.insert(pkg.name.to_string(), ident);
 
                     let cargo_rewrite = CargoRewriter::new(ident, manifest_repopath);
-                    proj.rewriters.push(Box::new(cargo_rewrite));
+                    unit.rewriters.push(Box::new(cargo_rewrite));
                 }
             }
         }
@@ -431,8 +426,8 @@ impl CargoLoader {
         &self,
         app: &mut AppBuilder,
         cargo_meta: &cargo_metadata::Metadata,
-        cargo_to_graph: &HashMap<cargo_metadata::PackageId, ProjectId>,
-        name_to_project: &HashMap<String, ProjectId>,
+        cargo_to_graph: &HashMap<cargo_metadata::PackageId, ReleaseUnitId>,
+        name_to_project: &HashMap<String, ReleaseUnitId>,
     ) -> Result<()> {
         let mut cargoid_to_index = HashMap::new();
 
@@ -445,7 +440,7 @@ impl CargoLoader {
             .as_ref()
             .ok_or_else(|| anyhow!("cargo metadata did not include dependency resolution"))?;
 
-        let mut added_deps: std::collections::HashSet<(ProjectId, ProjectId)> =
+        let mut added_deps: std::collections::HashSet<(ReleaseUnitId, ReleaseUnitId)> =
             std::collections::HashSet::new();
 
         for node in &resolve.nodes {
@@ -528,22 +523,17 @@ impl Ecosystem for CargoLoader {
     fn process_index_item(
         &mut self,
         _repo: &Repository,
-        _graph: &mut ProjectGraphBuilder,
+        _graph: &mut ReleaseUnitGraphBuilder,
         _repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        _pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         self.record_path(dirname, basename);
         Ok(())
     }
 
-    fn finalize(
-        self: Box<Self>,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
-        (*self).into_projects(app, pconfig)
+    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
+        (*self).into_projects(app)
     }
 
     /// Phase C — receive the resolved release-unit skip-list.
@@ -558,14 +548,14 @@ impl Ecosystem for CargoLoader {
 /// Rewrite Cargo.toml to include real version numbers.
 #[derive(Debug)]
 pub struct CargoRewriter {
-    proj_id: ProjectId,
+    unit_id: ReleaseUnitId,
     toml_path: RepoPathBuf,
 }
 
 impl CargoRewriter {
     /// Create a new Cargo.toml rewriter.
-    pub fn new(proj_id: ProjectId, toml_path: RepoPathBuf) -> Self {
-        CargoRewriter { proj_id, toml_path }
+    pub fn new(unit_id: ReleaseUnitId, toml_path: RepoPathBuf) -> Self {
+        CargoRewriter { unit_id, toml_path }
     }
 }
 
@@ -581,10 +571,10 @@ impl Rewriter for CargoRewriter {
         // qname, not the user-facing name, since that is what is used in
         // Cargo-land.
 
-        let proj = app.graph().lookup(self.proj_id);
+        let unit = app.graph().lookup(self.unit_id);
         let mut internal_reqs = HashMap::new();
 
-        for dep in &proj.internal_deps[..] {
+        for dep in &unit.internal_deps[..] {
             let req_text = match dep.belaf_requirement {
                 DepRequirement::Manual(ref t) => t.clone(),
 
@@ -633,7 +623,7 @@ impl Rewriter for CargoRewriter {
                             self.toml_path.escaped()
                         )
                     })?;
-                ws_pkg["version"] = toml_edit::value(proj.version.to_string());
+                ws_pkg["version"] = toml_edit::value(unit.version.to_string());
             } else {
                 let pkg = ct_root
                     .get_mut("package")
@@ -641,7 +631,7 @@ impl Rewriter for CargoRewriter {
                     .ok_or_else(|| {
                         anyhow!("no [package] section in {}", self.toml_path.escaped())
                     })?;
-                pkg["version"] = toml_edit::value(proj.version.to_string());
+                pkg["version"] = toml_edit::value(unit.version.to_string());
             }
 
             // Rewrite any internal dependencies. These may be found in three
@@ -724,7 +714,7 @@ impl Rewriter for CargoRewriter {
         // a missing `cargo` binary or a Bazel-managed lockfile
         // doesn't block the rewrite of other ecosystems.
         let workspace_root = app.repo.resolve_workdir(&RepoPathBuf::new(b""));
-        let crate_name = &proj.qualified_names()[0];
+        let crate_name = &unit.qualified_names()[0];
         if let Err(e) = crate::core::cargo_lock::update_for_crate(crate_name, &workspace_root) {
             tracing::warn!("Cargo.lock update for `{crate_name}` failed (continuing): {e}",);
         }
@@ -738,7 +728,7 @@ impl Rewriter for CargoRewriter {
         // as done below, we don't clear unexpected entries in the
         // internal_dep_versions block. Should we do that?
 
-        if app.graph().lookup(self.proj_id).internal_deps.is_empty() {
+        if app.graph().lookup(self.unit_id).internal_deps.is_empty() {
             return Ok(());
         }
 
@@ -794,9 +784,9 @@ impl Rewriter for CargoRewriter {
                 })?;
 
             let graph = app.graph();
-            let proj = graph.lookup(self.proj_id);
+            let unit = graph.lookup(self.unit_id);
 
-            for dep in &proj.internal_deps {
+            for dep in &unit.internal_deps {
                 let target = &graph.lookup(dep.ident).qualified_names()[0];
 
                 let spec = match &dep.belaf_requirement {

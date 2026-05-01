@@ -1,6 +1,5 @@
 use anyhow::anyhow;
 use std::{
-    collections::HashMap,
     fs::File,
     io::{Read, Write},
 };
@@ -10,12 +9,11 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
     core::{
-        config::syntax::ProjectConfiguration,
         ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::ProjectGraphBuilder,
-        project::ProjectId,
+        graph::ReleaseUnitGraphBuilder,
+        resolved_release_unit::ReleaseUnitId,
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
         version::Version,
@@ -38,11 +36,7 @@ impl ElixirLoader {
         self.mix_exs_paths.push(path);
     }
 
-    pub fn into_projects(
-        self,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
+    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
         for mix_exs_path in self.mix_exs_paths {
             let (prefix, _) = mix_exs_path.split_basename();
             let fs_path = app.repo.resolve_workdir(&mix_exs_path);
@@ -77,26 +71,25 @@ impl ElixirLoader {
 
             let qnames = vec![app_name, "elixir".to_owned()];
 
-            if let Some(ident) = app.graph.try_add_project(qnames, pconfig) {
-                let proj = app.graph.lookup_mut(ident);
+            let ident = app.graph.add_project(qnames);
+            let unit = app.graph.lookup_mut(ident);
 
-                let version = match semver::Version::parse(&version_str) {
-                    Ok(v) => Version::Semver(v),
-                    Err(_) => {
-                        warn!(
-                            "failed to parse version `{}` from mix.exs, using default",
-                            version_str
-                        );
-                        Version::Semver(semver::Version::new(0, 1, 0))
-                    }
-                };
+            let version = match semver::Version::parse(&version_str) {
+                Ok(v) => Version::Semver(v),
+                Err(_) => {
+                    warn!(
+                        "failed to parse version `{}` from mix.exs, using default",
+                        version_str
+                    );
+                    Version::Semver(semver::Version::new(0, 1, 0))
+                }
+            };
 
-                proj.version = Some(version);
-                proj.prefix = Some(prefix.to_owned());
+            unit.version = Some(version);
+            unit.prefix = Some(prefix.to_owned());
 
-                let elixir_rewrite = MixExsRewriter::new(ident, mix_exs_path);
-                proj.rewriters.push(Box::new(elixir_rewrite));
-            }
+            let elixir_rewrite = MixExsRewriter::new(ident, mix_exs_path);
+            unit.rewriters.push(Box::new(elixir_rewrite));
         }
 
         Ok(())
@@ -150,41 +143,36 @@ impl Ecosystem for ElixirLoader {
     fn process_index_item(
         &mut self,
         _repo: &Repository,
-        _graph: &mut ProjectGraphBuilder,
+        _graph: &mut ReleaseUnitGraphBuilder,
         _repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
-        _pconfig: &HashMap<String, ProjectConfiguration>,
     ) -> Result<()> {
         self.record_path(dirname, basename);
         Ok(())
     }
 
-    fn finalize(
-        self: Box<Self>,
-        app: &mut AppBuilder,
-        pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Result<()> {
-        (*self).into_projects(app, pconfig)
+    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
+        (*self).into_projects(app)
     }
 }
 
 #[derive(Debug)]
 pub struct MixExsRewriter {
-    proj_id: ProjectId,
+    unit_id: ReleaseUnitId,
     repo_path: RepoPathBuf,
 }
 
 impl MixExsRewriter {
-    pub fn new(proj_id: ProjectId, repo_path: RepoPathBuf) -> Self {
-        MixExsRewriter { proj_id, repo_path }
+    pub fn new(unit_id: ReleaseUnitId, repo_path: RepoPathBuf) -> Self {
+        MixExsRewriter { unit_id, repo_path }
     }
 }
 
 impl Rewriter for MixExsRewriter {
     fn rewrite(&self, app: &AppSession, changes: &mut ChangeList) -> Result<()> {
         let fs_path = app.repo.resolve_workdir(&self.repo_path);
-        let proj = app.graph().lookup(self.proj_id);
+        let unit = app.graph().lookup(self.unit_id);
 
         let mut contents = String::new();
         let mut f = atry!(
@@ -199,7 +187,7 @@ impl Rewriter for MixExsRewriter {
 
         drop(f);
 
-        let new_version = proj.version.to_string();
+        let new_version = unit.version.to_string();
         let mut new_contents = String::new();
 
         for line in contents.lines() {

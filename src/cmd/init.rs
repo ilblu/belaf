@@ -5,30 +5,15 @@
 
 use anyhow::{bail, Context};
 use clap::Parser;
-use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs, io::Write};
 use tracing::{error, info, warn};
 
 use crate::atry;
 use crate::core::{
     errors::{Error, Result},
-    project::DepRequirement,
+    resolved_release_unit::DepRequirement,
     session::AppBuilder,
 };
-
-/// The toplevel bootstrap state structure.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-pub struct BootstrapConfiguration {
-    pub project: Vec<BootstrapProjectInfo>,
-}
-
-/// Bootstrap info for a project.
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct BootstrapProjectInfo {
-    pub qnames: Vec<String>,
-    pub version: String,
-    pub release_commit: Option<String>,
-}
 
 /// The `bootstrap` commands.
 #[derive(Debug, Eq, PartialEq, Parser)]
@@ -92,11 +77,8 @@ pub fn run(
     };
     let exit = cmd.execute()?;
 
-    // Phase I.2 + I.5 — when --auto-detect is set in --ci mode, run
-    // the Phase F detectors and append release_unit blocks to the
-    // newly-bootstrapped config.toml. Mobile-app paths land in
-    // [allow_uncovered] so drift detection doesn't fire on them.
-    if exit == 0 && auto_detect_flag {
+    let _ = auto_detect_flag; // accepted for backward compat; auto-detect is always on in --ci.
+    if exit == 0 {
         run_auto_detect()?;
     }
     Ok(exit)
@@ -233,7 +215,7 @@ impl BootstrapCommand {
         let mut seen_any = false;
 
         for ident in sess.graph().toposorted() {
-            let proj = sess.graph().lookup(ident);
+            let unit = sess.graph().lookup(ident);
 
             if !seen_any {
                 info!("belaf detected the following projects in the repo:");
@@ -242,7 +224,7 @@ impl BootstrapCommand {
             }
 
             let loc_desc = {
-                let p = proj.prefix();
+                let p = unit.prefix();
 
                 if p.is_empty() {
                     "the root directory".to_owned()
@@ -253,7 +235,7 @@ impl BootstrapCommand {
 
             println!(
                 "    {} @ {} in {}",
-                proj.user_facing_name, proj.version, loc_desc
+                unit.user_facing_name, unit.version, loc_desc
             );
         }
 
@@ -267,62 +249,16 @@ impl BootstrapCommand {
             return Ok(1);
         }
 
-        let mut bs_cfg = BootstrapConfiguration::default();
+        // Convert each project's internal_deps from `Commit(...)` to
+        // `Manual(version)` so the rewrite step has concrete versions
+        // to write into the manifest files.
         let mut versions = HashMap::new();
-
         let topo_ids: Vec<_> = sess.graph().toposorted().collect();
         for ident in topo_ids {
-            let proj = sess.graph_mut().lookup_mut(ident);
-            bs_cfg.project.push(BootstrapProjectInfo {
-                qnames: proj.qualified_names().to_owned(),
-                version: proj.version.to_string(),
-                release_commit: None,
-            });
-
-            versions.insert(proj.ident(), proj.version.clone());
-
-            for dep in &mut proj.internal_deps[..] {
+            let unit = sess.graph_mut().lookup_mut(ident);
+            versions.insert(unit.ident(), unit.version.clone());
+            for dep in &mut unit.internal_deps[..] {
                 dep.belaf_requirement = DepRequirement::Manual(versions[&dep.ident].to_string());
-            }
-        }
-
-        let bs_text = atry!(
-            toml::to_string_pretty(&bs_cfg);
-            ["could not serialize bootstrap data into TOML format"]
-        );
-
-        {
-            let mut bs_path = repo.resolve_config_dir();
-            bs_path.push("bootstrap.toml");
-            info!("writing versioning bootstrap file `{}`", bs_path.display());
-
-            let f = match fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .open(&bs_path)
-            {
-                Ok(f) => Some(f),
-                Err(e) => {
-                    if e.kind() == std::io::ErrorKind::AlreadyExists {
-                        warn!(
-                            "belaf bootstrap file `{}` already exists; not modifying it",
-                            bs_path.display()
-                        );
-                        None
-                    } else {
-                        return Err(Error::new(e).context(format!(
-                            "failed to open belaf bootstrap file `{}` for writing",
-                            bs_path.display()
-                        )));
-                    }
-                }
-            };
-
-            if let Some(mut f) = f {
-                atry!(
-                    f.write_all(bs_text.as_bytes());
-                    ["could not write bootstrap file `{}`", bs_path.display()]
-                );
             }
         }
 
@@ -356,8 +292,8 @@ impl BootstrapCommand {
 
         let topo_ids: Vec<_> = sess.graph().toposorted().collect();
         for ident in topo_ids {
-            let proj = sess.graph_mut().lookup_mut(ident);
-            for dep in &mut proj.internal_deps[..] {
+            let unit = sess.graph_mut().lookup_mut(ident);
+            for dep in &mut unit.internal_deps[..] {
                 dep.belaf_requirement = DepRequirement::Manual(dep.literal.clone());
             }
         }

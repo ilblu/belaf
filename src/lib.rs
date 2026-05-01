@@ -26,8 +26,8 @@ pub mod core {
     pub mod graph;
     pub mod group;
     pub mod manifest;
-    pub mod project;
     pub mod release_unit;
+    pub mod resolved_release_unit;
     pub mod rewriters;
     pub mod session;
     pub mod tag_format;
@@ -146,7 +146,7 @@ pub async fn execute(cli: Cli) -> Result<()> {
         Commands::Prepare(args) => {
             let exit_code = cmd::prepare::run(
                 args.ci,
-                args.project,
+                args.release_unit,
                 args.bump_source,
                 args.bump_source_cmd,
             )?;
@@ -166,7 +166,7 @@ pub async fn execute(cli: Cli) -> Result<()> {
             let exit_code = cmd::changelog::run(
                 args.preview,
                 args.stdout,
-                args.project,
+                args.release_unit,
                 args.output,
                 args.unreleased,
                 args.ci,
@@ -176,8 +176,8 @@ pub async fn execute(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
-        Commands::Explain => {
-            let exit_code = cmd::explain::run()?;
+        Commands::Explain(args) => {
+            let exit_code = cmd::explain::run(args.format)?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }

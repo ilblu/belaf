@@ -24,10 +24,6 @@ fn test_release_init_creates_config_directory() {
         repo.file_exists("belaf/config.toml"),
         "config.toml not created"
     );
-    assert!(
-        repo.file_exists("belaf/bootstrap.toml"),
-        "bootstrap.toml not created"
-    );
 }
 
 #[test]
@@ -49,12 +45,9 @@ edition = "2021"
 
     assert!(output.status.success());
 
-    let bootstrap = repo.read_file("belaf/bootstrap.toml");
-    assert!(
-        bootstrap.contains("my-crate"),
-        "Project name not in bootstrap.toml"
-    );
-    assert!(bootstrap.contains("0.1.0"), "Version not in bootstrap.toml");
+    let status_output = repo.run_belaf_command(&["status"]);
+    let stdout = String::from_utf8_lossy(&status_output.stdout);
+    assert!(stdout.contains("my-crate"), "crate not detected");
 }
 
 #[test]

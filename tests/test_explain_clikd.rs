@@ -50,8 +50,37 @@ impl Seedable for TestRepo {
     }
 }
 
-const CLIKD_CANONICAL_CONFIG: &str = r#"
+const CLIKD_CANONICAL_CONFIG: &str = r##"
+[repo]
 upstream_urls = ["https://github.com/test/clikd"]
+
+[repo.analysis]
+commit_cache_size = 512
+tree_cache_size = 3
+
+[changelog]
+header = "# Changelog"
+body = "{{ version }}"
+trim = true
+output = "CHANGELOG.md"
+conventional_commits = true
+protect_breaking_commits = false
+filter_unconventional = false
+filter_commits = false
+sort_commits = "newest"
+include_authors = false
+include_contributors = false
+include_statistics = false
+emoji_groups = false
+
+[bump]
+features_always_bump_minor = true
+breaking_always_bump_major = true
+initial_tag = "0.1.0"
+
+[commit_attribution]
+strategy = "scope_first"
+scope_matching = "smart"
 
 [[release_unit_glob]]
 glob = "apps/services/*"
@@ -85,7 +114,7 @@ version_field = "gradle_properties"
 
 [allow_uncovered]
 paths = ["apps/mobile-ios/", "sdks/typescript/", "sdks/swift/"]
-"#;
+"##;
 
 #[test]
 fn explain_renders_every_release_unit_for_clikd_shape() {

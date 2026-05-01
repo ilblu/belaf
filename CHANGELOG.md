@@ -1,3 +1,68 @@
+## 3.0.0 (2026-05-01)
+
+Belaf 3.0 — clean architectural reset across CLI, github-app API, and
+dashboard. No backward compatibility with 2.x; a fresh `belaf init`
+is required for any repo previously on 2.x. Coordinated big-bang
+release across all three components per ADR 0005's audit (no
+production data).
+
+See `docs/adr/0001..0005-*.md` for the architectural decisions.
+
+### Breaking changes
+
+- **Manifest wire format bumps to schema 3.0.** `schema_version` is
+  literally `"3.0"`. Six previously-config-only fields are now
+  first-class on each release: `bundle_manifests`, `external_versioner`,
+  `version_field_spec`, `cascade_from`, `visibility`, `satellites`.
+  github-app v3.0 rejects v2.0 manifests with a clear "upgrade
+  producer" error. (ADR 0003)
+- **`ReleaseUnit` is the sole declarative primitive.** The internal
+  `Project` struct has been renamed `ResolvedReleaseUnit` and is
+  treated as resolver-internal. Every reference to `Project*` in the
+  public API is gone (`ProjectId` → `ReleaseUnitId`, `ProjectGraph` →
+  `ReleaseUnitGraph`, etc.). (ADR 0001)
+- **`[projects."<name>"].tag_format` precedence dropped.** New
+  precedence: `[group.<id>].tag_format` > ecosystem default.
+- **github-app `projects` tenancy tier dropped entirely** — new
+  tenant hierarchy: `Workspace → Repo → ReleaseUnit → Release`.
+  ~1700 LOC removed. Per-repo `tags: text[]` column added as the
+  replacement UI grouping mechanism. (ADR 0005)
+- **Dashboard `/projects/$slug/*` routes deleted** — 17 routes plus
+  6 project-aware components.
+
+### New features
+
+- **`UnifiedSelectionStep` in `belaf init`** — one categorized
+  selection screen replaces the 2.x split between manual project list
+  + auto-detect bundle review. Three categories: 🔍 Bundles
+  (multi-manifest auto-detected) / 📦 Standalone (single-manifest
+  loader output) / 📱 Externally-managed (mobile, read-only).
+- **`belaf config explain --format=json`** emits a serde-derived
+  payload for github-app dashboard consumption.
+- **Repo-tags grouping in github-app dashboard** — multi-select tag
+  chips filter the workspace overview.
+
+### Known deferrals (focused follow-up PRs)
+
+- `bootstrap.toml` retirement (ADR 0002).
+- `src/core/ecosystem/maven.rs` (1521 LOC) and
+  `src/core/release_unit/detector.rs` (1192 LOC) physical splits.
+- Producer wiring for the new typed manifest fields
+  (`version_field_spec` / `bundle_manifests` / `external_versioner`
+  / `satellites` are emitted as empty / null today).
+- Dashboard greenfield routes
+  (`/repos/$owner/$repo/{release-units,cascade-graph,drift,explain}`)
+  and visualizers (ReleaseUnitCard, BundleBadge, CascadeArrow, …).
+
+### Cross-repo
+
+- github-app deploys `feat/3.0` together with this CLI release. Mixed
+  versions (CLI 3.0 + github-app 2.x, or vice versa) are not
+  supported.
+- Drizzle migration `0003_drop_projects_tier_v3.sql` runs on
+  github-app deploy. Destructive (drops the `projects` table); per
+  the user's audit no production data exists.
+
 ## [2.1.1](https://github.com/ilblu/belaf/compare/v2.1.0...v2.1.1) (2026-05-01)
 
 UX patch for the init wizard.

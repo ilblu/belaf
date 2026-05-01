@@ -1415,7 +1415,7 @@ scope_matching = "smart"
 }
 
 #[test]
-fn test_project_ignore_config() {
+fn test_ignore_paths_config() {
     let repo = TestRepo::new();
 
     repo.write_file(
@@ -1483,8 +1483,8 @@ initial_tag = "0.1.0"
 strategy = "scope_first"
 scope_matching = "smart"
 
-[projects.internal]
-ignore = true
+[ignore_paths]
+paths = ["crates/internal"]
 "##;
     write_custom_config(&repo, config);
 

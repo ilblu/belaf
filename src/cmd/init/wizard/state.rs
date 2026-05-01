@@ -12,7 +12,7 @@ use crate::core::git::repository::RepoPathBuf;
 use crate::core::release_unit::detector::DetectionReport;
 
 #[derive(Clone, Debug)]
-pub struct DetectedProject {
+pub struct DetectedUnit {
     pub name: String,
     pub version: String,
     pub prefix: String,
@@ -21,7 +21,7 @@ pub struct DetectedProject {
 
 #[derive(Debug)]
 pub struct WizardState {
-    pub projects: Vec<DetectedProject>,
+    pub standalone_units: Vec<DetectedUnit>,
     pub upstream_url: String,
     /// Transient error / validation feedback. Each step owns when to
     /// set this and when to clear it. Re-used across steps because the
@@ -74,7 +74,7 @@ impl WizardState {
         available_presets.extend(EmbeddedPresets::list_presets());
 
         Self {
-            projects: Vec::new(),
+            standalone_units: Vec::new(),
             upstream_url: String::new(),
             error_message: None,
             force,
@@ -90,7 +90,10 @@ impl WizardState {
         }
     }
 
-    pub fn selected_projects(&self) -> Vec<&DetectedProject> {
-        self.projects.iter().filter(|p| p.selected).collect()
+    pub fn selected_units(&self) -> Vec<&DetectedUnit> {
+        self.standalone_units
+            .iter()
+            .filter(|p| p.selected)
+            .collect()
     }
 }

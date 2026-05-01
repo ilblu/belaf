@@ -1,6 +1,6 @@
 //! Phase I.3 — single-project tag-format sub-prompt.
 //!
-//! Shown after [`ProjectSelectionStep`](super::project::ProjectSelectionStep)
+//! Shown after [`ProjectSelectionStep`](super::resolved_release_unit::ProjectSelectionStep)
 //! when the user selected exactly one project. Single-project repos
 //! conventionally use `v{version}` tags (Cargo, semver-tagged
 //! libraries) instead of the namespaced `{name}-v{version}` default
@@ -35,7 +35,7 @@ use crate::cmd::init::toml_util::toml_quote;
 /// project named `foo"bar` can't break out of the table header.
 pub fn build_tag_format_snippet(state: &WizardState) -> Option<String> {
     let format = state.tag_format_override.as_ref()?;
-    let project = state.selected_projects().into_iter().next()?;
+    let project = state.selected_units().into_iter().next()?;
     let name_q = toml_quote(&project.name);
     let format_q = toml_quote(format);
     Some(format!("\n[projects.{name_q}]\ntag_format = {format_q}\n",))
@@ -132,7 +132,7 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState, cursor: usize) {
         .split(inner_area);
 
     let project_name = state
-        .selected_projects()
+        .selected_units()
         .first()
         .map(|p| p.name.as_str())
         .unwrap_or("(none)");
@@ -215,7 +215,7 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState, cursor: usize) {
 #[cfg(test)]
 mod tests {
     use super::super::{
-        state::{DetectedProject, WizardState},
+        state::{DetectedUnit, WizardState},
         step::test_support::render_to_string,
     };
     use super::*;
@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn renders_tag_format_with_single_project() {
         let mut state = WizardState::new(false, None);
-        state.projects = vec![DetectedProject {
+        state.standalone_units = vec![DetectedUnit {
             name: "alpha".into(),
             version: "0.1.0".into(),
             prefix: "crates/alpha".into(),
@@ -236,7 +236,7 @@ mod tests {
 
     fn state_with_one_project(name: &str, tag_format: Option<&str>) -> WizardState {
         let mut state = WizardState::new(false, None);
-        state.projects = vec![DetectedProject {
+        state.standalone_units = vec![DetectedUnit {
             name: name.to_string(),
             version: "1.0.0".to_string(),
             prefix: ".".to_string(),

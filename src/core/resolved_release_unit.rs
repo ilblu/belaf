@@ -22,11 +22,11 @@ use crate::core::{
 ///
 /// These identifiers should not be persisted and are not guaranteed to have any
 /// particular semantics other than being cheaply copyable.
-pub type ProjectId = usize;
+pub type ReleaseUnitId = usize;
 
 #[derive(Debug)]
-pub struct Project {
-    ident: ProjectId,
+pub struct ResolvedReleaseUnit {
+    ident: ReleaseUnitId,
 
     /// Qualified names. The package name, qualified with hierarchical
     /// indicators. The first item in the vector is the most specific name and
@@ -69,12 +69,12 @@ pub struct Project {
     pub internal_deps: Vec<Dependency>,
 }
 
-impl Project {
+impl ResolvedReleaseUnit {
     /// Get the internal unique identifier of this project.
     ///
     /// These identifiers should not be persisted and are not guaranteed to have
     /// any particular semantics other than being cheaply copyable.
-    pub fn ident(&self) -> ProjectId {
+    pub fn ident(&self) -> ReleaseUnitId {
         self.ident
     }
 
@@ -97,7 +97,7 @@ impl Project {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Dependency {
     /// The project that is depended upon
-    pub ident: ProjectId,
+    pub ident: ReleaseUnitId,
 
     /// The current expression of the requirement in the project metadata files.
     /// In normal operations this should be an explicit requirement on version
@@ -154,7 +154,7 @@ impl std::fmt::Display for DepRequirement {
 /// A builder for initializing a new project entry that will be added to the
 /// graph.
 #[derive(Debug)]
-pub struct ProjectBuilder {
+pub struct ResolvedReleaseUnitBuilder {
     pub qnames: Vec<String>,
     pub version: Option<Version>,
     pub prefix: Option<RepoPathBuf>,
@@ -180,15 +180,15 @@ pub enum DependencyTarget {
     /// user that might refer to any packaging system.
     Text(String),
 
-    /// The target expressed as a known ProjectId. This is generally only
+    /// The target expressed as a known ReleaseUnitId. This is generally only
     /// possible for dependencies within the same packaging system.
-    Ident(ProjectId),
+    Ident(ReleaseUnitId),
 }
 
-impl ProjectBuilder {
+impl ResolvedReleaseUnitBuilder {
     #[doc(hidden)]
     pub(crate) fn new() -> Self {
-        ProjectBuilder {
+        ResolvedReleaseUnitBuilder {
             qnames: Vec::new(),
             version: None,
             prefix: None,
@@ -200,10 +200,10 @@ impl ProjectBuilder {
     #[doc(hidden)]
     pub(crate) fn finalize(
         self,
-        ident: ProjectId,
+        ident: ReleaseUnitId,
         user_facing_name: String,
         internal_deps: Vec<Dependency>,
-    ) -> Result<Project> {
+    ) -> Result<ResolvedReleaseUnit> {
         if self.qnames.is_empty() {
             bail!(
                 "could not load project `{}`: never figured out its naming",
@@ -225,7 +225,7 @@ impl ProjectBuilder {
             )
         })?;
 
-        Ok(Project {
+        Ok(ResolvedReleaseUnit {
             ident,
             qnames: self.qnames,
             user_facing_name,

@@ -397,42 +397,68 @@ fn maven_tag_format_uses_slash_not_colon() {
     );
 }
 
+/// `[[release_unit]].tag_format` flows from the resolver into
+/// `ResolvedReleaseUnit` so the workflow's tag builder can look it up
+/// by user-facing name.
 #[test]
-fn project_tag_format_override_with_invalid_var_is_hard_error() {
-    let repo = TestRepo::new();
-    repo.write_file(
-        "Cargo.toml",
-        r#"[package]
-name = "my-crate"
-version = "1.0.0"
-edition = "2021"
-"#,
-    );
-    repo.write_file("src/lib.rs", "pub fn x() {}\n");
-    repo.commit("init");
-    let init = repo.run_belaf_command(&["init", "--force"]);
-    assert!(init.status.success());
+fn release_unit_tag_format_lookup_by_name() {
+    use belaf::core::release_unit::resolver::resolve;
+    use belaf::core::release_unit::syntax::{
+        ExplicitReleaseUnitConfig, ManifestFileConfig, SourceConfig,
+    };
 
-    // npm has no {groupId} variable. Using it on a Cargo project must
-    // hard-error with the offending var named.
-    let cfg = repo.read_file("belaf/config.toml");
-    let bad = format!(
-        "{cfg}\n[projects.\"my-crate\"]\ntag_format = \"{{groupId}}-{{name}}-{{version}}\"\n"
-    );
-    repo.write_file("belaf/config.toml", &bad);
-    repo.write_file("src/feat.rs", "pub fn feat() {}\n");
-    repo.commit("feat: drift");
+    let repo_path =
+        std::env::temp_dir().join(format!("belaf-tag-format-lookup-{}", std::process::id()));
+    std::fs::create_dir_all(&repo_path).unwrap();
+    std::process::Command::new("git")
+        .arg("init")
+        .current_dir(&repo_path)
+        .output()
+        .unwrap();
+    let cargo_path = repo_path.join("crates/my-crate/Cargo.toml");
+    std::fs::create_dir_all(cargo_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &cargo_path,
+        "[package]\nname = \"my-crate\"\nversion = \"1.0.0\"\nedition = \"2021\"\n",
+    )
+    .unwrap();
 
-    let out = repo.run_belaf_command(&["prepare", "--ci"]);
-    assert!(
-        !out.status.success(),
-        "prepare must reject a tag_format using a variable not allowed for the ecosystem"
+    let unit = ExplicitReleaseUnitConfig {
+        name: "my-crate".into(),
+        ecosystem: "cargo".into(),
+        source: SourceConfig {
+            manifests: vec![ManifestFileConfig {
+                path: "crates/my-crate/Cargo.toml".into(),
+                ecosystem: None,
+                version_field: "cargo_toml".into(),
+                regex_pattern: None,
+                regex_replace: None,
+            }],
+            external: None,
+        },
+        satellites: Vec::new(),
+        tag_format: Some("custom-{name}-v{version}".into()),
+        visibility: None,
+        cascade_from: None,
+    };
+
+    let repo = belaf::core::git::repository::Repository::open_with(
+        &repo_path,
+        "origin",
+        belaf::core::config::syntax::AnalysisConfig {
+            commit_cache_size: 1024,
+            tree_cache_size: 1024,
+        },
+    )
+    .unwrap();
+    let resolved = resolve(&repo, &[unit], &[]).unwrap();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(
+        resolved[0].unit.tag_format.as_deref(),
+        Some("custom-{name}-v{version}"),
+        "ResolvedReleaseUnit must carry the tag_format from [[release_unit]]"
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("groupId") && stderr.contains("cargo"),
-        "stderr must name the offending variable + ecosystem; got:\n{stderr}"
-    );
+    let _ = std::fs::remove_dir_all(&repo_path);
 }
 
 /// Plan §12 / Gap #1. Multi-module repo: aggregator (parent) + child

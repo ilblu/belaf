@@ -13,11 +13,10 @@ use ratatui::{
 };
 
 use super::{
-    detector_review::DetectorReviewStep,
     preset::PresetSelectionStep,
-    project::ProjectSelectionStep,
     state::WizardState,
     step::{Step, StepResult, WizardOutcome},
+    unified_selection::UnifiedSelectionStep,
 };
 
 #[derive(Default)]
@@ -55,10 +54,11 @@ impl Step for WelcomeStep {
                 // --force on top of an explicit Enter.
                 state.force = true;
                 state.error_message = None;
-                if !state.detection.matches.is_empty() {
-                    StepResult::Next(Box::new(DetectorReviewStep::new()))
-                } else if state.preset_from_cli {
-                    StepResult::Next(Box::new(ProjectSelectionStep::new()))
+                // UnifiedSelectionStep covers both auto-detected
+                // bundles and manual project list. Skip it only when
+                // both are empty (preset-only flow).
+                if !state.detection.matches.is_empty() || !state.standalone_units.is_empty() {
+                    StepResult::Next(Box::new(UnifiedSelectionStep::new()))
                 } else {
                     StepResult::Next(Box::new(PresetSelectionStep::new(state)))
                 }
@@ -83,11 +83,11 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
         Color::Cyan
     };
 
-    let project_count = state.projects.len();
-    let project_text = if project_count == 1 {
+    let unit_count = state.standalone_units.len();
+    let unit_text = if unit_count == 1 {
         "1 project".to_string()
     } else {
-        format!("{} projects", project_count)
+        format!("{} projects", unit_count)
     };
 
     let block = Block::default()
@@ -156,7 +156,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
                 Span::styled("📦 ", Style::default()),
                 Span::styled("Detected: ", Style::default().fg(Color::Gray)),
                 Span::styled(
-                    project_text,
+                    unit_text,
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
@@ -226,7 +226,7 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
                 Span::styled("📦 ", Style::default()),
                 Span::styled("Detected: ", Style::default().fg(Color::Gray)),
                 Span::styled(
-                    project_text,
+                    unit_text,
                     Style::default()
                         .fg(Color::Green)
                         .add_modifier(Modifier::BOLD),
@@ -265,7 +265,10 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
         ]));
         info_lines.push(Line::from(vec![
             Span::styled("  → ", Style::default().fg(Color::Cyan)),
-            Span::styled("Project configuration", Style::default().fg(Color::Gray)),
+            Span::styled(
+                "ReleaseUnit configuration",
+                Style::default().fg(Color::Gray),
+            ),
         ]));
         info_lines.push(Line::from(vec![
             Span::styled("  → ", Style::default().fg(Color::Cyan)),

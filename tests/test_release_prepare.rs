@@ -529,7 +529,12 @@ edition = "2021"
     repo.write_file("packages/beta/src/new.rs", "pub fn new_beta() {}\n");
     repo.commit("feat: add beta feature");
 
-    let _ = repo.run_belaf_command(&["prepare", "--ci", "--project", "alpha:major,beta:patch"]);
+    let _ = repo.run_belaf_command(&[
+        "prepare",
+        "--ci",
+        "--release-unit",
+        "alpha:major,beta:patch",
+    ]);
 
     let alpha_toml = repo.read_file("packages/alpha/Cargo.toml");
     let beta_toml = repo.read_file("packages/beta/Cargo.toml");
@@ -633,8 +638,8 @@ edition = "2021"
         serde_json::from_str(&manifest_content).expect("Manifest should be valid JSON");
 
     assert_eq!(
-        manifest["schema_version"], "2.0",
-        "Schema version should be 2.0"
+        manifest["schema_version"], "3.0",
+        "Schema version should be 3.0"
     );
     assert!(
         manifest["created_at"].is_string(),

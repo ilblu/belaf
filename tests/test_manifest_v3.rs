@@ -1,10 +1,10 @@
-//! Schema-level integration tests for manifest 2.0.
+//! Schema-level integration tests for manifest 3.0.
 //!
 //! Unit tests in `core::wire::domain` already cover serde round-trips on
 //! the domain types. These tests verify the *schema invariants* the
 //! github-app relies on when consuming the manifest — that the actual
 //! files belaf writes to disk match the contract documented in
-//! `schemas/manifest.v2.0.schema.json`.
+//! `schemas/manifest.v3.0.schema.json`.
 
 mod common;
 
@@ -74,11 +74,11 @@ fn manifest_filename_is_uuid_v7_dot_json() {
 }
 
 #[test]
-fn manifest_has_v2_schema_version() {
+fn manifest_has_v3_schema_version() {
     let repo = TestRepo::new();
     init_simple_cargo_project(&repo);
     let m = read_manifest_json(&repo);
-    assert_eq!(m["schema_version"], "2.0");
+    assert_eq!(m["schema_version"], "3.0");
 }
 
 #[test]

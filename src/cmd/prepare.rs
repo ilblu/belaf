@@ -1,17 +1,89 @@
 use anyhow::Result;
 use owo_colors::OwoColorize;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::core::{
+    api::ApiClient,
+    auth::token::load_token,
     bump_source::{self, BumpSourceInput, DEFAULT_TIMEOUT_SEC},
     config::syntax::BumpSourceConfig,
+    github::client::parse_github_url,
     group::GroupSet,
     session::AppSession,
-    workflow::{BumpChoice, PrepareContext, ProjectSelection},
+    workflow::{BumpChoice, PrepareContext, ReleaseUnitSelection},
 };
 
 #[path = "prepare/wizard.rs"]
 mod wizard;
+
+/// POST the current drift state to the dashboard. Best-effort:
+/// failures are logged at warn-level and otherwise swallowed so the
+/// release flow keeps moving even when the API is unreachable. Skips
+/// the call when the user isn't authenticated (no token = pre-install
+/// state, nothing to report against).
+///
+/// Runtime handling: detects whether we're already inside a tokio
+/// runtime (e.g. if `belaf prepare` is ever invoked from an async
+/// context) and reuses it via `Handle::block_on` on a dedicated
+/// thread to avoid the "Cannot start a runtime from within a runtime"
+/// panic. From a sync context we spin up a one-shot current-thread
+/// runtime as before.
+fn report_drift_telemetry(sess: &AppSession, uncovered_paths: &[String]) {
+    let upstream = match sess.repo.upstream_url() {
+        Ok(u) => u,
+        Err(_) => return,
+    };
+    let (owner, repo) = match parse_github_url(&upstream) {
+        Ok(pair) => pair,
+        Err(_) => return,
+    };
+    let token = match load_token() {
+        Ok(Some(t)) => t,
+        _ => return,
+    };
+
+    let paths = uncovered_paths.to_vec();
+    let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
+        // Already inside a runtime — running `block_on` on the same
+        // runtime would panic ("Cannot start a runtime from within
+        // a runtime"). Bounce the future onto a dedicated thread
+        // that can safely block on the captured Handle.
+        std::thread::scope(|s| {
+            s.spawn(|| {
+                handle.block_on(async {
+                    ApiClient::new()
+                        .report_drift(&token, &owner, &repo, paths)
+                        .await
+                })
+            })
+            .join()
+            .map_err(|_| "drift telemetry thread panicked".to_string())
+        })
+        .and_then(|res| res.map_err(|e| format!("{e}")))
+    } else {
+        // No runtime in scope — build a single-purpose one.
+        match tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+        {
+            Ok(rt) => rt
+                .block_on(async {
+                    ApiClient::new()
+                        .report_drift(&token, &owner, &repo, paths)
+                        .await
+                })
+                .map_err(|e| format!("{e}")),
+            Err(e) => {
+                warn!("could not init tokio runtime for drift telemetry: {e}");
+                return;
+            }
+        }
+    };
+
+    if let Err(e) = result {
+        warn!("drift telemetry POST failed (best-effort): {e}");
+    }
+}
 
 fn print_no_changes_message() {
     println!();
@@ -77,8 +149,10 @@ fn run_ci_mode(
     info!("running in CI mode (PR-based workflow)");
 
     let mut sess = AppSession::initialize_default()?;
-    if let Err(message) = sess.pre_prepare_drift_check() {
-        anyhow::bail!("{}", message);
+    let drift_paths = sess.drift_uncovered_paths();
+    report_drift_telemetry(&sess, &drift_paths);
+    if !drift_paths.is_empty() {
+        anyhow::bail!("{}", sess.pre_prepare_drift_check().unwrap_err());
     }
     let config_bump_sources = sess.config_bump_sources().to_vec();
     // Snapshot groups before ctx takes a mutable borrow on sess. The
@@ -95,11 +169,11 @@ fn run_ci_mode(
         return Ok(0);
     }
 
-    let mut selections: Vec<ProjectSelection> = ctx
+    let mut selections: Vec<ReleaseUnitSelection> = ctx
         .candidates
         .iter()
         .cloned()
-        .map(|candidate| ProjectSelection {
+        .map(|candidate| ReleaseUnitSelection {
             candidate,
             bump_choice: BumpChoice::Auto,
             cached_changelog: None,
@@ -150,8 +224,10 @@ fn run_interactive_mode(
     // wizard's "suggested bump" column reflects the same precedence as
     // CI mode. See `wizard::run_with_overrides_and_decisions`.
     let sess = AppSession::initialize_default()?;
-    if let Err(message) = sess.pre_prepare_drift_check() {
-        anyhow::bail!("{}", message);
+    let drift_paths = sess.drift_uncovered_paths();
+    report_drift_telemetry(&sess, &drift_paths);
+    if !drift_paths.is_empty() {
+        anyhow::bail!("{}", sess.pre_prepare_drift_check().unwrap_err());
     }
     let config_bump_sources = sess.config_bump_sources().to_vec();
     drop(sess);
@@ -169,7 +245,7 @@ fn run_interactive_mode(
 /// entry's stdout is parsed as a list of decisions; matching projects get
 /// their `bump_choice` overwritten.
 fn apply_config_bump_sources(
-    selections: &mut [ProjectSelection],
+    selections: &mut [ReleaseUnitSelection],
     sources: &[BumpSourceConfig],
 ) -> Result<()> {
     let decisions = collect_config_decisions(sources)?;
@@ -182,7 +258,7 @@ fn collect_config_decisions(
     let mut all = Vec::new();
     for src in sources {
         let label = src
-            .project
+            .release_unit
             .as_deref()
             .or(src.group.as_deref())
             .map(|s| s.to_string());
@@ -197,7 +273,7 @@ fn collect_config_decisions(
 }
 
 fn apply_cli_bump_source(
-    selections: &mut [ProjectSelection],
+    selections: &mut [ReleaseUnitSelection],
     bump_source_arg: Option<&str>,
     bump_source_cmd_arg: Option<&str>,
 ) -> Result<()> {
@@ -241,7 +317,7 @@ fn collect_cli_decisions(
 /// inferred bump differs from a sibling's explicit choice are also a
 /// conflict (otherwise the conv-commits inference would silently win).
 pub(super) fn validate_group_consistency(
-    selections: &[ProjectSelection],
+    selections: &[ReleaseUnitSelection],
     groups: &GroupSet,
 ) -> Result<()> {
     if groups.is_empty() {
@@ -292,7 +368,7 @@ pub(super) fn validate_group_consistency(
 }
 
 fn apply_decisions(
-    selections: &mut [ProjectSelection],
+    selections: &mut [ReleaseUnitSelection],
     decisions: &[bump_source::BumpDecision],
 ) -> Result<()> {
     if decisions.is_empty() {
@@ -305,12 +381,12 @@ fn apply_decisions(
     for d in decisions {
         let Some(sel) = selections
             .iter_mut()
-            .find(|s| s.candidate.name == d.project)
+            .find(|s| s.candidate.name == d.release_unit)
         else {
             return Err(anyhow::anyhow!(
                 "bump-source decision for `{}` does not match any project. \
                  Available: {}",
-                d.project,
+                d.release_unit,
                 names.join(", ")
             ));
         };
@@ -321,7 +397,7 @@ fn apply_decisions(
             other => {
                 return Err(anyhow::anyhow!(
                     "bump-source decision for `{}` has invalid `bump` value `{}`",
-                    d.project,
+                    d.release_unit,
                     other
                 ));
             }
@@ -330,7 +406,7 @@ fn apply_decisions(
         let source = d.source.as_deref().unwrap_or("(unspecified)");
         info!(
             "bump-source: {} -> {} (source: {}{})",
-            d.project,
+            d.release_unit,
             d.bump,
             source,
             if reason.is_empty() {
@@ -344,7 +420,7 @@ fn apply_decisions(
 }
 
 fn apply_project_overrides(
-    selections: &mut [ProjectSelection],
+    selections: &mut [ReleaseUnitSelection],
     overrides: &[String],
 ) -> Result<()> {
     let project_names: Vec<String> = selections
