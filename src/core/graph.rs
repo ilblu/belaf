@@ -14,65 +14,61 @@ use petgraph::{
     graph::{DefaultIx, DiGraph, NodeIndex},
 };
 use std::collections::{HashMap, HashSet};
-use thiserror::Error as ThisError;
 
 use crate::core::{
     config::syntax::{GroupConfig, ProjectConfiguration},
     errors::Result,
     git::repository::{RepoHistory, Repository},
     group::{Group, GroupId, GroupSet},
-    project::{
-        DepRequirement, Dependency, DependencyBuilder, DependencyTarget, Project, ProjectBuilder,
-        ProjectId,
+    resolved_release_unit::{
+        DepRequirement, Dependency, DependencyBuilder, DependencyTarget, ReleaseUnitId,
+        ResolvedReleaseUnit, ResolvedReleaseUnitBuilder,
     },
 };
 use crate::{a_ok_or, atry};
+
+pub mod errors;
+pub use errors::{DependencyCycleError, NamingClashError, NoSuchProjectError};
 
 type OurNodeIndex = NodeIndex<DefaultIx>;
 
 /// A DAG of projects expressing their dependencies.
 #[derive(Debug, Default)]
-pub struct ProjectGraph {
+pub struct ReleaseUnitGraph {
     /// The projects. Projects are uniquely identified by their index into this
     /// vector.
-    projects: Vec<Project>,
+    projects: Vec<ResolvedReleaseUnit>,
 
     /// The `petgraph` state expressing the project graph.
-    graph: DiGraph<ProjectId, ()>,
+    graph: DiGraph<ReleaseUnitId, ()>,
 
     /// Mapping from user-facing project name to project ID. This is calculated
     /// in the complete_loading() method.
-    name_to_id: HashMap<String, ProjectId>,
+    name_to_id: HashMap<String, ReleaseUnitId>,
 
-    /// Project IDs in a topologically sorted order.
-    toposorted_ids: Vec<ProjectId>,
+    /// ResolvedReleaseUnit IDs in a topologically sorted order.
+    toposorted_ids: Vec<ReleaseUnitId>,
 
     /// Groups: bundles of projects that release together. Sourced from
     /// `[[group]]` entries in `belaf/config.toml`. See `core::group`.
     groups: GroupSet,
 }
 
-/// An error returned when an input has requested a project with a certain name,
-/// and it just doesn't exist.
-#[derive(Debug, ThisError)]
-#[error("no such project with the name `{0}`")]
-pub struct NoSuchProjectError(pub String);
-
-impl ProjectGraph {
+impl ReleaseUnitGraph {
     /// Get a reference to a project in the graph from its ID.
-    pub fn lookup(&self, ident: ProjectId) -> &Project {
+    pub fn lookup(&self, ident: ReleaseUnitId) -> &ResolvedReleaseUnit {
         &self.projects[ident]
     }
 
     /// Get a mutable reference to a project in the graph from its ID.
-    pub fn lookup_mut(&mut self, ident: ProjectId) -> &mut Project {
+    pub fn lookup_mut(&mut self, ident: ReleaseUnitId) -> &mut ResolvedReleaseUnit {
         &mut self.projects[ident]
     }
 
     /// Get a project ID from its user-facing name.
     ///
     /// None indicates that the name is not found.
-    pub fn lookup_ident<S: AsRef<str>>(&self, name: S) -> Option<ProjectId> {
+    pub fn lookup_ident<S: AsRef<str>>(&self, name: S) -> Option<ReleaseUnitId> {
         self.name_to_id.get(name.as_ref()).copied()
     }
 
@@ -105,7 +101,7 @@ impl ProjectGraph {
         }
     }
 
-    pub fn query(&self, query: GraphQueryBuilder) -> Result<Vec<ProjectId>> {
+    pub fn query(&self, query: GraphQueryBuilder) -> Result<Vec<ReleaseUnitId>> {
         let mut matched_idents = Vec::new();
         let mut seen_ids = HashSet::new();
 
@@ -162,7 +158,7 @@ impl ProjectGraph {
 }
 
 /// This type is how we "launder" the knowledge that the vector that
-/// comes out of repo.analyze_histories can be mapped into ProjectId values.
+/// comes out of repo.analyze_histories can be mapped into ReleaseUnitId values.
 #[derive(Clone, Debug)]
 pub struct RepoHistories {
     histories: Vec<RepoHistory>,
@@ -170,7 +166,7 @@ pub struct RepoHistories {
 
 impl RepoHistories {
     /// Given a project ID, look up its history
-    pub fn lookup(&self, projid: ProjectId) -> &RepoHistory {
+    pub fn lookup(&self, projid: ReleaseUnitId) -> &RepoHistory {
         &self.histories[projid]
     }
 }
@@ -203,34 +199,21 @@ impl GraphQueryBuilder {
 /// We do not impl Default even though we could, because the only way to
 /// create one of these should be via the AppBuilder.
 #[derive(Debug)]
-pub struct ProjectGraphBuilder {
+pub struct ReleaseUnitGraphBuilder {
     /// The projects. Projects are uniquely identified by their index into this
     /// vector.
-    projects: Vec<ProjectBuilder>,
+    projects: Vec<ResolvedReleaseUnitBuilder>,
 
     /// NodeIndex values for each project based on its identifier.
     node_ixs: Vec<OurNodeIndex>,
 
     /// The `petgraph` state expressing the project graph.
-    graph: DiGraph<ProjectId, ()>,
+    graph: DiGraph<ReleaseUnitId, ()>,
 }
 
-/// An error returned when the internal project graph has a dependency cycle.
-/// The inner value is the user-facing name of a project involved in the cycle.
-#[derive(Debug, ThisError)]
-#[error("detected an internal dependency cycle associated with project {0}")]
-pub struct DependencyCycleError(pub String);
-
-/// An error returned when it is impossible to come up with distinct names for
-/// two projects. This "should never happen", but ... The inner value is the
-/// clashing name.
-#[derive(Debug, ThisError)]
-#[error("multiple projects with same name `{0}`")]
-pub struct NamingClashError(pub String);
-
-impl ProjectGraphBuilder {
-    pub(crate) fn new() -> ProjectGraphBuilder {
-        ProjectGraphBuilder {
+impl ReleaseUnitGraphBuilder {
+    pub(crate) fn new() -> ReleaseUnitGraphBuilder {
+        ReleaseUnitGraphBuilder {
             projects: Vec::new(),
             node_ixs: Vec::new(),
             graph: DiGraph::default(),
@@ -245,7 +228,7 @@ impl ProjectGraphBuilder {
         &mut self,
         qnames: Vec<String>,
         pconfig: &HashMap<String, ProjectConfiguration>,
-    ) -> Option<ProjectId> {
+    ) -> Option<ReleaseUnitId> {
         // Not the most elegant ... I can't get join() to work here due to the
         // rev(), though.
 
@@ -267,7 +250,7 @@ impl ProjectGraphBuilder {
             return None;
         }
 
-        let mut pbuilder = ProjectBuilder::new();
+        let mut pbuilder = ResolvedReleaseUnitBuilder::new();
         pbuilder.qnames = qnames;
 
         let id = self.projects.len();
@@ -277,7 +260,7 @@ impl ProjectGraphBuilder {
     }
 
     /// Get a mutable reference to a project buider from its ID.
-    pub fn lookup_mut(&mut self, ident: ProjectId) -> &mut ProjectBuilder {
+    pub fn lookup_mut(&mut self, ident: ReleaseUnitId) -> &mut ResolvedReleaseUnitBuilder {
         &mut self.projects[ident]
     }
 
@@ -287,14 +270,14 @@ impl ProjectGraphBuilder {
     }
 
     /// Get an iterator over all project IDs.
-    pub fn project_ids(&self) -> std::ops::Range<ProjectId> {
+    pub fn project_ids(&self) -> std::ops::Range<ReleaseUnitId> {
         0..self.projects.len()
     }
 
     /// Add a dependency between two projects in the graph.
     pub fn add_dependency(
         &mut self,
-        depender_id: ProjectId,
+        depender_id: ReleaseUnitId,
         dependee_target: DependencyTarget,
         literal: String,
         req: DepRequirement,
@@ -317,17 +300,17 @@ impl ProjectGraphBuilder {
     ///
     /// If the internal project graph turns out to have a dependecy cycle, an
     /// error downcastable to DependencyCycleError.
-    pub fn complete_loading(self) -> Result<ProjectGraph> {
+    pub fn complete_loading(self) -> Result<ReleaseUnitGraph> {
         self.complete_loading_with_groups(&[])
     }
 
     /// Like [`complete_loading`], but binds `[[group]]` config entries to
-    /// the resulting `ProjectGraph`. Member names are resolved against the
+    /// the resulting `ReleaseUnitGraph`. Member names are resolved against the
     /// graph's user-facing names; an unknown name is a hard error.
     pub fn complete_loading_with_groups(
         mut self,
         group_configs: &[GroupConfig],
-    ) -> Result<ProjectGraph> {
+    ) -> Result<ReleaseUnitGraph> {
         // The first order of business is to determine every project's
         // user-facing name using progressive disambiguation with qualified names.
 
@@ -353,7 +336,7 @@ impl ProjectGraphBuilder {
         }
 
         impl NamingState {
-            fn compute_name(&self, proj: &ProjectBuilder) -> String {
+            fn compute_name(&self, proj: &ResolvedReleaseUnitBuilder) -> String {
                 let mut s = String::new();
                 const SEP: char = ':';
 
@@ -382,7 +365,7 @@ impl ProjectGraphBuilder {
                 let proj1 = &self.projects[ident1];
                 let candidate_name = states[ident1].compute_name(proj1);
 
-                let ident2: ProjectId = match name_to_id.entry(candidate_name) {
+                let ident2: ReleaseUnitId = match name_to_id.entry(candidate_name) {
                     Entry::Vacant(o) => {
                         // Great. No conflict.
                         o.insert(ident1);
@@ -585,7 +568,7 @@ impl ProjectGraphBuilder {
         // filter — so the toposort step above sees the post-filter
         // graph.)
 
-        Ok(ProjectGraph {
+        Ok(ReleaseUnitGraph {
             projects,
             name_to_id,
             graph: self.graph,
@@ -601,14 +584,14 @@ impl ProjectGraphBuilder {
 /// this toposorted list that (a) doesn't clone the whole vec, by holding
 /// a ref to the graph, but (b) yields ProjectIds, not &ProjectIds.
 pub struct TopoSortIdentIter<'a> {
-    graph: &'a ProjectGraph,
+    graph: &'a ReleaseUnitGraph,
     index: usize,
 }
 
 impl<'a> Iterator for TopoSortIdentIter<'a> {
-    type Item = ProjectId;
+    type Item = ReleaseUnitId;
 
-    fn next(&mut self) -> Option<ProjectId> {
+    fn next(&mut self) -> Option<ReleaseUnitId> {
         if self.index < self.graph.toposorted_ids.len() {
             let rv = self.graph.toposorted_ids[self.index];
             self.index += 1;
@@ -621,14 +604,14 @@ impl<'a> Iterator for TopoSortIdentIter<'a> {
 
 /// An iterator for visiting the projects in the graph.
 pub struct GraphIter<'a> {
-    graph: &'a ProjectGraph,
+    graph: &'a ReleaseUnitGraph,
     node_idxs_iter: std::vec::IntoIter<OurNodeIndex>,
 }
 
 impl<'a> Iterator for GraphIter<'a> {
-    type Item = &'a Project;
+    type Item = &'a ResolvedReleaseUnit;
 
-    fn next(&mut self) -> Option<&'a Project> {
+    fn next(&mut self) -> Option<&'a ResolvedReleaseUnit> {
         let node_ix = self.node_idxs_iter.next()?;
         let ident = self.graph.graph[node_ix];
         Some(self.graph.lookup(ident))
@@ -641,7 +624,7 @@ mod tests {
     use crate::core::{git::repository::RepoPathBuf, version::Version};
 
     fn do_name_assignment_test(spec: &[(&[&str], &str)]) -> Result<()> {
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
         let mut ids = HashMap::new();
         let empty_config = HashMap::new();
 
@@ -704,7 +687,7 @@ mod tests {
         .expect("BUG: test should succeed");
     }
 
-    fn create_test_project(graph: &mut ProjectGraphBuilder, name: &str) -> ProjectId {
+    fn create_test_project(graph: &mut ReleaseUnitGraphBuilder, name: &str) -> ReleaseUnitId {
         let empty_config = HashMap::new();
         let qnames = vec![name.to_owned(), "test".to_owned()];
         let projid = graph
@@ -718,9 +701,9 @@ mod tests {
 
     #[test]
     fn cycle_detection_simple_two_node() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let proj_a = create_test_project(&mut graph, "A");
         let proj_b = create_test_project(&mut graph, "B");
@@ -752,9 +735,9 @@ mod tests {
 
     #[test]
     fn cycle_detection_self_referential() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let proj_a = create_test_project(&mut graph, "A");
 
@@ -779,9 +762,9 @@ mod tests {
 
     #[test]
     fn cycle_detection_three_node() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let proj_a = create_test_project(&mut graph, "A");
         let proj_b = create_test_project(&mut graph, "B");
@@ -820,9 +803,9 @@ mod tests {
 
     #[test]
     fn cycle_detection_valid_linear_chain() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let proj_a = create_test_project(&mut graph, "A");
         let proj_b = create_test_project(&mut graph, "B");
@@ -855,9 +838,9 @@ mod tests {
 
     #[test]
     fn cycle_detection_valid_diamond() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let proj_a = create_test_project(&mut graph, "A");
         let proj_b = create_test_project(&mut graph, "B");
@@ -913,7 +896,7 @@ mod tests {
 
     #[test]
     fn cycle_detection_independent_projects() {
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         create_test_project(&mut graph, "A");
         create_test_project(&mut graph, "B");
@@ -933,9 +916,9 @@ mod tests {
 
     #[test]
     fn cycle_detection_complex_valid_dag() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let proj_a = create_test_project(&mut graph, "A");
         let proj_b = create_test_project(&mut graph, "B");
@@ -1001,9 +984,9 @@ mod tests {
 
     #[test]
     fn cycle_detection_partial_cycle_in_larger_graph() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let proj_a = create_test_project(&mut graph, "A");
         let proj_b = create_test_project(&mut graph, "B");
@@ -1053,9 +1036,9 @@ mod tests {
 
     #[test]
     fn dependency_resolution_multiple_paths() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let leaf = create_test_project(&mut graph, "leaf");
         let mid_a = create_test_project(&mut graph, "mid-a");
@@ -1111,12 +1094,12 @@ mod tests {
 
     #[test]
     fn dependency_resolution_deep_chain() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let names = ["p0", "p1", "p2", "p3", "p4", "p5", "p6", "p7", "p8", "p9"];
-        let mut projects: Vec<ProjectId> = Vec::new();
+        let mut projects: Vec<ReleaseUnitId> = Vec::new();
 
         for name in &names {
             projects.push(create_test_project(&mut graph, name));
@@ -1151,9 +1134,9 @@ mod tests {
 
     #[test]
     fn dependency_resolution_many_to_many() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let leaves = [
             create_test_project(&mut graph, "leaf-a"),
@@ -1203,9 +1186,9 @@ mod tests {
 
     #[test]
     fn dependency_resolution_multiple_roots() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let shared = create_test_project(&mut graph, "shared");
         let root_a = create_test_project(&mut graph, "root-a");
@@ -1247,9 +1230,9 @@ mod tests {
 
     #[test]
     fn dependency_resolution_parallel_chains() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let chain_a = [
             create_test_project(&mut graph, "chain-a-1"),
@@ -1302,7 +1285,7 @@ mod tests {
 
     #[test]
     fn dependency_lookup_by_name() {
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         create_test_project(&mut graph, "alpha");
         create_test_project(&mut graph, "beta");
@@ -1330,9 +1313,9 @@ mod tests {
 
     #[test]
     fn dependency_internal_deps_stored_correctly() {
-        use crate::core::project::{DepRequirement, DependencyTarget};
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
 
-        let mut graph = ProjectGraphBuilder::new();
+        let mut graph = ReleaseUnitGraphBuilder::new();
 
         let dep = create_test_project(&mut graph, "dependency");
         let consumer = create_test_project(&mut graph, "consumer");

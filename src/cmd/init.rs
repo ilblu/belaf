@@ -12,7 +12,7 @@ use tracing::{error, info, warn};
 use crate::atry;
 use crate::core::{
     errors::{Error, Result},
-    project::DepRequirement,
+    resolved_release_unit::DepRequirement,
     session::AppBuilder,
 };
 

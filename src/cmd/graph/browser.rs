@@ -76,7 +76,7 @@ pub fn open_browser(output_path: Option<&str>) -> Result<i32> {
     let project_name = std::env::current_dir()
         .ok()
         .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
-        .unwrap_or_else(|| "Project".to_string());
+        .unwrap_or_else(|| "ReleaseUnit".to_string());
 
     let html_content = HTML_TEMPLATE
         .replace("/*GRAPH_DATA_PLACEHOLDER*/", &json_data)

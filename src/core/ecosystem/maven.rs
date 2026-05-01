@@ -49,8 +49,8 @@ use crate::{
         ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::ProjectGraphBuilder,
-        project::{DepRequirement, DependencyTarget, ProjectId},
+        graph::ReleaseUnitGraphBuilder,
+        resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
         version::Version,
@@ -180,7 +180,7 @@ impl MavenLoader {
         }
 
         // Phase 4: register projects in the graph.
-        let mut idx_to_pid: HashMap<usize, ProjectId> = HashMap::new();
+        let mut idx_to_pid: HashMap<usize, ReleaseUnitId> = HashMap::new();
         for (idx, r) in resolved.iter().enumerate() {
             let user_name = format!("{}:{}", r.group_id, r.artifact_id);
             let qnames = vec![user_name.clone(), "maven".to_owned()];
@@ -285,7 +285,7 @@ impl Ecosystem for MavenLoader {
     fn process_index_item(
         &mut self,
         _repo: &Repository,
-        _graph: &mut ProjectGraphBuilder,
+        _graph: &mut ReleaseUnitGraphBuilder,
         _repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
@@ -728,12 +728,12 @@ fn resolve_property(
 
 #[derive(Debug)]
 pub struct MavenRewriter {
-    proj_id: ProjectId,
+    proj_id: ReleaseUnitId,
     pom_path: RepoPathBuf,
 }
 
 impl MavenRewriter {
-    pub fn new(proj_id: ProjectId, pom_path: RepoPathBuf) -> Self {
+    pub fn new(proj_id: ReleaseUnitId, pom_path: RepoPathBuf) -> Self {
         Self { proj_id, pom_path }
     }
 }

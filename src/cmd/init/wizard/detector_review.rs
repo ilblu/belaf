@@ -112,7 +112,7 @@ impl Step for DetectorReviewStep {
             }
             (KeyCode::Char('n'), _) => {
                 // 'n' here means "deselect all", not "no/skip" — the
-                // skip path is on 's'. The Project step uses the same
+                // skip path is on 's'. The ResolvedReleaseUnit step uses the same
                 // pairing (a all, n none) so the muscle memory carries.
                 for slot in &mut self.selected {
                     *slot = false;

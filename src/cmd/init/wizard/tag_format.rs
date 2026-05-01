@@ -1,6 +1,6 @@
 //! Phase I.3 — single-project tag-format sub-prompt.
 //!
-//! Shown after [`ProjectSelectionStep`](super::project::ProjectSelectionStep)
+//! Shown after [`ProjectSelectionStep`](super::resolved_release_unit::ProjectSelectionStep)
 //! when the user selected exactly one project. Single-project repos
 //! conventionally use `v{version}` tags (Cargo, semver-tagged
 //! libraries) instead of the namespaced `{name}-v{version}` default

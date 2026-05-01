@@ -28,15 +28,15 @@ use crate::core::{
     graph::GraphQueryBuilder,
     group::GroupSet,
     manifest::{ProjectRelease, ReleaseManifest, ReleaseStatistics, MANIFEST_DIR},
-    project::ProjectId,
+    resolved_release_unit::ReleaseUnitId,
     session::AppSession,
     tag_format::{format_tag, split_maven_coords, TagFormatInputs},
     wire::known::Ecosystem,
 };
 
 #[derive(Debug, Clone)]
-pub struct ProjectCandidate {
-    pub ident: ProjectId,
+pub struct ReleaseUnitCandidate {
+    pub ident: ReleaseUnitId,
     pub name: String,
     pub prefix: String,
     pub current_version: String,
@@ -80,7 +80,7 @@ impl BumpChoice {
 
 #[derive(Debug, Clone)]
 pub struct ProjectSelection {
-    pub candidate: ProjectCandidate,
+    pub candidate: ReleaseUnitCandidate,
     pub bump_choice: BumpChoice,
     pub cached_changelog: Option<String>,
 }
@@ -95,7 +95,7 @@ pub struct PrepareContext<'a> {
     pub sess: &'a mut AppSession,
     pub base_branch: String,
     pub release_branch: String,
-    pub candidates: Vec<ProjectCandidate>,
+    pub candidates: Vec<ReleaseUnitCandidate>,
     pub allow_dirty: bool,
     pub changelog_config: ChangelogConfiguration,
     pub bump_config: BumpConfiguration,
@@ -206,7 +206,7 @@ impl<'a> PrepareContext<'a> {
                 .map(|s| Ecosystem::classify(s))
                 .unwrap_or_else(|| Ecosystem::classify("cargo"));
 
-            self.candidates.push(ProjectCandidate {
+            self.candidates.push(ReleaseUnitCandidate {
                 ident: *ident,
                 name: proj.user_facing_name.clone(),
                 prefix: proj.prefix().escaped(),
@@ -308,7 +308,7 @@ impl<'a> PrepareContext<'a> {
 
 #[derive(Debug, Clone)]
 pub struct SelectedProject {
-    pub ident: ProjectId,
+    pub ident: ReleaseUnitId,
     pub name: String,
     pub prefix: String,
     pub old_version: String,

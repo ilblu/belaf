@@ -1,4 +1,4 @@
-//! Project groups — sets of projects that release together.
+//! ResolvedReleaseUnit groups — sets of projects that release together.
 //!
 //! A group is a logical bundle of projects that must share one bump and one
 //! release moment. The canonical use case is a GraphQL schema published as
@@ -9,9 +9,9 @@
 //! # Plan §5 — first-class graph primitive
 //!
 //! The plan envisions `Group` as an enum variant of a unified `GraphNode`
-//! type, sharing toposort/bump/cycle logic with `Project`. The current
+//! type, sharing toposort/bump/cycle logic with `ResolvedReleaseUnit`. The current
 //! implementation takes a more incremental path: groups live as a sibling
-//! collection on [`crate::core::graph::ProjectGraph`] rather than as a real
+//! collection on [`crate::core::graph::ReleaseUnitGraph`] rather than as a real
 //! `petgraph` node type. Practically this gives us:
 //!
 //! - shared-bump-state semantics (CLI propagates the highest member bump
@@ -29,7 +29,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error as ThisError;
 
-use crate::core::project::ProjectId;
+use crate::core::resolved_release_unit::ReleaseUnitId;
 
 /// Wire-format group identifier. Pattern: `^[a-z0-9][a-z0-9-]*$`, max 64
 /// chars (validated by the JSON schema; we re-validate here to fail fast at
@@ -85,19 +85,19 @@ impl std::fmt::Display for GroupId {
 #[derive(Clone, Debug)]
 pub struct Group {
     pub id: GroupId,
-    pub members: Vec<ProjectId>,
+    pub members: Vec<ReleaseUnitId>,
     /// Optional group-level `tag_format` override (B10). When present
     /// every member release uses this template instead of the per-
     /// ecosystem default. Per-project overrides still win over this.
     pub tag_format: Option<String>,
 }
 
-/// Index of every group in the repo, plus the reverse map `ProjectId →
+/// Index of every group in the repo, plus the reverse map `ReleaseUnitId →
 /// GroupId` so per-project lookups are O(1).
 #[derive(Clone, Debug, Default)]
 pub struct GroupSet {
     groups: Vec<Group>,
-    member_of: HashMap<ProjectId, usize>,
+    member_of: HashMap<ReleaseUnitId, usize>,
 }
 
 impl GroupSet {
@@ -118,7 +118,7 @@ impl GroupSet {
     }
 
     /// Look up the group that contains the given project, if any.
-    pub fn group_of(&self, pid: ProjectId) -> Option<&Group> {
+    pub fn group_of(&self, pid: ReleaseUnitId) -> Option<&Group> {
         self.member_of.get(&pid).map(|&idx| &self.groups[idx])
     }
 
@@ -158,7 +158,7 @@ pub enum GroupSetError {
         "project {project} cannot be a member of both group `{first}` and group `{second}` — overlapping group membership is unsupported"
     )]
     MemberInMultipleGroups {
-        project: ProjectId,
+        project: ReleaseUnitId,
         first: GroupId,
         second: GroupId,
     },
@@ -209,7 +209,7 @@ mod tests {
         assert!(matches!(err, GroupIdError::Empty));
     }
 
-    fn mkgroup(id: &str, members: Vec<ProjectId>) -> Group {
+    fn mkgroup(id: &str, members: Vec<ReleaseUnitId>) -> Group {
         Group {
             id: GroupId::new(id).unwrap(),
             members,

@@ -22,8 +22,8 @@ use crate::core::{
     ecosystem::registry::Ecosystem,
     errors::Result,
     git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-    graph::ProjectGraphBuilder,
-    project::{DepRequirement, DependencyTarget, ProjectId},
+    graph::ReleaseUnitGraphBuilder,
+    resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
     rewriters::Rewriter,
     session::{AppBuilder, AppSession},
     version::Version,
@@ -80,7 +80,7 @@ impl CargoLoader {
         info!("found {} Cargo workspace root(s)", workspace_data.len());
 
         let mut all_cargo_to_graph = HashMap::new();
-        let mut name_to_project: HashMap<String, ProjectId> = HashMap::new();
+        let mut name_to_project: HashMap<String, ReleaseUnitId> = HashMap::new();
 
         for (workspace_root, cargo_meta) in &workspace_data {
             info!("loading Cargo workspace: {}", workspace_root.display());
@@ -309,8 +309,8 @@ impl CargoLoader {
         pconfig: &HashMap<String, ProjectConfiguration>,
         cargo_meta: &cargo_metadata::Metadata,
         workspace_root: &Path,
-        cargo_to_graph: &mut HashMap<cargo_metadata::PackageId, ProjectId>,
-        name_to_project: &mut HashMap<String, ProjectId>,
+        cargo_to_graph: &mut HashMap<cargo_metadata::PackageId, ReleaseUnitId>,
+        name_to_project: &mut HashMap<String, ReleaseUnitId>,
     ) -> Result<()> {
         let content = read_config_file(workspace_root)?;
         let doc: DocumentMut = content.parse()?;
@@ -431,8 +431,8 @@ impl CargoLoader {
         &self,
         app: &mut AppBuilder,
         cargo_meta: &cargo_metadata::Metadata,
-        cargo_to_graph: &HashMap<cargo_metadata::PackageId, ProjectId>,
-        name_to_project: &HashMap<String, ProjectId>,
+        cargo_to_graph: &HashMap<cargo_metadata::PackageId, ReleaseUnitId>,
+        name_to_project: &HashMap<String, ReleaseUnitId>,
     ) -> Result<()> {
         let mut cargoid_to_index = HashMap::new();
 
@@ -445,7 +445,7 @@ impl CargoLoader {
             .as_ref()
             .ok_or_else(|| anyhow!("cargo metadata did not include dependency resolution"))?;
 
-        let mut added_deps: std::collections::HashSet<(ProjectId, ProjectId)> =
+        let mut added_deps: std::collections::HashSet<(ReleaseUnitId, ReleaseUnitId)> =
             std::collections::HashSet::new();
 
         for node in &resolve.nodes {
@@ -528,7 +528,7 @@ impl Ecosystem for CargoLoader {
     fn process_index_item(
         &mut self,
         _repo: &Repository,
-        _graph: &mut ProjectGraphBuilder,
+        _graph: &mut ReleaseUnitGraphBuilder,
         _repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
@@ -558,13 +558,13 @@ impl Ecosystem for CargoLoader {
 /// Rewrite Cargo.toml to include real version numbers.
 #[derive(Debug)]
 pub struct CargoRewriter {
-    proj_id: ProjectId,
+    proj_id: ReleaseUnitId,
     toml_path: RepoPathBuf,
 }
 
 impl CargoRewriter {
     /// Create a new Cargo.toml rewriter.
-    pub fn new(proj_id: ProjectId, toml_path: RepoPathBuf) -> Self {
+    pub fn new(proj_id: ReleaseUnitId, toml_path: RepoPathBuf) -> Self {
         CargoRewriter { proj_id, toml_path }
     }
 }

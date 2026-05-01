@@ -24,8 +24,8 @@ use crate::{
         ecosystem::registry::Ecosystem,
         errors::{Error, Result},
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::ProjectGraphBuilder,
-        project::{DepRequirement, DependencyTarget, ProjectId},
+        graph::ReleaseUnitGraphBuilder,
+        resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
         version::Version,
@@ -33,7 +33,7 @@ use crate::{
 };
 
 struct PypaProjectData {
-    ident: ProjectId,
+    ident: ReleaseUnitId,
     internal_reqs: HashSet<String>,
 }
 
@@ -448,7 +448,7 @@ impl Ecosystem for PypaLoader {
     fn process_index_item(
         &mut self,
         _repo: &Repository,
-        _graph: &mut ProjectGraphBuilder,
+        _graph: &mut ReleaseUnitGraphBuilder,
         _repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
@@ -678,7 +678,7 @@ impl PyProjectFile {
             .or_else(|| self.project.as_ref().and_then(|p| p.name.clone()))
     }
 
-    /// Project version as it appears in PEP 621 `[project] version`.
+    /// ResolvedReleaseUnit version as it appears in PEP 621 `[project] version`.
     /// `[tool.belaf]` has no `version` field — versions live in source
     /// files for the rewriters to manage, or here in `[project]`.
     fn project_version(&self) -> Option<&str> {
@@ -730,13 +730,13 @@ struct PyProjectBelaf {
 /// Rewrite a Python file to include real version numbers.
 #[derive(Debug)]
 pub struct PythonRewriter {
-    proj_id: ProjectId,
+    proj_id: ReleaseUnitId,
     file_path: RepoPathBuf,
 }
 
 impl PythonRewriter {
     /// Create a new Python file rewriter.
-    pub fn new(proj_id: ProjectId, file_path: RepoPathBuf) -> Self {
+    pub fn new(proj_id: ReleaseUnitId, file_path: RepoPathBuf) -> Self {
         PythonRewriter { proj_id, file_path }
     }
 }
@@ -957,12 +957,12 @@ enum PypaVersionLocation {
 /// the structure of `CargoRewriter` for `Cargo.toml`.
 #[derive(Debug)]
 pub struct PyProjectVersionRewriter {
-    proj_id: ProjectId,
+    proj_id: ReleaseUnitId,
     toml_path: RepoPathBuf,
 }
 
 impl PyProjectVersionRewriter {
-    pub fn new(proj_id: ProjectId, toml_path: RepoPathBuf) -> Self {
+    pub fn new(proj_id: ReleaseUnitId, toml_path: RepoPathBuf) -> Self {
         PyProjectVersionRewriter { proj_id, toml_path }
     }
 }

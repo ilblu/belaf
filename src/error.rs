@@ -20,14 +20,14 @@ pub enum CliError {
     #[error("Token storage error: {0}")]
     TokenStorage(String),
 
-    #[error("Project already initialized. Run 'belaf init --force' to overwrite.")]
+    #[error("ReleaseUnit already initialized. Run 'belaf init --force' to overwrite.")]
     AlreadyInitialized,
 
     #[error("Dialog error: {0}")]
     Dialog(#[from] dialoguer::Error),
 
-    #[error("Project not initialized. Run 'belaf init' to get started.")]
-    ProjectNotInitialized,
+    #[error("ReleaseUnit not initialized. Run 'belaf init' to get started.")]
+    ReleaseUnitNotInitialized,
 
     #[error("API error: {0}")]
     Api(#[from] crate::core::api::ApiError),

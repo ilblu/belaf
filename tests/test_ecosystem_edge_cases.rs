@@ -76,7 +76,7 @@ fn test_elixir_prerelease_version() {
     let repo = TestRepo::new();
 
     let mix_exs = r#"defmodule MyApp.MixProject do
-  use Mix.Project
+  use Mix.ResolvedReleaseUnit
 
   def project do
     [
@@ -119,7 +119,7 @@ fn test_elixir_missing_version() {
     let repo = TestRepo::new();
 
     let mix_exs = r#"defmodule NoVersion.MixProject do
-  use Mix.Project
+  use Mix.ResolvedReleaseUnit
 
   def project do
     [
@@ -289,7 +289,7 @@ fn test_mixed_elixir_and_go() {
     let repo = TestRepo::new();
 
     let mix_exs = r#"defmodule WebApp.MixProject do
-  use Mix.Project
+  use Mix.ResolvedReleaseUnit
 
   def project do
     [
@@ -334,7 +334,7 @@ fn test_elixir_with_dynamic_version() {
     let repo = TestRepo::new();
 
     let mix_exs = r#"defmodule DynamicVersion.MixProject do
-  use Mix.Project
+  use Mix.ResolvedReleaseUnit
 
   @version "1.2.3"
 
@@ -402,7 +402,7 @@ fn test_elixir_phoenix_project() {
     let repo = TestRepo::new();
 
     let mix_exs = r#"defmodule MyPhoenixApp.MixProject do
-  use Mix.Project
+  use Mix.ResolvedReleaseUnit
 
   def project do
     [

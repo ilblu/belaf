@@ -52,7 +52,7 @@ edition = "2021"
     let bootstrap = repo.read_file("belaf/bootstrap.toml");
     assert!(
         bootstrap.contains("my-crate"),
-        "Project name not in bootstrap.toml"
+        "ResolvedReleaseUnit name not in bootstrap.toml"
     );
     assert!(bootstrap.contains("0.1.0"), "Version not in bootstrap.toml");
 }

@@ -18,7 +18,7 @@ use crate::core::{graph::GraphQueryBuilder, session::AppSession};
 
 use super::browser;
 
-struct ProjectInfo {
+struct ReleaseUnitInfo {
     name: String,
     version: String,
     deps: Vec<String>,
@@ -26,7 +26,7 @@ struct ProjectInfo {
 }
 
 struct App {
-    projects: Vec<ProjectInfo>,
+    projects: Vec<ReleaseUnitInfo>,
     list_state: ListState,
     release_order: Vec<String>,
     show_help: bool,
@@ -68,7 +68,7 @@ impl App {
                 })
                 .collect();
 
-            projects.push(ProjectInfo {
+            projects.push(ReleaseUnitInfo {
                 name: proj.user_facing_name.clone(),
                 version: proj.version.to_string(),
                 deps,
@@ -97,7 +97,7 @@ impl App {
         self.list_state.selected().unwrap_or(0)
     }
 
-    fn selected_project(&self) -> Option<&ProjectInfo> {
+    fn selected_project(&self) -> Option<&ReleaseUnitInfo> {
         self.projects.get(self.selected_idx())
     }
 

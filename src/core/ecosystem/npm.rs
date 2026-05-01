@@ -26,8 +26,8 @@ use crate::{
         ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::{GraphQueryBuilder, ProjectGraphBuilder},
-        project::{DepRequirement, DependencyTarget, ProjectId},
+        graph::{GraphQueryBuilder, ReleaseUnitGraphBuilder},
+        resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
         version::Version,
@@ -44,7 +44,7 @@ pub struct NpmLoader {
 
 #[derive(Debug)]
 struct PackageLoadData {
-    ident: ProjectId,
+    ident: ReleaseUnitId,
     json_path: RepoPathBuf,
     pkg_data: serde_json::Map<String, serde_json::Value>,
 }
@@ -53,7 +53,7 @@ impl NpmLoader {
     pub fn record_path(
         &mut self,
         repo: &Repository,
-        graph: &mut crate::core::graph::ProjectGraphBuilder,
+        graph: &mut crate::core::graph::ReleaseUnitGraphBuilder,
         repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
@@ -222,7 +222,7 @@ impl Ecosystem for NpmLoader {
     fn process_index_item(
         &mut self,
         repo: &Repository,
-        graph: &mut ProjectGraphBuilder,
+        graph: &mut ReleaseUnitGraphBuilder,
         repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
@@ -243,13 +243,13 @@ impl Ecosystem for NpmLoader {
 /// Rewrite `package.json` to include real version numbers.
 #[derive(Debug)]
 pub struct PackageJsonRewriter {
-    proj_id: ProjectId,
+    proj_id: ReleaseUnitId,
     json_path: RepoPathBuf,
 }
 
 impl PackageJsonRewriter {
     /// Create a new `package.json` rewriter.
-    pub fn new(proj_id: ProjectId, json_path: RepoPathBuf) -> Self {
+    pub fn new(proj_id: ReleaseUnitId, json_path: RepoPathBuf) -> Self {
         PackageJsonRewriter { proj_id, json_path }
     }
 }

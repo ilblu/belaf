@@ -20,7 +20,7 @@ use crate::cli::ReleaseOutputFormat;
 use crate::core::ui::components::table::Table;
 use crate::core::{graph::GraphQueryBuilder, session::AppSession};
 
-struct ProjectStatus {
+struct ReleaseUnitStatus {
     name: String,
     version: Option<String>,
     commits_count: usize,
@@ -47,13 +47,13 @@ struct TuiState {
     selected_panel: SelectablePanel,
     selected_project_index: usize,
     commit_scroll_offset: usize,
-    project_data: Vec<ProjectStatus>,
+    project_data: Vec<ReleaseUnitStatus>,
     should_quit: bool,
     show_help: bool,
 }
 
 impl TuiState {
-    fn new(project_data: Vec<ProjectStatus>) -> Self {
+    fn new(project_data: Vec<ReleaseUnitStatus>) -> Self {
         Self {
             selected_panel: SelectablePanel::Projects,
             selected_project_index: 0,
@@ -293,7 +293,7 @@ impl TuiState {
 
     fn render_project_list(&self, frame: &mut ratatui::Frame, area: Rect) {
         let header = Row::new(vec![
-            Cell::from("  Project"),
+            Cell::from("  ReleaseUnit"),
             Cell::from("Version"),
             Cell::from("Commits"),
         ])
@@ -526,7 +526,7 @@ fn run_tui(sess: &AppSession, idents: &[usize]) -> Result<()> {
             (None, None)
         };
 
-        project_data.push(ProjectStatus {
+        project_data.push(ReleaseUnitStatus {
             name: proj.user_facing_name.clone(),
             version,
             commits_count: n,

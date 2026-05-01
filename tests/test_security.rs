@@ -244,7 +244,10 @@ edition = "2021"
 
     let output = repo.run_belaf_command(&["init", "--force"]);
 
-    assert!(output.status.success(), "Project detection should succeed");
+    assert!(
+        output.status.success(),
+        "ResolvedReleaseUnit detection should succeed"
+    );
 }
 
 #[test]

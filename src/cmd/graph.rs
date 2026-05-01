@@ -61,7 +61,7 @@ pub fn run(
 fn render_ascii(sess: &AppSession, idents: &[usize]) {
     println!();
     println!("╭─────────────────────────────────────────────────────────╮");
-    println!("│              Project Dependency Graph                   │");
+    println!("│              ReleaseUnit Dependency Graph              │");
     println!("╰─────────────────────────────────────────────────────────╯");
     println!();
 

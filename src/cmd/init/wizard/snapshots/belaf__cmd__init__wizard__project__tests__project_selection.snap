@@ -2,7 +2,7 @@
 source: src/cmd/init/wizard/project.rs
 expression: out
 ---
-"┌ Step 2: Project Selection ───────────────────────────────────────────────────┐"
+"┌ Step 2: ReleaseUnit Selection ───────────────────────────────────────────────┐"
 "│                                                                              │"
 "│           📦 Select which projects to include in release management          │" Hidden by multi-width symbols: [(13, " ")]
 "│                                 Selected: 1 / 2                              │"

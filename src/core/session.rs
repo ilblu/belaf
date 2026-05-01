@@ -14,8 +14,8 @@ use crate::{
         config::{syntax::ChangelogConfiguration, ConfigurationFile},
         errors::Result,
         git::repository::{ChangeList, ReleaseAvailability, Repository},
-        graph::{ProjectGraph, ProjectGraphBuilder, RepoHistories},
-        project::{DepRequirement, ProjectId},
+        graph::{ReleaseUnitGraph, ReleaseUnitGraphBuilder, RepoHistories},
+        resolved_release_unit::{DepRequirement, ReleaseUnitId},
         version::Version,
     },
     utils::theme::ReleaseProgressBar,
@@ -29,7 +29,7 @@ pub struct NpmConfig {
 /// Setting up a Belaf application session.
 pub struct AppBuilder {
     pub repo: Repository,
-    pub graph: ProjectGraphBuilder,
+    pub graph: ReleaseUnitGraphBuilder,
 
     is_ci: bool,
     populate_graph: bool,
@@ -52,7 +52,7 @@ impl AppBuilder {
     /// associate the process with a proper Git repository with a work tree.
     pub fn new() -> Result<AppBuilder> {
         let repo = Repository::open_from_env()?;
-        let graph = ProjectGraphBuilder::new();
+        let graph = ReleaseUnitGraphBuilder::new();
         let is_ci = detect_ci_environment();
 
         Ok(AppBuilder {
@@ -291,7 +291,7 @@ pub struct AppSession {
     /// (the wizard + drift-check would otherwise traverse the same
     /// tree twice).
     detection_cache: std::sync::OnceLock<crate::core::release_unit::detector::DetectionReport>,
-    graph: ProjectGraph,
+    graph: ReleaseUnitGraph,
     is_ci: bool,
 }
 
@@ -387,12 +387,12 @@ impl AppSession {
             .get_or_init(|| crate::core::release_unit::detector::detect_all(&self.repo))
     }
 
-    pub fn graph(&self) -> &ProjectGraph {
+    pub fn graph(&self) -> &ReleaseUnitGraph {
         &self.graph
     }
 
     /// Get the graph of projects inside this app session, mutably.
-    pub fn graph_mut(&mut self) -> &mut ProjectGraph {
+    pub fn graph_mut(&mut self) -> &mut ReleaseUnitGraph {
         &mut self.graph
     }
 
@@ -417,9 +417,9 @@ impl AppSession {
     /// hasn't been annotated.
     pub fn solve_internal_deps<F>(&mut self, mut process: F) -> Result<()>
     where
-        F: FnMut(&mut Repository, &mut ProjectGraph, ProjectId) -> Result<bool>,
+        F: FnMut(&mut Repository, &mut ReleaseUnitGraph, ReleaseUnitId) -> Result<bool>,
     {
-        let mut new_versions: HashMap<ProjectId, Version> = HashMap::new();
+        let mut new_versions: HashMap<ReleaseUnitId, Version> = HashMap::new();
         let toposorted_idents: Vec<_> = self.graph.toposorted().collect();
         let mut unsatisfied_deps = Vec::new();
 

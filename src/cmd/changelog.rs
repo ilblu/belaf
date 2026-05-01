@@ -184,7 +184,7 @@ pub fn run(
         if processed_count == 0 {
             if project_filter.is_some() {
                 println!(
-                    "{} Project '{}' not found or has no changes.",
+                    "{} ReleaseUnit '{}' not found or has no changes.",
                     "ℹ".cyan().bold(),
                     project_filter.unwrap()
                 );

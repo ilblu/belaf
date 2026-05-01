@@ -62,7 +62,7 @@ fn test_detect_single_elixir_project() {
     repo.write_file(
         "mix.exs",
         r#"defmodule MyApp.MixProject do
-  use Mix.Project
+  use Mix.ResolvedReleaseUnit
 
   def project do
     [

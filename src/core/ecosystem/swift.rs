@@ -17,7 +17,7 @@ use crate::{
         ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{RepoPath, RepoPathBuf, Repository},
-        graph::ProjectGraphBuilder,
+        graph::ReleaseUnitGraphBuilder,
         session::AppBuilder,
         version::Version,
     },
@@ -31,7 +31,7 @@ pub struct SwiftLoader {
 impl SwiftLoader {
     /// Inherent helper used by both the [`Ecosystem`] trait impl and the
     /// loader's unit tests (which can call this without constructing a real
-    /// `Repository`/`ProjectGraphBuilder`).
+    /// `Repository`/`ReleaseUnitGraphBuilder`).
     pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
         if basename.as_ref() != b"Package.swift" {
             return;
@@ -107,7 +107,7 @@ impl Ecosystem for SwiftLoader {
     fn process_index_item(
         &mut self,
         _repo: &Repository,
-        _graph: &mut ProjectGraphBuilder,
+        _graph: &mut ReleaseUnitGraphBuilder,
         _repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,

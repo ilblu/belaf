@@ -33,8 +33,8 @@ use crate::{
     atry,
     core::{
         git::repository::{PathMatcher, RepoPathBuf, Repository},
-        project::DepRequirement,
         release_unit::detector,
+        resolved_release_unit::DepRequirement,
         session::{AppBuilder, AppSession},
     },
 };

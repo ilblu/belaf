@@ -19,7 +19,7 @@ use crate::core::{
     config::syntax::ProjectConfiguration,
     errors::Result,
     git::repository::{RepoPath, RepoPathBuf, Repository},
-    graph::ProjectGraphBuilder,
+    graph::ReleaseUnitGraphBuilder,
     session::AppBuilder,
 };
 
@@ -85,7 +85,7 @@ pub trait Ecosystem: Send + Sync + std::fmt::Debug {
     fn process_index_item(
         &mut self,
         _repo: &Repository,
-        _graph: &mut ProjectGraphBuilder,
+        _graph: &mut ReleaseUnitGraphBuilder,
         _repopath: &RepoPath,
         _dirname: &RepoPath,
         _basename: &RepoPath,
@@ -194,7 +194,7 @@ impl EcosystemRegistry {
     pub fn process_index_item(
         &mut self,
         repo: &Repository,
-        graph: &mut ProjectGraphBuilder,
+        graph: &mut ReleaseUnitGraphBuilder,
         repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,

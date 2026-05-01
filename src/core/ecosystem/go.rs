@@ -13,8 +13,8 @@ use crate::{
         ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::ProjectGraphBuilder,
-        project::ProjectId,
+        graph::ReleaseUnitGraphBuilder,
+        resolved_release_unit::ReleaseUnitId,
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
         version::Version,
@@ -108,7 +108,7 @@ impl Ecosystem for GoLoader {
     fn process_index_item(
         &mut self,
         _repo: &Repository,
-        _graph: &mut ProjectGraphBuilder,
+        _graph: &mut ReleaseUnitGraphBuilder,
         _repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
@@ -129,12 +129,12 @@ impl Ecosystem for GoLoader {
 
 #[derive(Debug)]
 pub struct GoModRewriter {
-    proj_id: ProjectId,
+    proj_id: ReleaseUnitId,
     repo_path: RepoPathBuf,
 }
 
 impl GoModRewriter {
-    pub fn new(proj_id: ProjectId, repo_path: RepoPathBuf) -> Self {
+    pub fn new(proj_id: ReleaseUnitId, repo_path: RepoPathBuf) -> Self {
         GoModRewriter { proj_id, repo_path }
     }
 }

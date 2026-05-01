@@ -90,7 +90,7 @@ pub mod syntax {
 
     /// `[[group]]` table: bundles projects that must release together.
     /// `id` is the wire-format group id (lowercased pattern); `members`
-    /// are user-facing project names (resolved to `ProjectId`s after the
+    /// are user-facing project names (resolved to `ReleaseUnitId`s after the
     /// graph is built).
     #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct GroupConfig {

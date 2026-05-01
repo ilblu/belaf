@@ -33,7 +33,8 @@ use crate::core::{
     ui::{components::toggle_panel::TogglePanel, markdown, utils::centered_rect},
     wire::known::Ecosystem,
     workflow::{
-        generate_changelog_entry, BumpChoice, PrepareContext, ProjectCandidate, ProjectSelection,
+        generate_changelog_entry, BumpChoice, PrepareContext, ProjectSelection,
+        ReleaseUnitCandidate,
     },
 };
 
@@ -44,8 +45,8 @@ enum WizardStep {
     Confirmation,
 }
 
-struct ProjectItem {
-    candidate: ProjectCandidate,
+struct ReleaseUnitItem {
+    candidate: ReleaseUnitCandidate,
     selected: bool,
     chosen_bump: Option<BumpChoice>,
     cached_changelog: Option<String>,
@@ -73,8 +74,8 @@ enum DisplayRow {
     },
 }
 
-impl ProjectItem {
-    fn from_candidate(candidate: ProjectCandidate, existing_changelog: String) -> Self {
+impl ReleaseUnitItem {
+    fn from_candidate(candidate: ReleaseUnitCandidate, existing_changelog: String) -> Self {
         Self {
             candidate,
             selected: true,
@@ -169,7 +170,7 @@ fn calculate_patch_version(current: &str) -> String {
 
 struct WizardState {
     step: WizardStep,
-    projects: Vec<ProjectItem>,
+    projects: Vec<ReleaseUnitItem>,
     project_list_state: ListState,
     bump_list_state: ListState,
     show_changelog: bool,
@@ -185,7 +186,7 @@ struct WizardState {
 
 impl WizardState {
     fn new(
-        projects: Vec<ProjectItem>,
+        projects: Vec<ReleaseUnitItem>,
         changelog_config: ChangelogConfiguration,
         bump_config: BumpConfiguration,
     ) -> Self {
@@ -310,7 +311,7 @@ impl WizardState {
         self.loading_receiver = None;
     }
 
-    fn get_current_project(&self) -> Option<&ProjectItem> {
+    fn get_current_project(&self) -> Option<&ReleaseUnitItem> {
         if let WizardStep::ProjectConfig { project_index } = self.step {
             self.projects
                 .iter()
@@ -321,7 +322,7 @@ impl WizardState {
         }
     }
 
-    fn get_current_project_mut(&mut self) -> Option<&mut ProjectItem> {
+    fn get_current_project_mut(&mut self) -> Option<&mut ReleaseUnitItem> {
         if let WizardStep::ProjectConfig { project_index } = self.step {
             self.projects
                 .iter_mut()
@@ -343,7 +344,7 @@ impl WizardState {
         compute_display_rows(&self.projects)
     }
 
-    /// Project indices the row at `display_idx` represents — one for
+    /// ResolvedReleaseUnit indices the row at `display_idx` represents — one for
     /// solo, all members for a group.
     fn projects_for_display_row(&self, display_idx: usize) -> Vec<usize> {
         let rows = self.display_rows();
@@ -445,7 +446,7 @@ impl WizardState {
         }
     }
 
-    fn selected_projects(&self) -> Vec<&ProjectItem> {
+    fn selected_projects(&self) -> Vec<&ReleaseUnitItem> {
         self.projects.iter().filter(|p| p.selected).collect()
     }
 
@@ -587,7 +588,7 @@ pub fn run_with_overrides_and_decisions(
         return Ok(0);
     }
 
-    let projects: Vec<ProjectItem> = ctx
+    let projects: Vec<ReleaseUnitItem> = ctx
         .candidates
         .iter()
         .map(|candidate| {
@@ -600,7 +601,7 @@ pub fn run_with_overrides_and_decisions(
             let changelog_repo_path = RepoPathBuf::new(changelog_rel_path.as_bytes());
             let changelog_path = ctx.resolve_workdir(changelog_repo_path.as_ref());
             let existing_changelog = parse_existing_changelog(&changelog_path).unwrap_or_default();
-            let mut item = ProjectItem::from_candidate(candidate.clone(), existing_changelog);
+            let mut item = ReleaseUnitItem::from_candidate(candidate.clone(), existing_changelog);
             item.group_id = groups
                 .group_of(candidate.ident)
                 .map(|g| g.id.as_str().to_string());
@@ -705,10 +706,10 @@ fn print_no_changes_message() {
 }
 
 fn run_wizard_ui(
-    projects: Vec<ProjectItem>,
+    projects: Vec<ReleaseUnitItem>,
     changelog_config: ChangelogConfiguration,
     bump_config: BumpConfiguration,
-) -> Result<Option<Vec<ProjectItem>>> {
+) -> Result<Option<Vec<ReleaseUnitItem>>> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -849,7 +850,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
         .title(Span::styled(
-            " Step 1: Project Selection ",
+            " Step 1: ReleaseUnit Selection ",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
@@ -952,7 +953,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
 
 /// Solo projects are one row each; grouped projects collapse into one
 /// row per group with member indices in original-order. Plan §5.
-fn compute_display_rows(projects: &[ProjectItem]) -> Vec<DisplayRow> {
+fn compute_display_rows(projects: &[ReleaseUnitItem]) -> Vec<DisplayRow> {
     let mut out: Vec<DisplayRow> = Vec::new();
     let mut group_pos: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     for (i, p) in projects.iter().enumerate() {
@@ -977,7 +978,7 @@ fn compute_display_rows(projects: &[ProjectItem]) -> Vec<DisplayRow> {
 }
 
 /// Render one ungrouped project as a single list row.
-fn render_solo_row(project: &ProjectItem, is_current: bool) -> ListItem<'_> {
+fn render_solo_row(project: &ReleaseUnitItem, is_current: bool) -> ListItem<'_> {
     let checkbox = if project.selected { "✅" } else { "⬜" };
     let (suggestion_text, suggestion_color) = match project.suggested_bump() {
         BumpRecommendation::Major => ("MAJOR", Color::Red),
@@ -1028,16 +1029,16 @@ fn render_solo_row(project: &ProjectItem, is_current: bool) -> ListItem<'_> {
 ///      └─ com.org:schema        (maven)
 /// ```
 ///
-/// Member ecosystems are pulled off the underlying `ProjectItem` via
+/// Member ecosystems are pulled off the underlying `ReleaseUnitItem` via
 /// `project_type().as_str()` so the dashboard's display name matches
 /// the wire format.
 fn render_group_row(
     group_id: &str,
     member_indices: &[usize],
-    projects: &[ProjectItem],
+    projects: &[ReleaseUnitItem],
     is_current: bool,
 ) -> ListItem<'static> {
-    let members: Vec<&ProjectItem> = member_indices.iter().map(|i| &projects[*i]).collect();
+    let members: Vec<&ReleaseUnitItem> = member_indices.iter().map(|i| &projects[*i]).collect();
     if members.is_empty() {
         return ListItem::new(Line::from(""));
     }
@@ -1850,10 +1851,10 @@ fn render_help_popup(f: &mut Frame, state: &WizardState) {
 
     let help_text = match &state.step {
         WizardStep::ProjectSelection => {
-            "Project Selection Help\n\n\
-             • Use ↑/↓ arrows to navigate projects\n\
-             • Press Space to toggle project selection\n\
-             • Press 'a' to toggle all projects\n\
+            "ReleaseUnit Selection Help\n\n\
+             • Use ↑/↓ arrows to navigate units\n\
+             • Press Space to toggle unit selection\n\
+             • Press 'a' to toggle all units\n\
              • Press Enter to proceed to next step\n\
              • At least one project must be selected\n\n\
              The wizard analyzes your commits using\n\
@@ -1936,7 +1937,7 @@ fn parse_existing_changelog(path: &Path) -> Option<String> {
 }
 
 fn apply_decisions_to_items(
-    projects: &mut [ProjectItem],
+    projects: &mut [ReleaseUnitItem],
     decisions: &[crate::core::bump_source::BumpDecision],
 ) -> Result<()> {
     if decisions.is_empty() {
@@ -1970,7 +1971,7 @@ fn apply_decisions_to_items(
 }
 
 fn apply_project_overrides_to_items(
-    projects: &mut [ProjectItem],
+    projects: &mut [ReleaseUnitItem],
     overrides: &[String],
 ) -> Result<()> {
     let project_names: Vec<String> = projects.iter().map(|p| p.name().to_string()).collect();
@@ -2025,12 +2026,12 @@ mod tests {
     use crate::core::bump::BumpRecommendation;
     use crate::core::wire::known::Ecosystem;
 
-    /// Build a minimal `ProjectItem` for layout tests. We don't need
+    /// Build a minimal `ReleaseUnitItem` for layout tests. We don't need
     /// realistic Commit / config state — the layout algorithm only
     /// reads `group_id()`.
-    fn item(name: &str, group_id: Option<&str>) -> ProjectItem {
-        ProjectItem {
-            candidate: ProjectCandidate {
+    fn item(name: &str, group_id: Option<&str>) -> ReleaseUnitItem {
+        ReleaseUnitItem {
+            candidate: ReleaseUnitCandidate {
                 ident: 0,
                 name: name.into(),
                 prefix: String::new(),

@@ -26,8 +26,8 @@ pub mod core {
     pub mod graph;
     pub mod group;
     pub mod manifest;
-    pub mod project;
     pub mod release_unit;
+    pub mod resolved_release_unit;
     pub mod rewriters;
     pub mod session;
     pub mod tag_format;

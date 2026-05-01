@@ -265,7 +265,10 @@ fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
         ]));
         info_lines.push(Line::from(vec![
             Span::styled("  → ", Style::default().fg(Color::Cyan)),
-            Span::styled("Project configuration", Style::default().fg(Color::Gray)),
+            Span::styled(
+                "ReleaseUnit configuration",
+                Style::default().fg(Color::Gray),
+            ),
         ]));
         info_lines.push(Line::from(vec![
             Span::styled("  → ", Style::default().fg(Color::Cyan)),

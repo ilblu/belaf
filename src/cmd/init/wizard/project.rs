@@ -1,4 +1,4 @@
-//! Project-selection step. Owns the cursor and the toggle/select-all/
+//! ResolvedReleaseUnit-selection step. Owns the cursor and the toggle/select-all/
 //! deselect-all keybindings.
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
@@ -122,7 +122,7 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState, cursor: usize) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
         .title(Span::styled(
-            " Step 2: Project Selection ",
+            " Step 2: ReleaseUnit Selection ",
             Style::default()
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),

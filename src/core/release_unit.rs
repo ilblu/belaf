@@ -8,7 +8,7 @@
 //! workspaces.
 //!
 //! A `ReleaseUnit` is the config-side abstraction. Resolution turns each
-//! one into a `Project` that lives in the graph (with stored `version`,
+//! one into a `ResolvedReleaseUnit` that lives in the graph (with stored `version`,
 //! `prefix`, rewriters, etc.). The unit itself does not store the current
 //! version — that is read at resolve-time from the unit's
 //! [`VersionSource`].

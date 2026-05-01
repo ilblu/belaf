@@ -21,8 +21,8 @@ use crate::{
         ecosystem::registry::Ecosystem,
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::ProjectGraphBuilder,
-        project::{DepRequirement, DependencyTarget, ProjectId},
+        graph::ReleaseUnitGraphBuilder,
+        resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
         rewriters::Rewriter,
         session::{AppBuilder, AppSession},
         version::Version,
@@ -128,7 +128,7 @@ impl CsProjLoader {
         // Build up the table of projects and their deps.
 
         struct Info {
-            ident: ProjectId,
+            ident: ReleaseUnitId,
             name: String,
 
             /// (guid, literal-req, resolved-req)
@@ -455,7 +455,7 @@ impl Ecosystem for CsProjLoader {
     fn process_index_item(
         &mut self,
         repo: &Repository,
-        _graph: &mut ProjectGraphBuilder,
+        _graph: &mut ReleaseUnitGraphBuilder,
         repopath: &RepoPath,
         dirname: &RepoPath,
         basename: &RepoPath,
@@ -476,13 +476,13 @@ impl Ecosystem for CsProjLoader {
 /// Rewrite `AssemblyInfo.cs` to include real version numbers.
 #[derive(Debug)]
 pub struct AssemblyInfoCsRewriter {
-    proj_id: ProjectId,
+    proj_id: ReleaseUnitId,
     cs_path: RepoPathBuf,
 }
 
 impl AssemblyInfoCsRewriter {
     /// Create a new `AssemblyInfo.cs` rewriter.
-    pub fn new(proj_id: ProjectId, cs_path: RepoPathBuf) -> Self {
+    pub fn new(proj_id: ReleaseUnitId, cs_path: RepoPathBuf) -> Self {
         AssemblyInfoCsRewriter { proj_id, cs_path }
     }
 }
@@ -552,13 +552,13 @@ impl Rewriter for AssemblyInfoCsRewriter {
 /// Rewrite a vdproj (setup installer) to include real version numbers.
 #[derive(Debug)]
 pub struct VdprojRewriter {
-    proj_id: ProjectId,
+    proj_id: ReleaseUnitId,
     vdproj_path: RepoPathBuf,
 }
 
 impl VdprojRewriter {
     /// Create a new `AssemblyInfo.cs` rewriter.
-    pub fn new(proj_id: ProjectId, vdproj_path: RepoPathBuf) -> Self {
+    pub fn new(proj_id: ReleaseUnitId, vdproj_path: RepoPathBuf) -> Self {
         VdprojRewriter {
             proj_id,
             vdproj_path,

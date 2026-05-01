@@ -23,7 +23,7 @@ use crate::{
         bump::{extract_scope, ScopeMatcher},
         config::syntax::RepoConfiguration,
         errors::{Error, Result},
-        project::{DepRequirement, Project},
+        resolved_release_unit::{DepRequirement, ResolvedReleaseUnit},
         version::Version,
     },
 };
@@ -743,7 +743,7 @@ impl Repository {
     /// the history from HEAD to its most recent release commit. I worry about
     /// the efficiency of this so we trace all the histories at once to try to
     /// improve that.
-    pub fn analyze_histories(&self, projects: &[Project]) -> Result<Vec<RepoHistory>> {
+    pub fn analyze_histories(&self, projects: &[ResolvedReleaseUnit]) -> Result<Vec<RepoHistory>> {
         let mut histories = vec![
             RepoHistory {
                 commits: Vec::new(),
@@ -1054,7 +1054,7 @@ pub enum ReleaseAvailability {
 impl Repository {
     pub fn find_earliest_release_containing(
         &self,
-        proj: &Project,
+        proj: &ResolvedReleaseUnit,
         cid: &CommitId,
         is_single_project: bool,
     ) -> Result<ReleaseAvailability> {
@@ -1103,7 +1103,7 @@ impl ReleaseCommitInfo {
     ///
     /// Information may be missing if the project was only added to the
     /// repository after this information was recorded.
-    pub fn lookup_project(&self, proj: &Project) -> Option<&ReleasedProjectInfo> {
+    pub fn lookup_project(&self, proj: &ResolvedReleaseUnit) -> Option<&ReleasedProjectInfo> {
         self.projects
             .iter()
             .find(|&rpi| rpi.qnames == *proj.qualified_names())
@@ -1113,7 +1113,7 @@ impl ReleaseCommitInfo {
     ///
     /// This function is like `lookup_project()`, but also returns None if the
     /// "age" of any identified release is not zero.
-    pub fn lookup_if_released(&self, proj: &Project) -> Option<&ReleasedProjectInfo> {
+    pub fn lookup_if_released(&self, proj: &ResolvedReleaseUnit) -> Option<&ReleasedProjectInfo> {
         self.lookup_project(proj).filter(|rel| rel.age == 0)
     }
 }
@@ -1122,7 +1122,7 @@ impl ReleaseCommitInfo {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct ReleasedProjectInfo {
     /// The qualified names of this project, equivalent to the same-named
-    /// property of the Project struct.
+    /// property of the ResolvedReleaseUnit struct.
     pub qnames: Vec<String>,
 
     /// The version of the project in this commit, as text.
