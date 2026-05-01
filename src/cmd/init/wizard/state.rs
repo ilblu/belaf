@@ -6,6 +6,9 @@
 //! lives on each step's struct in `welcome.rs` / `preset.rs` /
 //! `project.rs` / `upstream.rs` / `confirmation.rs`.
 
+use std::collections::HashSet;
+
+use crate::core::git::repository::RepoPathBuf;
 use crate::core::release_unit::detector::DetectionReport;
 
 #[derive(Clone, Debug)]
@@ -44,6 +47,15 @@ pub struct WizardState {
     /// auto_detect snippet to `belaf/config.toml`.
     pub detector_accepted: bool,
 
+    /// Per-item exclusions chosen by the user in
+    /// [`DetectorReviewStep`](super::detector_review::DetectorReviewStep).
+    /// Each entry is a detector-match path the user toggled OFF;
+    /// the orchestrator passes this to
+    /// [`auto_detect::run_filtered`](crate::cmd::init::auto_detect::run_filtered)
+    /// so excluded paths get no `[[release_unit]]` block AND land in
+    /// `[ignore_paths]` (silences drift on subsequent prepares).
+    pub detector_excluded: HashSet<RepoPathBuf>,
+
     /// Phase I.3 — tag-format override picked by the user via
     /// [`TagFormatStep`](super::tag_format::TagFormatStep) when the
     /// repo is a single-project bundle. `None` means "fall back to
@@ -73,6 +85,7 @@ impl WizardState {
             config_exists: false,
             detection: DetectionReport::default(),
             detector_accepted: false,
+            detector_excluded: HashSet::new(),
             tag_format_override: None,
         }
     }

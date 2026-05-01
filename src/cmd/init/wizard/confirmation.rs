@@ -39,7 +39,7 @@ impl Step for ConfirmationStep {
         };
 
         match (key.code, key.modifiers) {
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), _) => {
                 StepResult::Exit(WizardOutcome::Cancelled)
             }
             (KeyCode::Enter | KeyCode::Char('y'), _) => StepResult::Exit(WizardOutcome::Confirmed),

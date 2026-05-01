@@ -2,27 +2,27 @@
 source: src/cmd/init/wizard/detector_review.rs
 expression: out
 ---
-"┌ Auto-detected ReleaseUnits ────────────────────────────────────────────────────────────┐"
-"│                                                                                        │"
-"│                  🔍 belaf detected the following bundles in your repo                  │" Hidden by multi-width symbols: [(20, " ")]
-"│                                                                                        │"
-"│┌ Detected bundles ────────────────────────────────────────────────────────────────────┐│"
-"││ 🦀  apps/services/foo                 hexagonal cargo (bin)                          ││" Hidden by multi-width symbols: [(4, " ")]
-"││ 🖥  apps/desktop                      tauri (single-source)                           ││"
-"││ ☕  sdks/kotlin                       jvm library (gradle.properties)                ││" Hidden by multi-width symbols: [(4, " ")]
-"││ 📱  apps/mobile-ios                   mobile iOS (managed externally)                ││" Hidden by multi-width symbols: [(4, " ")]
-"││ 🔗  sdks/typescript                   sdk cascade member                             ││" Hidden by multi-width symbols: [(4, " ")]
-"││                                                                                      ││"
-"││                                                                                      ││"
-"││                                                                                      ││"
-"││                                                                                      ││"
-"││                                                                                      ││"
-"││                                                                                      ││"
-"││                                                                                      ││"
-"│└──────────────────────────────────────────────────────────────────────────────────────┘│"
-"│           4 ReleaseUnit candidate(s), 1 mobile warning(s) → [allow_uncovered]          │"
-"│                                                                                        │"
-"│                                                                                        │"
-"│             Enter/y accept and append to config  s/n skip  Esc back  q quit            │"
-"│                                                                                        │"
-"└────────────────────────────────────────────────────────────────────────────────────────┘"
+"┌ Auto-detected ReleaseUnits ──────────────────────────────────────────────────────────────────────┐"
+"│                                                                                                  │"
+"│                       🔍 belaf detected the following bundles in your repo                       │" Hidden by multi-width symbols: [(25, " ")]
+"│                                                                                                  │"
+"│┌ Detected bundles ──────────────────────────────────────────────────────────────────────────────┐│"
+"││ ✅ 🦀  apps/services/foo                 hexagonal cargo (bin)                                 ││" Hidden by multi-width symbols: [(4, " "), (7, " ")]
+"││ ✅ 🖥  apps/desktop                      tauri (single-source)                                  ││" Hidden by multi-width symbols: [(4, " ")]
+"││ ✅ ☕  sdks/kotlin                       jvm library (gradle.properties)                       ││" Hidden by multi-width symbols: [(4, " "), (7, " ")]
+"││ — 📱  apps/mobile-ios                   mobile iOS (managed externally)                        ││" Hidden by multi-width symbols: [(6, " ")]
+"││ ✅ 🔗  sdks/typescript                   sdk cascade member                                    ││" Hidden by multi-width symbols: [(4, " "), (7, " ")]
+"││                                                                                                ││"
+"││                                                                                                ││"
+"││                                                                                                ││"
+"││                                                                                                ││"
+"││                                                                                                ││"
+"││                                                                                                ││"
+"││                                                                                                ││"
+"│└────────────────────────────────────────────────────────────────────────────────────────────────┘│"
+"│         4 / 4 ReleaseUnit candidate(s) selected, 1 mobile warning(s) → [allow_uncovered]         │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│         ↑↓ navigate  Space toggle  a all  n none  Enter accept  s skip  Esc back  q quit         │"
+"│                                                                                                  │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

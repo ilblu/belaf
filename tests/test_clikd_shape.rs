@@ -136,3 +136,42 @@ fn auto_detect_emits_coherent_snippet() {
         "iOS detector must hit at least once on clikd-shape"
     );
 }
+
+#[test]
+fn auto_detect_run_filtered_excludes_paths_from_release_units() {
+    use std::collections::HashSet;
+
+    use belaf::core::git::repository::RepoPathBuf;
+
+    let repo = seeded_clikd();
+    let r = open_repo(&repo);
+
+    // Exclude the JVM SDK and the swift cascade member.
+    let mut exclusions: HashSet<RepoPathBuf> = HashSet::new();
+    exclusions.insert(RepoPathBuf::new(b"sdks/kotlin"));
+    exclusions.insert(RepoPathBuf::new(b"sdks/swift"));
+
+    let result = belaf::cmd::init::auto_detect::run_filtered(&r, &exclusions);
+
+    // Snippet must still contain at least one [[release_unit_glob]]
+    // for apps/services/* (the cargo services aren't excluded).
+    assert!(
+        result.toml_snippet.contains("[[release_unit_glob]]"),
+        "filtered snippet must still emit the cargo services glob, got:\n{}",
+        result.toml_snippet
+    );
+
+    // Excluded paths must NOT have a [[release_unit]] block.
+    assert!(
+        !result.toml_snippet.contains("ecosystem = \"jvm-library\""),
+        "kotlin SDK was excluded; no jvm-library block expected"
+    );
+
+    // [ignore_paths] block must list the exclusions.
+    assert!(
+        result.toml_snippet.contains("[ignore_paths]"),
+        "exclusions must produce an [ignore_paths] block"
+    );
+    assert!(result.toml_snippet.contains("sdks/kotlin/"));
+    assert!(result.toml_snippet.contains("sdks/swift/"));
+}

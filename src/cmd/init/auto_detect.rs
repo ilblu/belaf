@@ -8,7 +8,7 @@
 //! `[[release_unit]]` blocks (or, where idiomatic, a single
 //! `[[release_unit_glob]]` collapsing many sibling matches).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::toml_util::toml_quote;
@@ -61,11 +61,40 @@ impl DetectionCounters {
 const AUTO_DETECT_MARKER: &str =
     "# belaf:auto-detect-marker (do not remove — used for idempotency)";
 
+/// Old single-shot entry point — equivalent to `run_filtered(repo, &empty)`.
+/// Kept as a stable public surface for `--ci --auto-detect` and existing
+/// integration tests; the wizard's interactive path uses `run_filtered`
+/// so the user's per-item exclusions can flow through.
 pub fn run(repo: &Repository) -> AutoDetectResult {
-    let report = detector::detect_all(repo);
+    run_filtered(repo, &HashSet::new())
+}
+
+/// Auto-detect with per-match exclusions. Each excluded match path:
+///   - gets **no** `[[release_unit]]` block emitted
+///   - lands in the `[ignore_paths]` block of the snippet so the
+///     resolver skips it AND the drift detector stays silent on it
+///
+/// Glob behaviour: a glob group with at least 2 non-excluded members
+/// still becomes one `[[release_unit_glob]]` block; a group reduced
+/// to a single non-excluded member by exclusions falls through to
+/// the singleton-explicit-block path automatically.
+pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> AutoDetectResult {
+    let mut report = detector::detect_all(repo);
+    // Filter the matches up-front. The excluded paths are still
+    // tracked so we can append them to the [ignore_paths] block at
+    // the bottom of the snippet.
+    if !exclusions.is_empty() {
+        report.matches.retain(|m| !exclusions.contains(&m.path));
+    }
     let mut snippet = String::new();
     let mut counters = DetectionCounters::default();
     let mut allow_uncovered: Vec<String> = Vec::new();
+    // Excluded paths sorted for byte-deterministic output.
+    let mut ignore_paths: Vec<String> = exclusions
+        .iter()
+        .map(|p| format!("{}/", p.escaped()))
+        .collect();
+    ignore_paths.sort();
 
     // Group hexagonal cargo matches into a single glob block per
     // common parent (e.g. `apps/services/*`) when at least 2
@@ -246,6 +275,17 @@ pub fn run(repo: &Repository) -> AutoDetectResult {
             "\n# {} SDK packages detected under sdks/* — consider adding\n# `cascade_from = {{ source = \"<schema-unit>\", bump = \"floor_minor\" }}`\n# to each so they bump in lockstep when the schema bumps.\n",
             counters.sdk_cascade_member
         ));
+    }
+
+    // User-excluded matches — emit as `[ignore_paths]` so the
+    // resolver skips them AND the drift detector stays silent. The
+    // user opted these out interactively in `DetectorReviewStep`.
+    if !ignore_paths.is_empty() {
+        snippet.push_str(
+            "\n# User-deselected detector hits — kept out of belaf's release\n# pipeline AND silenced for the drift detector. Move to\n# [allow_uncovered] manually if these are released externally.\n[ignore_paths]\n",
+        );
+        let quoted: Vec<String> = ignore_paths.iter().map(|p| toml_quote(p)).collect();
+        snippet.push_str(&format!("paths = [{}]\n", quoted.join(", ")));
     }
 
     // Prepend the idempotency marker so re-runs of `belaf init

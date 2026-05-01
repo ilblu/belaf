@@ -82,7 +82,7 @@ impl Step for TagFormatStep {
         };
 
         match (key.code, key.modifiers) {
-            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+            (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), _) => {
                 StepResult::Exit(WizardOutcome::Cancelled)
             }
             (KeyCode::Down | KeyCode::Char('j'), _) => {

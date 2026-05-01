@@ -46,10 +46,14 @@ impl Step for UpstreamConfigStep {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                 StepResult::Exit(WizardOutcome::Cancelled)
             }
+            // Catch typing FIRST so `q` lands in the URL when the
+            // input field is active. Outside input mode, the next
+            // arm makes `q` a quit shortcut.
             (KeyCode::Char(c), _) if self.input_active => {
                 state.upstream_url.push(c);
                 StepResult::Continue
             }
+            (KeyCode::Char('q'), _) => StepResult::Exit(WizardOutcome::Cancelled),
             (KeyCode::Backspace, _) if self.input_active => {
                 state.upstream_url.pop();
                 StepResult::Continue

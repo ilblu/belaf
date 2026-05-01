@@ -223,7 +223,7 @@ fn execute_bootstrap_with_output(state: &WizardState, repo: &Repository) -> Resu
             let mut cfg_path = repo.resolve_config_dir();
             cfg_path.push("config.toml");
             if state.detector_accepted {
-                let result = auto_detect::run(repo);
+                let result = auto_detect::run_filtered(repo, &state.detector_excluded);
                 if let Err(e) = auto_detect::append_to_config(&cfg_path, &result.toml_snippet) {
                     eprintln!(
                         "warning: detected bundles but failed to append to {}: {}",

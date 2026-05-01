@@ -1,3 +1,40 @@
+## [2.1.1](https://github.com/ilblu/belaf/compare/v2.1.0...v2.1.1) (2026-05-01)
+
+UX patch for the init wizard.
+
+### Features
+
+* **`DetectorReviewStep` now supports per-item selection.** Previous
+  behaviour was all-or-nothing (`Enter` accepted everything,
+  `s`/`n` skipped everything). Now you navigate with `↑↓` / `j k`,
+  toggle individual items with `Space`, mass-select with `a` /
+  deselect with `n`, then `Enter` accepts only the selected set.
+  Toggled-OFF detector hits get **no** `[[release_unit]]` block AND
+  land in `[ignore_paths]` — silences drift on subsequent
+  `belaf prepare` runs without you having to hand-edit the config.
+  Mobile-app rows render with a `—` indicator (not togglable; they
+  always go to `[allow_uncovered]`).
+* **`auto_detect::run_filtered(repo, exclusions)`** new public helper.
+  Existing `auto_detect::run` delegates with an empty exclusion set,
+  preserving the `--ci --auto-detect` contract. Glob behaviour
+  preserved: a glob group with ≥2 non-excluded members still becomes
+  one `[[release_unit_glob]]` block; reduced to a single member, it
+  falls through to the explicit-block path.
+
+### Fixes
+
+* **`q` quit shortcut works in every wizard step.** The hint lines
+  promised `q quit` but only `WelcomeStep` and `SingleMobileStep`
+  actually wired it. `PresetSelectionStep`, `ProjectSelectionStep`,
+  `TagFormatStep`, `UpstreamConfigStep`, `ConfirmationStep` and
+  `DetectorReviewStep` now all accept `q` as a cancellation. In
+  `UpstreamConfigStep`, `q` is a literal character while the URL
+  field is in input-active mode — the typing guard precedes the
+  quit arm so the muscle memory still works for typed URLs that
+  contain `q`.
+
+---
+
 ## [2.1.0](https://github.com/ilblu/belaf/compare/v2.0.1...v2.1.0) (2026-05-01)
 
 belaf 2.1 — the **ReleaseUnit primitive** plus a modular Step-trait
