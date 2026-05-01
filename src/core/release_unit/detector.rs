@@ -180,7 +180,7 @@ impl DriftReport {
             s.push_str(&format!("  - {path_lit:<48}  ({label})\n"));
         }
         s.push_str(
-            "\nChoose one:\n  → run `belaf init --rescan` to re-detect bundles and update belaf/config.toml\n  → add explicit [[release_unit]] entries\n  → if intentional (mobile app, archive, etc.), add to [ignore_paths] or [allow_uncovered]\n\nAborting prepare. No releases will be drafted.",
+            "\nChoose one:\n  → run `belaf init --ci --auto-detect --force` to re-detect bundles and append release_unit blocks to belaf/config.toml (idempotent — the auto-detect marker prevents duplicate appends)\n  → add explicit [[release_unit]] entries\n  → if intentional (mobile app, archive, etc.), add to [ignore_paths] or [allow_uncovered]\n\nAborting prepare. No releases will be drafted.",
         );
         s
     }
@@ -1179,7 +1179,7 @@ mod tests {
         assert!(msg.contains("uncovered release artifacts"));
         assert!(msg.contains("apps/services/foobar"));
         assert!(msg.contains("sdks/python"));
-        assert!(msg.contains("belaf init --rescan"));
+        assert!(msg.contains("belaf init --ci --auto-detect"));
         assert!(msg.contains("[ignore_paths]"));
         assert!(msg.contains("[allow_uncovered]"));
         assert!(msg.contains("Aborting prepare"));
