@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://belaf.dev/schemas/manifest.v2.0.schema.json",
+  "$id": "https://belaf.dev/schemas/manifest.v3.0.schema.json",
   "title": "Belaf Release Manifest",
-  "description": "Wire format produced by the belaf CLI and consumed by the belaf GitHub App. Version 2.0. Belaf is the schema-owner; downstream consumers vendor a copy of this file.",
+  "description": "Wire format produced by the belaf CLI and consumed by the belaf GitHub App. Version 3.0 — promotes config-side metadata (bundle_manifests, external_versioner, version_field_spec, cascade_from, visibility, satellites) to first-class typed fields on each release entry so downstream consumers (github-app, dashboard) can display unit semantics without re-fetching config. Belaf is the schema-owner; downstream consumers vendor a copy of this file.",
   "type": "object",
   "required": [
     "schema_version",
@@ -17,7 +17,7 @@
     "schema_version": {
       "description": "Manifest schema version. The producer (CLI) emits the version it wrote; the consumer (App) dispatches to the matching parser. Bump only on breaking changes.",
       "type": "string",
-      "const": "2.0"
+      "const": "3.0"
     },
     "manifest_id": {
       "description": "UUID v7 identifying this manifest. Sortable. The on-disk filename is `belaf/releases/<manifest_id>.json`.",
@@ -161,6 +161,40 @@
             { "$ref": "#/$defs/release_statistics" }
           ]
         },
+        "bundle_manifests": {
+          "description": "3.0 typed promotion. List of manifest file paths (relative to repo root) that compose this multi-manifest ReleaseUnit. Empty / absent for single-manifest units. Dashboard consumers render this as a `<ManifestFileList>` badge.",
+          "type": ["array", "null"],
+          "default": [],
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "external_versioner": {
+          "description": "3.0 typed promotion. Present when this release's version is sourced via an external command (e.g. a plugin-managed Gradle build that derives version from git tags). Absent for normal manifest-sourced units.",
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/external_versioner" }
+          ]
+        },
+        "version_field_spec": {
+          "description": "3.0 typed promotion. Names how the version is encoded in the manifest file(s) — drives the rewriter selection on the producer side. Stored as a free-form string so new specs can land additively (Known/Unknown classification on consumer). Standard values: `cargo_toml`, `npm_package_json`, `tauri_conf_json`, `gradle_properties`, `generic_regex`.",
+          "type": ["string", "null"]
+        },
+        "cascade_from": {
+          "description": "3.0 typed promotion. Present when this release was bumped because a cascade source (typically a schema unit) was bumped — encodes which source and which bump strategy was applied.",
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/cascade_from" }
+          ]
+        },
+        "visibility": {
+          "description": "3.0 typed promotion. Whether this unit is publicly published (publish to a registry) or internal-only. Stored as free-form string for forward extensibility. Standard values: `public`, `internal`.",
+          "type": ["string", "null"]
+        },
+        "satellites": {
+          "description": "3.0 typed promotion. Repo-relative directories that are part of this ReleaseUnit but contain no version-bearing manifest of their own — e.g. `crates/foo/` of a hexagonal cargo unit whose primary manifest is `crates/foo/bin/Cargo.toml`.",
+          "type": ["array", "null"],
+          "default": [],
+          "items": { "type": "string", "minLength": 1 }
+        },
         "x": { "type": "object" }
       }
     },
@@ -194,6 +228,61 @@
         },
         "pr_count": {
           "type": ["integer", "null"]
+        },
+        "x": { "type": "object" }
+      }
+    },
+    "external_versioner": {
+      "description": "External-versioner config, mirrored on the wire so consumers can show how the version was derived.",
+      "type": "object",
+      "required": ["tool"],
+      "additionalProperties": false,
+      "properties": {
+        "tool": {
+          "description": "Tool identifier, e.g. `gradle`, `script`. Free-form so new tools land additively.",
+          "type": "string",
+          "minLength": 1
+        },
+        "read_command": {
+          "description": "Shell command the CLI ran to read the current version.",
+          "type": ["string", "null"]
+        },
+        "write_command": {
+          "description": "Shell command the CLI runs on release-prepare to write the bumped version. Null when the tool computes its version dynamically.",
+          "type": ["string", "null"]
+        },
+        "cwd": {
+          "description": "Working directory (repo-relative) for the read/write commands.",
+          "type": ["string", "null"]
+        },
+        "timeout_sec": {
+          "description": "Max seconds either command may run before the CLI hard-errors. Default 60s on the producer side; null means use producer default.",
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "env": {
+          "description": "Optional environment variable map passed to the commands. Values are strings; secrets must not appear here (use OS env on the runner instead).",
+          "type": ["object", "null"],
+          "additionalProperties": { "type": "string" }
+        },
+        "x": { "type": "object" }
+      }
+    },
+    "cascade_from": {
+      "description": "Cascade-bump origin: which source unit triggered this release and which bump strategy was applied.",
+      "type": "object",
+      "required": ["source", "bump"],
+      "additionalProperties": false,
+      "properties": {
+        "source": {
+          "description": "Name (matching `release.name`) of the upstream unit whose bump triggered this cascade.",
+          "type": "string",
+          "minLength": 1
+        },
+        "bump": {
+          "description": "Strategy applied. Free-form string; Known values: `mirror`, `floor_patch`, `floor_minor`, `floor_major`.",
+          "type": "string",
+          "minLength": 1
         },
         "x": { "type": "object" }
       }

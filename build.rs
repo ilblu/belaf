@@ -51,15 +51,17 @@ fn generate_api_client() {
         .unwrap_or_else(|e| panic!("failed to write {}: {e}", out.display()));
 }
 
-/// Generate Rust types from `schemas/manifest.v2.0.schema.json` via typify.
+/// Generate Rust types from `schemas/manifest.v3.0.schema.json` via typify.
 ///
 /// The JSON Schema is the canonical wire format for the belaf release
 /// manifest. belaf is the schema-owner; github-app vendors a copy. Generated
 /// types live in the `types` module of the produced file and are re-exported
-/// through `src/core/wire/`.
+/// through `src/core/wire/`. Output filename is kept as
+/// `manifest_v2_codegen.rs` for one cycle to minimise call-site churn —
+/// the next 3.x cleanup PR can rename to `manifest_v3_codegen.rs`.
 fn generate_manifest_types() {
     let schema_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/manifest.v2.0.schema.json");
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/manifest.v3.0.schema.json");
     println!("cargo:rerun-if-changed={}", schema_path.display());
 
     let text = std::fs::read_to_string(&schema_path)
@@ -77,7 +79,7 @@ fn generate_manifest_types() {
     let mut type_space = typify::TypeSpace::new(&settings);
     type_space
         .add_root_schema(schema)
-        .expect("typify failed to ingest manifest.v2.0.schema.json");
+        .expect("typify failed to ingest manifest.v3.0.schema.json");
 
     let tokens = type_space.to_stream();
     let ast = syn::parse2(tokens).expect("failed to parse typify TokenStream");

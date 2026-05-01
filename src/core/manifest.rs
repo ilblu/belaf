@@ -150,9 +150,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn manifest_new_has_2_0_schema_version() {
+    fn manifest_new_has_3_0_schema_version() {
         let m = ReleaseManifest::new("main".into(), "test-user".into());
-        assert_eq!(m.schema_version, "2.0");
+        assert_eq!(m.schema_version, "3.0");
     }
 
     #[test]
@@ -256,7 +256,7 @@ mod tests {
         ));
         let json = m.to_json().expect("serialize");
         let m2 = ReleaseManifest::from_json(&json).expect("deserialize");
-        assert_eq!(m2.schema_version, "2.0");
+        assert_eq!(m2.schema_version, "3.0");
         assert_eq!(m2.releases.len(), 1);
         assert_eq!(m2.releases[0].name, "my-crate");
         assert_eq!(m2.releases[0].ecosystem.as_str(), "cargo");

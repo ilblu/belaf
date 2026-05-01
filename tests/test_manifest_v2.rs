@@ -74,11 +74,11 @@ fn manifest_filename_is_uuid_v7_dot_json() {
 }
 
 #[test]
-fn manifest_has_v2_schema_version() {
+fn manifest_has_v3_schema_version() {
     let repo = TestRepo::new();
     init_simple_cargo_project(&repo);
     let m = read_manifest_json(&repo);
-    assert_eq!(m["schema_version"], "2.0");
+    assert_eq!(m["schema_version"], "3.0");
 }
 
 #[test]

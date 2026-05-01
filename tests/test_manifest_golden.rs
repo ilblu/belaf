@@ -15,13 +15,13 @@ use std::fs;
 
 use belaf::core::manifest::ReleaseManifest;
 
-const GOLDEN_PATH: &str = "tests/golden/manifest-2.0-canonical.json";
+const GOLDEN_PATH: &str = "tests/golden/manifest-3.0-canonical.json";
 
 #[test]
 fn golden_manifest_parses() {
     let raw = fs::read_to_string(GOLDEN_PATH).expect("read golden");
     let m = ReleaseManifest::from_json(&raw).expect("parse golden");
-    assert_eq!(m.schema_version, "2.0");
+    assert_eq!(m.schema_version, "3.0");
     assert_eq!(m.manifest_id, "01890afa-7c5c-7000-8b00-aaaaaaaaaaaa");
     assert_eq!(m.releases.len(), 3);
     assert_eq!(m.groups.len(), 1);
@@ -97,12 +97,12 @@ fn golden_manifest_canonical_form_is_stable() {
     );
 }
 
-/// The golden file MUST validate against `schemas/manifest.v2.0.schema.json`.
+/// The golden file MUST validate against `schemas/manifest.v3.0.schema.json`.
 /// Catches drift between the canonical schema and the committed example.
 #[test]
 fn golden_manifest_validates_against_schema() {
     use serde_json::Value;
-    let schema_raw = fs::read_to_string("schemas/manifest.v2.0.schema.json").expect("read schema");
+    let schema_raw = fs::read_to_string("schemas/manifest.v3.0.schema.json").expect("read schema");
     let schema_json: Value = serde_json::from_str(&schema_raw).expect("parse schema");
     let golden_raw = fs::read_to_string(GOLDEN_PATH).expect("read golden");
     let golden_json: Value = serde_json::from_str(&golden_raw).expect("parse golden");

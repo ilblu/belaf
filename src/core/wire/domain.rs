@@ -42,7 +42,7 @@ impl Manifest {
         let format = time::format_description::well_known::Rfc3339;
         let created_at = now.format(&format).unwrap_or_else(|_| now.to_string());
         Self {
-            schema_version: "2.0".to_string(),
+            schema_version: "3.0".to_string(),
             manifest_id: Uuid::now_v7().to_string(),
             created_at,
             created_by,
@@ -155,7 +155,7 @@ impl From<Manifest> for BelafReleaseManifest {
 impl From<BelafReleaseManifest> for Manifest {
     fn from(wire: BelafReleaseManifest) -> Self {
         Self {
-            schema_version: "2.0".to_string(),
+            schema_version: "3.0".to_string(),
             manifest_id: wire.manifest_id.into(),
             created_at: wire.created_at.into(),
             created_by: wire.created_by.into(),
@@ -224,6 +224,20 @@ impl From<Release> for WireRelease {
             contributors: r.contributors,
             first_time_contributors: r.first_time_contributors,
             statistics: r.statistics.map(Into::into),
+            // 3.0/Wave 2: new typed fields are emitted as None/empty
+            // until the producer side (CLI) starts populating them
+            // from ResolvedReleaseUnit metadata. github-app v3.0 sees
+            // them as optional and renders accordingly. The domain
+            // `Release` struct doesn't carry these yet — TODO once
+            // ResolvedReleaseUnit is plumbed through to manifest
+            // emission. Wave 2 ship-1 lands the wire shape; data
+            // flow follows in a focused PR.
+            bundle_manifests: None,
+            external_versioner: None,
+            version_field_spec: None,
+            cascade_from: None,
+            visibility: None,
+            satellites: None,
             x: r.x,
         }
     }
