@@ -232,12 +232,12 @@ impl From<Release> for WireRelease {
             // ResolvedReleaseUnit is plumbed through to manifest
             // emission. Wave 2 ship-1 lands the wire shape; data
             // flow follows in a focused PR.
-            bundle_manifests: None,
+            bundle_manifests: Vec::new(),
             external_versioner: None,
             version_field_spec: None,
             cascade_from: None,
             visibility: None,
-            satellites: None,
+            satellites: Vec::new(),
             x: r.x,
         }
     }

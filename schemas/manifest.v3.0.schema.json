@@ -163,7 +163,7 @@
         },
         "bundle_manifests": {
           "description": "3.0 typed promotion. List of manifest file paths (relative to repo root) that compose this multi-manifest ReleaseUnit. Empty / absent for single-manifest units. Dashboard consumers render this as a `<ManifestFileList>` badge.",
-          "type": ["array", "null"],
+          "type": "array",
           "default": [],
           "items": { "type": "string", "minLength": 1 }
         },
@@ -191,7 +191,7 @@
         },
         "satellites": {
           "description": "3.0 typed promotion. Repo-relative directories that are part of this ReleaseUnit but contain no version-bearing manifest of their own — e.g. `crates/foo/` of a hexagonal cargo unit whose primary manifest is `crates/foo/bin/Cargo.toml`.",
-          "type": ["array", "null"],
+          "type": "array",
           "default": [],
           "items": { "type": "string", "minLength": 1 }
         },
