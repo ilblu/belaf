@@ -1,5 +1,12 @@
 //! Maven (Java/Kotlin/Scala) projects.
 //!
+//! TODO(belaf-3.0/wave1b): split this 1521-LOC file into
+//! `maven/{pom_parser,property_resolver,pom_rewriter,util}.rs`. The
+//! Ecosystem trait + ReleaseUnitGraphBuilder rename in Wave 1a/1b
+//! shipped without needing this physical split, but the file should
+//! be modularized as part of a later cleanup PR before BOM-support
+//! and `settings.xml` work in 3.x crosses through it.
+//!
 //! Loads `pom.xml` files into the project graph, then rewrites them on
 //! release. Supports the subset of Maven that real CI-friendly projects
 //! actually need (plan §12):
