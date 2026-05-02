@@ -316,3 +316,244 @@ pub fn seed_ios_only<R: Seedable>(repo: &R) {
         .expect("git add");
     repo.commit("seed ios-only fixture");
 }
+
+/// Variant #2 — single npm package. Single `package.json` at root,
+/// no workspaces, no nested manifests. Detector should fire
+/// `Hint::SingleProject { ecosystem: Npm }` only.
+pub fn seed_lodash_single<R: Seedable>(repo: &R) {
+    repo.write_file(
+        "package.json",
+        r#"{
+  "name": "lodash-single",
+  "version": "1.0.0",
+  "description": "single-file npm package fixture"
+}
+"#,
+    );
+    repo.write_file("index.js", "module.exports = function noop() {};\n");
+    repo.write_file("README.md", "# lodash-single\n");
+
+    Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(repo.root())
+        .output()
+        .expect("git add");
+    repo.commit("seed lodash-single fixture");
+}
+
+/// Variant #3 — npm workspace monorepo (turbo-style). Top-level
+/// `package.json` with `workspaces` field; member packages under
+/// `packages/*`. Detector should fire `Hint::NpmWorkspace` for the
+/// nested workspace and the npm loader picks up each member as a
+/// standalone unit.
+pub fn seed_turbo_workspace<R: Seedable>(repo: &R) {
+    repo.write_file(
+        "package.json",
+        r#"{
+  "name": "turbo-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": ["packages/*"]
+}
+"#,
+    );
+    repo.write_file(
+        "packages/ui/package.json",
+        r#"{
+  "name": "@turbo/ui",
+  "version": "0.1.0"
+}
+"#,
+    );
+    repo.write_file(
+        "packages/utils/package.json",
+        r#"{
+  "name": "@turbo/utils",
+  "version": "0.1.0"
+}
+"#,
+    );
+    // Nested workspace member sets `workspaces` itself so the detector
+    // emits a `Hint::NpmWorkspace` match (sibling docs site, etc.).
+    repo.write_file(
+        "apps/docs/package.json",
+        r#"{
+  "name": "@turbo/docs",
+  "version": "0.1.0",
+  "workspaces": ["sub-packages/*"]
+}
+"#,
+    );
+    repo.write_file(
+        "apps/docs/sub-packages/theme/package.json",
+        r#"{
+  "name": "@turbo/docs-theme",
+  "version": "0.1.0"
+}
+"#,
+    );
+
+    Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(repo.root())
+        .output()
+        .expect("git add");
+    repo.commit("seed turbo-workspace fixture");
+}
+
+/// Variant #11 — nested submodule with its own monorepo. A
+/// `.gitmodules` file pointing at a vendored monorepo path that
+/// contains its own `belaf/config.toml` (or multiple manifests).
+/// Detector fires `Hint::NestedMonorepo`.
+pub fn seed_vendored_monorepo<R: Seedable>(repo: &R) {
+    repo.write_file(
+        ".gitmodules",
+        r#"[submodule "vendor/foo"]
+	path = vendor/foo
+	url = https://example.com/foo.git
+"#,
+    );
+    repo.write_file(
+        "vendor/foo/belaf/config.toml",
+        "[repo]\nupstream_urls = []\n",
+    );
+    repo.write_file(
+        "vendor/foo/Cargo.toml",
+        "[workspace]\nmembers = [\"crates/*\"]\n",
+    );
+    repo.write_file(
+        "vendor/foo/package.json",
+        r#"{ "name": "vendored-mono", "version": "0.1.0" }"#,
+    );
+    repo.write_file(
+        "Cargo.toml",
+        "[package]\nname = \"outer\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    repo.write_file("src/lib.rs", "pub fn outer() {}\n");
+
+    Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(repo.root())
+        .output()
+        .expect("git add");
+    repo.commit("seed vendored-monorepo fixture");
+}
+
+/// Variant #5 — hexagonal cargo service in isolation (no Tauri,
+/// JVM, mobile siblings). One `apps/services/<svc>/crates/{bin,lib,api}/Cargo.toml`
+/// triplet. Detector fires `Bundle::HexagonalCargo`.
+pub fn seed_hexagonal_cargo_only<R: Seedable>(repo: &R) {
+    repo.write_file(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"apps/services/*/crates/*\"]\nresolver = \"2\"\n",
+    );
+    repo.write_file(
+        "apps/services/aura/crates/bin/Cargo.toml",
+        "[package]\nname = \"aura-bin\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    repo.write_file(
+        "apps/services/aura/crates/bin/src/main.rs",
+        "fn main() {}\n",
+    );
+    repo.write_file(
+        "apps/services/aura/crates/lib/Cargo.toml",
+        "[package]\nname = \"aura-lib\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    repo.write_file(
+        "apps/services/aura/crates/lib/src/lib.rs",
+        "pub fn lib() {}\n",
+    );
+    repo.write_file(
+        "apps/services/aura/crates/api/Cargo.toml",
+        "[package]\nname = \"aura-api\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    repo.write_file(
+        "apps/services/aura/crates/api/src/lib.rs",
+        "pub fn api() {}\n",
+    );
+
+    Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(repo.root())
+        .output()
+        .expect("git add");
+    repo.commit("seed hexagonal-cargo-only fixture");
+}
+
+/// Variant #6 — Tauri app in isolation (single-source). Triplet at
+/// `apps/desktop/{package.json, src-tauri/Cargo.toml, src-tauri/tauri.conf.json}`
+/// with the `tauri.conf.json` referencing `../package.json` for
+/// `version`. Detector fires `Bundle::Tauri { single_source: true }`.
+pub fn seed_tauri_app_only<R: Seedable>(repo: &R) {
+    repo.write_file(
+        "apps/desktop/package.json",
+        r#"{
+  "name": "desktop",
+  "version": "0.1.0",
+  "private": true
+}
+"#,
+    );
+    repo.write_file(
+        "apps/desktop/src-tauri/Cargo.toml",
+        r#"[package]
+name = "desktop"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+tauri = { version = "1" }
+"#,
+    );
+    repo.write_file(
+        "apps/desktop/src-tauri/tauri.conf.json",
+        r#"{
+  "productName": "Desktop",
+  "version": "../package.json"
+}
+"#,
+    );
+    repo.write_file("apps/desktop/src/main.rs", "fn main() {}\n");
+
+    Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(repo.root())
+        .output()
+        .expect("git add");
+    repo.commit("seed tauri-app-only fixture");
+}
+
+/// Variant #8 — generated SDK (TypeScript) under `sdks/typescript/`
+/// with a graphql-codegen indicator and a `package.json`. Detector
+/// fires `Hint::SdkCascade` so the standalone gets the cascade
+/// annotation.
+pub fn seed_ts_sdk_cascade<R: Seedable>(repo: &R) {
+    // Schema source the SDK regenerates from.
+    repo.write_file(
+        "schema/schema.graphql",
+        "type Query { hello: String }\n",
+    );
+    repo.write_file(
+        "sdks/typescript/graphql-codegen.yml",
+        "schema: ../../schema/schema.graphql\ngenerates:\n  src/generated.ts: {}\n",
+    );
+    repo.write_file(
+        "sdks/typescript/package.json",
+        r#"{
+  "name": "@org/sdk-typescript",
+  "version": "1.0.0"
+}
+"#,
+    );
+    repo.write_file(
+        "sdks/typescript/src/index.ts",
+        "export * from './generated';\n",
+    );
+
+    Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(repo.root())
+        .output()
+        .expect("git add");
+    repo.commit("seed ts-sdk-cascade fixture");
+}

@@ -1,0 +1,22 @@
+---
+source: tests/test_repo_variants.rs
+expression: "& view"
+---
+ReleaseUnitView {
+    bundles: [],
+    units: [],
+    externally_managed: [
+        ExtRow {
+            label: "app",
+            kind_label: "iOS app — auto [allow_uncovered]",
+            ecosystem: "swift",
+            path: RepoPathBuf(
+                [
+                    97,
+                    112,
+                    112,
+                ],
+            ),
+        },
+    ],
+}

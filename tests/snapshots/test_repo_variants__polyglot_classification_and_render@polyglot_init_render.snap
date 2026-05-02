@@ -1,0 +1,12 @@
+---
+source: tests/test_repo_variants.rs
+expression: "& rendered"
+---
+ ⬢  Bundles
+    ● apps/services/mondo  hexagonal-cargo/workers
+    ● apps/services/aura   hexagonal-cargo/bin
+    ● apps/desktop         tauri (single-source)
+    ● sdks/kotlin          jvm-library/gradle.properties
+
+ ◇  Externally-managed
+    — apps/mobile-ios      iOS app — auto [allow_uncovered]

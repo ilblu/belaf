@@ -1,0 +1,38 @@
+---
+source: tests/test_repo_variants.rs
+expression: "& view"
+---
+ReleaseUnitView {
+    bundles: [
+        BundleRow {
+            label: "apps/services/aura",
+            kind_label: "hexagonal-cargo/bin",
+            ecosystem: "hexagonal-cargo",
+            path: RepoPathBuf(
+                [
+                    97,
+                    112,
+                    112,
+                    115,
+                    47,
+                    115,
+                    101,
+                    114,
+                    118,
+                    105,
+                    99,
+                    101,
+                    115,
+                    47,
+                    97,
+                    117,
+                    114,
+                    97,
+                ],
+            ),
+            selected: true,
+        },
+    ],
+    units: [],
+    externally_managed: [],
+}

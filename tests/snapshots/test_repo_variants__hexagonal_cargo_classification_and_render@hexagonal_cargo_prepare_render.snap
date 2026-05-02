@@ -1,0 +1,6 @@
+---
+source: tests/test_repo_variants.rs
+expression: "& rendered"
+---
+ ⬢  Bundles
+    ● apps/services/aura  hexagonal-cargo/bin

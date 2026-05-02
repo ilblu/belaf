@@ -1,0 +1,5 @@
+---
+source: tests/test_repo_variants.rs
+expression: "& rendered"
+---
+
