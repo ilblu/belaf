@@ -19,14 +19,14 @@
 //! `SdkCascadeMember` (a hint) was accidentally reachable from a
 //! Bundle-emit path.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 
 use super::toml_util::toml_quote;
 use crate::core::git::repository::{RepoPathBuf, Repository};
+use crate::core::release_unit::bundle;
 use crate::core::release_unit::detector::{
-    self, BundleKind, DetectedShape, DetectorMatch, ExtKind, HexagonalPrimary, HintKind,
-    JvmVersionSource,
+    self, DetectedShape, DetectorMatch, ExtKind, HintKind,
 };
 
 /// Result of an auto-detect pass: TOML snippet to append, plus
@@ -110,23 +110,21 @@ pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> Aut
         .collect();
     ignore_paths.sort();
 
-    // Bundles: hexagonal-cargo glob-collapses; the rest go through
-    // the per-shape emit path below.
-    emit_hexagonal_cargo_block(&mut snippet, &mut counters, &report.matches);
+    // Bundles: dispatched as a single call. Each per-bundle module
+    // owns its own emission (per-match for Tauri / JVM, cross-match
+    // glob-collapse for hexagonal). Adding a new bundle = one new
+    // file under `bundle/` + one `mod` + one call inside
+    // `bundle::emit_all` — never an edit here.
+    bundle::emit_all(&report.matches, &mut snippet, &mut counters);
 
+    // Hints + ExternallyManaged still dispatch inline because they
+    // share the `allow_uncovered` accumulator and the SDK-cascade
+    // aggregated message after the loop.
     for m in &report.matches {
         match &m.shape {
-            DetectedShape::Bundle(b) => match b {
-                BundleKind::HexagonalCargo { .. } => {
-                    // already handled above (glob-aware).
-                }
-                BundleKind::Tauri { single_source } => {
-                    emit_tauri_block(&mut snippet, &mut counters, m, *single_source);
-                }
-                BundleKind::JvmLibrary { version_source } => {
-                    emit_jvm_library_block(&mut snippet, &mut counters, m, version_source);
-                }
-            },
+            DetectedShape::Bundle(_) => {
+                // already emitted by bundle::emit_all above
+            }
             DetectedShape::Hint(h) => emit_hint_comment(&mut snippet, &mut counters, m, h),
             DetectedShape::ExternallyManaged(e) => {
                 register_externally_managed(&mut allow_uncovered, &mut counters, m, *e);
@@ -164,145 +162,6 @@ pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> Aut
     AutoDetectResult {
         toml_snippet: prefixed_snippet,
         counters,
-    }
-}
-
-/// Hexagonal-cargo Bundle emitter: groups siblings into a glob block
-/// when 2+ share a parent; otherwise emits one explicit
-/// `[[release_unit]]` per service. We use a sorted Vec instead of
-/// HashMap iteration so the snippet output is byte-deterministic
-/// across runs.
-fn emit_hexagonal_cargo_block(
-    snippet: &mut String,
-    counters: &mut DetectionCounters,
-    matches: &[DetectorMatch],
-) {
-    let mut hex_by_parent: HashMap<String, Vec<&DetectorMatch>> = HashMap::new();
-    for m in matches {
-        if let DetectedShape::Bundle(BundleKind::HexagonalCargo { .. }) = m.shape {
-            counters.hexagonal_cargo += 1;
-            let parent = parent_of(&m.path).unwrap_or_default();
-            hex_by_parent.entry(parent).or_default().push(m);
-        }
-    }
-    let mut hex_groups: Vec<(String, Vec<&DetectorMatch>)> = hex_by_parent.into_iter().collect();
-    hex_groups.sort_by(|a, b| a.0.cmp(&b.0));
-    for (parent, matches) in hex_groups {
-        if matches.len() >= 2 && !parent.is_empty() {
-            // Majority-vote primary so the emitted `manifests = […]`
-            // matches the most members. Tie-break: Bin > Lib > Workers
-            // > BaseName. The `fallback_manifests` line catches outliers.
-            let mut votes: HashMap<HexagonalPrimary, usize> = HashMap::new();
-            for m in &matches {
-                if let DetectedShape::Bundle(BundleKind::HexagonalCargo { primary }) = m.shape {
-                    *votes.entry(primary).or_insert(0) += 1;
-                }
-            }
-            let primary = pick_majority_primary(&votes);
-            let primary_str = match primary {
-                HexagonalPrimary::Bin => "bin",
-                HexagonalPrimary::Lib => "lib",
-                HexagonalPrimary::Workers => "workers",
-                HexagonalPrimary::BaseName => "bin", // safe default; user can edit
-            };
-            let glob_value = toml_quote(&format!("{parent}/*"));
-            let manifests_value = toml_quote(&format!("{{path}}/crates/{primary_str}/Cargo.toml"));
-            let fallback_value = toml_quote("{path}/crates/workers/Cargo.toml");
-            let satellites_value = toml_quote("{path}/crates");
-            let name_value = toml_quote("{basename}");
-            snippet.push_str(&format!(
-                "\n# Auto-detected {n} hexagonal cargo services under {parent}/*\n[[release_unit_glob]]\nglob = {glob_value}\necosystem = \"cargo\"\nmanifests = [{manifests_value}]\nfallback_manifests = [{fallback_value}]\nsatellites = [{satellites_value}]\nname = {name_value}\n",
-                n = matches.len(),
-            ));
-        } else {
-            for m in matches {
-                let DetectedShape::Bundle(BundleKind::HexagonalCargo { primary }) = m.shape else {
-                    continue;
-                };
-                let path = m.path.escaped();
-                // Owned `String` so the BaseName branch doesn't leak
-                // a heap allocation (the previous code did
-                // `.to_string().leak()` to coerce to `&'static str`,
-                // which permanently leaked memory on every call).
-                let primary_str: String = match primary {
-                    HexagonalPrimary::Bin => "bin".to_string(),
-                    HexagonalPrimary::Lib => "lib".to_string(),
-                    HexagonalPrimary::Workers => "workers".to_string(),
-                    HexagonalPrimary::BaseName => {
-                        path.rsplit('/').next().unwrap_or("bin").to_string()
-                    }
-                };
-                let basename = path.rsplit('/').next().unwrap_or("unit");
-                let name_q = toml_quote(basename);
-                let satellites_q = toml_quote(&format!("{path}/crates"));
-                let manifest_q = toml_quote(&format!("{path}/crates/{primary_str}/Cargo.toml"));
-                snippet.push_str(&format!(
-                    "\n[[release_unit]]\nname = {name_q}\necosystem = \"cargo\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {manifest_q}\nversion_field = \"cargo_toml\"\n",
-                ));
-            }
-        }
-    }
-}
-
-fn emit_tauri_block(
-    snippet: &mut String,
-    counters: &mut DetectionCounters,
-    m: &DetectorMatch,
-    single_source: bool,
-) {
-    let path = m.path.escaped();
-    let name_raw = path.rsplit('/').next().unwrap_or("desktop");
-    let name_q = toml_quote(name_raw);
-    let satellites_q = toml_quote(&path);
-    if single_source {
-        counters.tauri_single_source += 1;
-        let manifest_q = toml_quote(&format!("{path}/package.json"));
-        snippet.push_str(&format!(
-            "\n[[release_unit]]\nname = {name_q}\necosystem = \"tauri\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {manifest_q}\nversion_field = \"npm_package_json\"\n",
-        ));
-    } else {
-        counters.tauri_legacy += 1;
-        let pkg_q = toml_quote(&format!("{path}/package.json"));
-        let cargo_q = toml_quote(&format!("{path}/src-tauri/Cargo.toml"));
-        let conf_q = toml_quote(&format!("{path}/src-tauri/tauri.conf.json"));
-        snippet.push_str(&format!(
-            "\n# Tauri legacy multi-file (3 manifests in lockstep)\n[[release_unit]]\nname = {name_q}\necosystem = \"tauri\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {pkg_q}\nversion_field = \"npm_package_json\"\n[[release_unit.source.manifests]]\npath = {cargo_q}\nversion_field = \"cargo_toml\"\n[[release_unit.source.manifests]]\npath = {conf_q}\nversion_field = \"tauri_conf_json\"\n",
-        ));
-    }
-}
-
-fn emit_jvm_library_block(
-    snippet: &mut String,
-    counters: &mut DetectionCounters,
-    m: &DetectorMatch,
-    version_source: &JvmVersionSource,
-) {
-    counters.jvm_library += 1;
-    let path = m.path.escaped();
-    let name_raw = path.rsplit('/').next().unwrap_or("sdk");
-    let name_q = toml_quote(name_raw);
-    let satellites_q = toml_quote(&path);
-    let (vfield, manifest_raw) = match version_source {
-        JvmVersionSource::GradleProperties => {
-            ("gradle_properties", format!("{path}/gradle.properties"))
-        }
-        JvmVersionSource::BuildGradleKtsLiteral => {
-            ("generic_regex", format!("{path}/build.gradle.kts"))
-        }
-        JvmVersionSource::PluginManaged => {
-            snippet.push_str(&format!(
-                "\n# Plugin-managed JVM library at {path} — recommend external_versioner.\n# Edit the [release_unit.source.external] block below to drive your gradle plugin.\n[[release_unit]]\nname = {name_q}\necosystem = \"external\"\nsatellites = [{satellites_q}]\n[release_unit.source.external]\ntool = \"gradle\"\nread_command = \"./gradlew :printVersion -q\"\nwrite_command = \"./gradlew :setVersion -PnewVersion={{version}}\"\ntimeout_sec = 120\n",
-            ));
-            return;
-        }
-    };
-    let manifest_q = toml_quote(&manifest_raw);
-    snippet.push_str(&format!(
-        "\n[[release_unit]]\nname = {name_q}\necosystem = \"jvm-library\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {manifest_q}\nversion_field = \"{vfield}\"\n",
-    ));
-    if vfield == "generic_regex" {
-        snippet.push_str("regex_pattern = '(?m)^version\\s*=\\s*\"([^\"]+)\"'\n");
-        snippet.push_str("regex_replace = \"version = \\\"{version}\\\"\"\n");
     }
 }
 
@@ -384,35 +243,6 @@ pub fn append_to_config(config_path: &Path, snippet: &str) -> std::io::Result<()
     }
     content.push_str(snippet);
     std::fs::write(config_path, content)
-}
-
-/// Vote-based primary picker for the hexagonal-cargo glob block.
-/// Tie-break order: `Bin` (the convention) > `Lib` > `Workers` >
-/// `BaseName`.
-fn pick_majority_primary(votes: &HashMap<HexagonalPrimary, usize>) -> HexagonalPrimary {
-    let priority = |p: HexagonalPrimary| match p {
-        HexagonalPrimary::Bin => 4,
-        HexagonalPrimary::Lib => 3,
-        HexagonalPrimary::Workers => 2,
-        HexagonalPrimary::BaseName => 1,
-    };
-    votes
-        .iter()
-        .max_by(|a, b| {
-            a.1.cmp(b.1)
-                .then_with(|| priority(*a.0).cmp(&priority(*b.0)))
-        })
-        .map(|(k, _)| *k)
-        .unwrap_or(HexagonalPrimary::Bin)
-}
-
-fn parent_of(path: &RepoPathBuf) -> Option<String> {
-    let s = path.escaped();
-    let p = std::path::Path::new(&*s);
-    p.parent()
-        .and_then(|p| p.to_str())
-        .map(|s| s.to_string())
-        .filter(|s| !s.is_empty())
 }
 
 #[cfg(test)]

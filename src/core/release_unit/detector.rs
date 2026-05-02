@@ -24,7 +24,7 @@ pub use super::shape::{
 use super::ResolvedReleaseUnit;
 
 mod scanners;
-mod walk;
+use super::walk;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -274,9 +274,11 @@ pub fn detect_all(repo: &Repository) -> DetectionReport {
     };
 
     let mut matches = Vec::new();
-    matches.extend(scanners::hexagonal_cargo(&workdir));
-    matches.extend(scanners::tauri(&workdir));
-    matches.extend(scanners::jvm_library(&workdir));
+    // Bundles first — higher specificity scanners (hexagonal/tauri/jvm)
+    // run before the broader Hint scanners so per-path dedup in the
+    // wizard keeps the most useful label.
+    matches.extend(super::bundle::detect_all(&workdir));
+    // Hints + ExternallyManaged.
     matches.extend(scanners::mobile_app(&workdir));
     matches.extend(scanners::nested_npm_workspace(&workdir));
     matches.extend(scanners::sdk_cascade_members(&workdir));

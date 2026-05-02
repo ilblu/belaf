@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use crate::core::git::repository::{RepoPathBuf, Repository};
 
-pub(super) fn workdir(repo: &Repository) -> Option<PathBuf> {
+pub(in crate::core::release_unit) fn workdir(repo: &Repository) -> Option<PathBuf> {
     let p = repo.resolve_workdir(&RepoPathBuf::new(b""));
     if p.exists() {
         Some(p)
@@ -16,7 +16,7 @@ pub(super) fn workdir(repo: &Repository) -> Option<PathBuf> {
     }
 }
 
-pub(super) fn relative_repopath(workdir: &Path, abs: &Path) -> Option<RepoPathBuf> {
+pub(in crate::core::release_unit) fn relative_repopath(workdir: &Path, abs: &Path) -> Option<RepoPathBuf> {
     let rel = abs.strip_prefix(workdir).ok()?;
     let s = rel.to_string_lossy().to_string();
     if s.is_empty() {
@@ -25,7 +25,7 @@ pub(super) fn relative_repopath(workdir: &Path, abs: &Path) -> Option<RepoPathBu
     Some(RepoPathBuf::new(s.as_bytes()))
 }
 
-pub(super) fn walk_capped<F: FnMut(&Path)>(workdir: &Path, max_depth: usize, mut f: F) {
+pub(in crate::core::release_unit) fn walk_capped<F: FnMut(&Path)>(workdir: &Path, max_depth: usize, mut f: F) {
     fn skip_dir(name: &str) -> bool {
         matches!(
             name,
@@ -70,7 +70,7 @@ pub(super) fn walk_capped<F: FnMut(&Path)>(workdir: &Path, max_depth: usize, mut
     rec(workdir, max_depth, &mut f);
 }
 
-pub(super) fn find_dirs_with_subdir_pattern(workdir: &Path, name: &str) -> Vec<PathBuf> {
+pub(in crate::core::release_unit) fn find_dirs_with_subdir_pattern(workdir: &Path, name: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
     walk_capped(workdir, 5, |p| {
         let candidate = p.join(name);
@@ -81,7 +81,7 @@ pub(super) fn find_dirs_with_subdir_pattern(workdir: &Path, name: &str) -> Vec<P
     out
 }
 
-pub(super) fn find_dirs_with_files_set(workdir: &Path, files: &[&str]) -> Vec<PathBuf> {
+pub(in crate::core::release_unit) fn find_dirs_with_files_set(workdir: &Path, files: &[&str]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     walk_capped(workdir, 5, |p| {
         if files.iter().all(|f| p.join(f).exists()) {
@@ -91,7 +91,7 @@ pub(super) fn find_dirs_with_files_set(workdir: &Path, files: &[&str]) -> Vec<Pa
     out
 }
 
-pub(super) fn list_subdirs_with_file(dir: &Path, file_name: &str) -> Vec<PathBuf> {
+pub(in crate::core::release_unit) fn list_subdirs_with_file(dir: &Path, file_name: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -104,7 +104,7 @@ pub(super) fn list_subdirs_with_file(dir: &Path, file_name: &str) -> Vec<PathBuf
     out
 }
 
-pub(super) fn cargo_toml_has_package_section(path: &Path) -> bool {
+pub(in crate::core::release_unit) fn cargo_toml_has_package_section(path: &Path) -> bool {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return false,
@@ -116,7 +116,7 @@ pub(super) fn cargo_toml_has_package_section(path: &Path) -> bool {
     doc.get("package").and_then(|p| p.as_table()).is_some()
 }
 
-pub(super) fn cargo_toml_has_workspace_section(path: &Path) -> bool {
+pub(in crate::core::release_unit) fn cargo_toml_has_workspace_section(path: &Path) -> bool {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return false,
@@ -128,7 +128,7 @@ pub(super) fn cargo_toml_has_workspace_section(path: &Path) -> bool {
     doc.get("workspace").and_then(|p| p.as_table()).is_some()
 }
 
-pub(super) fn file_contains_line(path: &Path, prefix: &str) -> bool {
+pub(in crate::core::release_unit) fn file_contains_line(path: &Path, prefix: &str) -> bool {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return false,
@@ -136,7 +136,7 @@ pub(super) fn file_contains_line(path: &Path, prefix: &str) -> bool {
     content.lines().any(|l| l.trim_start().starts_with(prefix))
 }
 
-pub(super) fn file_contains_pattern(path: &Path, pattern: &str) -> bool {
+pub(in crate::core::release_unit) fn file_contains_pattern(path: &Path, pattern: &str) -> bool {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return false,

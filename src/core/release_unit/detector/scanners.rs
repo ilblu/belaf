@@ -1,199 +1,20 @@
-//! Per-detector scan functions. Each one takes the repo's working
-//! directory and returns the matches it found. Pure-functional —
-//! filesystem only, no git access.
+//! Hint and ExternallyManaged scanners. Bundle scanners moved to
+//! [`super::super::bundle::*`] in Schicht 2 — adding a new bundle is
+//! a single new file under `bundle/`, not an edit here.
+//!
+//! Each scanner takes the repo's working directory and returns the
+//! matches it found. Pure-functional — filesystem only, no git access.
 
 use std::path::{Path, PathBuf};
 
 use crate::core::git::repository::RepoPathBuf;
 
-use super::walk::{
-    cargo_toml_has_package_section, cargo_toml_has_workspace_section, file_contains_line,
-    file_contains_pattern, find_dirs_with_files_set, find_dirs_with_subdir_pattern,
-    list_subdirs_with_file, relative_repopath, walk_capped,
+use super::super::walk::{
+    cargo_toml_has_workspace_section, file_contains_pattern, relative_repopath, walk_capped,
 };
-use super::{
-    BundleKind, DetectedShape, DetectorMatch, ExtKind, HexagonalPrimary, HintKind,
-    JvmVersionSource, SingleProjectEcosystem,
-};
+use super::{DetectedShape, DetectorMatch, ExtKind, HintKind, SingleProjectEcosystem};
 
-// F.1 — Hexagonal cargo
-
-pub(super) fn hexagonal_cargo(workdir: &Path) -> Vec<DetectorMatch> {
-    let mut out = Vec::new();
-    let crates_dirs = find_dirs_with_subdir_pattern(workdir, "crates");
-    for crates_dir in crates_dirs {
-        let service_dir = match crates_dir.parent() {
-            Some(p) => p,
-            None => continue,
-        };
-        let cargo_subs = list_subdirs_with_file(&crates_dir, "Cargo.toml");
-        if cargo_subs.len() < 2 {
-            continue;
-        }
-        let basename = service_dir
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or("");
-        let primaries = [
-            ("bin", HexagonalPrimary::Bin),
-            ("lib", HexagonalPrimary::Lib),
-            ("workers", HexagonalPrimary::Workers),
-            (basename, HexagonalPrimary::BaseName),
-        ];
-        let mut found_primary: Option<HexagonalPrimary> = None;
-        for (sub, kind) in primaries {
-            let sub_cargo = crates_dir.join(sub).join("Cargo.toml");
-            if sub_cargo.exists() && cargo_toml_has_package_section(&sub_cargo) {
-                found_primary = Some(kind);
-                break;
-            }
-        }
-        let Some(primary) = found_primary else {
-            continue;
-        };
-
-        let repopath = match relative_repopath(workdir, service_dir) {
-            Some(r) => r,
-            None => continue,
-        };
-        out.push(DetectorMatch {
-            shape: DetectedShape::Bundle(BundleKind::HexagonalCargo { primary }),
-            path: repopath,
-            note: Some(format!(
-                "primary crate: {}",
-                primary_label(primary, basename)
-            )),
-        });
-    }
-    out
-}
-
-fn primary_label(p: HexagonalPrimary, basename: &str) -> &str {
-    match p {
-        HexagonalPrimary::Bin => "bin",
-        HexagonalPrimary::Lib => "lib",
-        HexagonalPrimary::Workers => "workers",
-        HexagonalPrimary::BaseName => basename,
-    }
-}
-
-// F.2 — Tauri (single-source vs legacy multi-file)
-
-pub(super) fn tauri(workdir: &Path) -> Vec<DetectorMatch> {
-    let mut out = Vec::new();
-    for triplet_root in find_dirs_with_files_set(
-        workdir,
-        &[
-            "package.json",
-            "src-tauri/Cargo.toml",
-            "src-tauri/tauri.conf.json",
-        ],
-    ) {
-        let conf_path = triplet_root.join("src-tauri/tauri.conf.json");
-        let single_source = is_tauri_single_source(&conf_path);
-        let repopath = match relative_repopath(workdir, &triplet_root) {
-            Some(r) => r,
-            None => continue,
-        };
-        out.push(DetectorMatch {
-            shape: DetectedShape::Bundle(BundleKind::Tauri { single_source }),
-            path: repopath,
-            note: Some(if single_source {
-                "single-source (version derived from package.json)".to_string()
-            } else {
-                "legacy multi-file (3 files hand-managed)".to_string()
-            }),
-        });
-    }
-    out
-}
-
-static TAURI_PATH_REF_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r#""version"\s*:\s*"\.\./[^"]+\.json""#).expect("static regex must compile")
-});
-static TAURI_ANY_VERSION_RE: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
-    regex::Regex::new(r#""version"\s*:\s*"[^"]+""#).expect("static regex must compile")
-});
-
-fn is_tauri_single_source(conf_path: &Path) -> bool {
-    let content = match std::fs::read_to_string(conf_path) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    if TAURI_PATH_REF_RE.is_match(&content) {
-        return true;
-    }
-    !TAURI_ANY_VERSION_RE.is_match(&content)
-}
-
-// F.3 — JVM library
-
-pub(super) fn jvm_library(workdir: &Path) -> Vec<DetectorMatch> {
-    let mut out = Vec::new();
-    let candidates = collect_jvm_candidates(workdir);
-    for dir in candidates {
-        let gp = dir.join("gradle.properties");
-        let bgk = dir.join("build.gradle.kts");
-        let bg = dir.join("build.gradle");
-
-        let kind = if gp.exists() && file_contains_line(&gp, "version=") {
-            JvmVersionSource::GradleProperties
-        } else if (bgk.exists() && file_contains_pattern(&bgk, r#"version\s*=\s*""#))
-            || (bg.exists() && file_contains_pattern(&bg, r#"version\s*=\s*""#))
-        {
-            JvmVersionSource::BuildGradleKtsLiteral
-        } else if bgk.exists() || bg.exists() {
-            JvmVersionSource::PluginManaged
-        } else {
-            continue;
-        };
-
-        let repopath = match relative_repopath(workdir, &dir) {
-            Some(r) => r,
-            None => continue,
-        };
-        out.push(DetectorMatch {
-            shape: DetectedShape::Bundle(BundleKind::JvmLibrary {
-                version_source: kind.clone(),
-            }),
-            path: repopath,
-            note: Some(jvm_label(&kind).to_string()),
-        });
-    }
-    out
-}
-
-fn jvm_label(s: &JvmVersionSource) -> &'static str {
-    match s {
-        JvmVersionSource::GradleProperties => "gradle.properties (recommended)",
-        JvmVersionSource::BuildGradleKtsLiteral => "literal version in build.gradle(.kts)",
-        JvmVersionSource::PluginManaged => "plugin-managed (suggest external_versioner)",
-    }
-}
-
-fn collect_jvm_candidates(workdir: &Path) -> Vec<PathBuf> {
-    let mut dirs = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(workdir.join("sdks")) {
-        for e in entries.flatten() {
-            if e.path().is_dir() {
-                dirs.push(e.path());
-            }
-        }
-    }
-    if let Ok(entries) = std::fs::read_dir(workdir.join("libs")) {
-        for e in entries.flatten() {
-            if e.path().is_dir() {
-                dirs.push(e.path());
-            }
-        }
-    }
-    if workdir.join("gradle.properties").exists() || workdir.join("build.gradle.kts").exists() {
-        dirs.push(workdir.to_path_buf());
-    }
-    dirs
-}
-
-// F.4 — Mobile app (warning only)
+// Mobile app — ExternallyManaged
 
 pub(super) fn mobile_app(workdir: &Path) -> Vec<DetectorMatch> {
     let mut out = Vec::new();
@@ -255,7 +76,7 @@ fn find_android_app_dirs(workdir: &Path) -> Vec<PathBuf> {
     out
 }
 
-// F.6 — Nested npm workspace
+// Nested npm workspace — Hint
 
 pub(super) fn nested_npm_workspace(workdir: &Path) -> Vec<DetectorMatch> {
     let mut out = Vec::new();
@@ -277,7 +98,7 @@ pub(super) fn nested_npm_workspace(workdir: &Path) -> Vec<DetectorMatch> {
     out
 }
 
-// F.7 — SDK cascade members
+// SDK cascade members — Hint
 
 pub(super) fn sdk_cascade_members(workdir: &Path) -> Vec<DetectorMatch> {
     let mut out = Vec::new();
@@ -321,7 +142,7 @@ pub(super) fn sdk_cascade_members(workdir: &Path) -> Vec<DetectorMatch> {
     out
 }
 
-// F.8 — Single-project repo
+// Single-project repo — Hint
 
 pub(super) fn single_project_repo(workdir: &Path) -> Vec<DetectorMatch> {
     let cargo_at_root = workdir.join("Cargo.toml").is_file();
@@ -409,7 +230,7 @@ fn has_nested_manifest(workdir: &Path) -> bool {
     found
 }
 
-// F.9 — Nested monorepo (git submodule with its own belaf config)
+// Nested monorepo — Hint
 
 pub(super) fn nested_monorepo(workdir: &Path) -> Vec<DetectorMatch> {
     let gitmodules = workdir.join(".gitmodules");
@@ -479,165 +300,6 @@ mod tests {
     }
 
     #[test]
-    fn hexagonal_cargo_detects_bin_primary() {
-        let t = TempDir::new().unwrap();
-        let root = t.path();
-        write(
-            &root.join("apps/services/aura/crates/bin/Cargo.toml"),
-            "[package]\nname = \"aura-bin\"\nversion = \"0.1.0\"\n",
-        );
-        write(
-            &root.join("apps/services/aura/crates/api/Cargo.toml"),
-            "[package]\nname = \"aura-api\"\nversion = \"0.1.0\"\n",
-        );
-        let matches = hexagonal_cargo(root);
-        assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].path.escaped(), "apps/services/aura");
-        match &matches[0].shape {
-            DetectedShape::Bundle(BundleKind::HexagonalCargo { primary }) => {
-                assert_eq!(*primary, HexagonalPrimary::Bin);
-            }
-            _ => panic!("expected HexagonalCargo"),
-        }
-    }
-
-    #[test]
-    fn hexagonal_cargo_detects_workers_fallback() {
-        let t = TempDir::new().unwrap();
-        let root = t.path();
-        write(
-            &root.join("apps/services/mondo/crates/workers/Cargo.toml"),
-            "[package]\nname = \"mondo-workers\"\nversion = \"0.1.0\"\n",
-        );
-        write(
-            &root.join("apps/services/mondo/crates/core/Cargo.toml"),
-            "[package]\nname = \"mondo-core\"\nversion = \"0.1.0\"\n",
-        );
-        let matches = hexagonal_cargo(root);
-        assert_eq!(matches.len(), 1);
-        match &matches[0].shape {
-            DetectedShape::Bundle(BundleKind::HexagonalCargo { primary }) => {
-                assert_eq!(*primary, HexagonalPrimary::Workers);
-            }
-            _ => panic!("expected HexagonalCargo"),
-        }
-    }
-
-    #[test]
-    fn hexagonal_cargo_skips_when_only_one_crate_subdir() {
-        let t = TempDir::new().unwrap();
-        let root = t.path();
-        write(
-            &root.join("apps/foo/crates/bin/Cargo.toml"),
-            "[package]\nname = \"foo\"\nversion = \"0.1.0\"\n",
-        );
-        let matches = hexagonal_cargo(root);
-        assert!(matches.is_empty());
-    }
-
-    #[test]
-    fn tauri_single_source_via_path_ref() {
-        let t = TempDir::new().unwrap();
-        let root = t.path();
-        write(
-            &root.join("apps/desktop/package.json"),
-            r#"{"version":"0.1.0"}"#,
-        );
-        write(
-            &root.join("apps/desktop/src-tauri/Cargo.toml"),
-            "[package]\nname = \"desktop\"\nversion = \"0.0.0\"\n",
-        );
-        write(
-            &root.join("apps/desktop/src-tauri/tauri.conf.json"),
-            r#"{"productName":"desktop","version":"../package.json"}"#,
-        );
-        let matches = tauri(root);
-        assert_eq!(matches.len(), 1);
-        match &matches[0].shape {
-            DetectedShape::Bundle(BundleKind::Tauri { single_source }) => assert!(*single_source),
-            _ => panic!("expected Tauri"),
-        }
-    }
-
-    #[test]
-    fn tauri_legacy_multi_file() {
-        let t = TempDir::new().unwrap();
-        let root = t.path();
-        write(
-            &root.join("apps/desktop/package.json"),
-            r#"{"version":"0.1.0"}"#,
-        );
-        write(
-            &root.join("apps/desktop/src-tauri/Cargo.toml"),
-            "[package]\nname = \"desktop\"\nversion = \"0.1.0\"\n",
-        );
-        write(
-            &root.join("apps/desktop/src-tauri/tauri.conf.json"),
-            r#"{"productName":"desktop","version":"0.1.0"}"#,
-        );
-        let matches = tauri(root);
-        assert_eq!(matches.len(), 1);
-        match &matches[0].shape {
-            DetectedShape::Bundle(BundleKind::Tauri { single_source }) => assert!(!*single_source),
-            _ => panic!("expected Tauri"),
-        }
-    }
-
-    #[test]
-    fn jvm_library_gradle_properties() {
-        let t = TempDir::new().unwrap();
-        let root = t.path();
-        write(
-            &root.join("sdks/kotlin/gradle.properties"),
-            "version=0.1.0\n",
-        );
-        let matches = jvm_library(root);
-        assert_eq!(matches.len(), 1);
-        match &matches[0].shape {
-            DetectedShape::Bundle(BundleKind::JvmLibrary { version_source }) => {
-                assert_eq!(*version_source, JvmVersionSource::GradleProperties);
-            }
-            _ => panic!("expected JvmLibrary"),
-        }
-    }
-
-    #[test]
-    fn jvm_library_build_gradle_kts_literal() {
-        let t = TempDir::new().unwrap();
-        let root = t.path();
-        write(
-            &root.join("sdks/java/build.gradle.kts"),
-            "plugins {}\nversion = \"0.1.0\"\n",
-        );
-        let matches = jvm_library(root);
-        assert_eq!(matches.len(), 1);
-        match &matches[0].shape {
-            DetectedShape::Bundle(BundleKind::JvmLibrary { version_source }) => {
-                assert_eq!(*version_source, JvmVersionSource::BuildGradleKtsLiteral);
-            }
-            _ => panic!("expected JvmLibrary"),
-        }
-    }
-
-    #[test]
-    fn jvm_library_plugin_managed() {
-        let t = TempDir::new().unwrap();
-        let root = t.path();
-        write(
-            &root.join("sdks/javakt/build.gradle.kts"),
-            "plugins { id(\"io.github.reactivecircus.app-versioning\") version \"1.3.1\" }\n",
-        );
-        let matches = jvm_library(root);
-        assert_eq!(matches.len(), 1);
-        match &matches[0].shape {
-            DetectedShape::Bundle(BundleKind::JvmLibrary { version_source }) => {
-                assert_eq!(*version_source, JvmVersionSource::PluginManaged);
-            }
-            _ => panic!("expected JvmLibrary"),
-        }
-    }
-
-    #[test]
     fn mobile_app_ios_detected() {
         let t = TempDir::new().unwrap();
         let root = t.path();
@@ -648,9 +310,7 @@ mod tests {
         let matches = mobile_app(root);
         let ios: Vec<_> = matches
             .iter()
-            .filter(|m| {
-                matches!(m.shape, DetectedShape::ExternallyManaged(ExtKind::MobileIos))
-            })
+            .filter(|m| matches!(m.shape, DetectedShape::ExternallyManaged(ExtKind::MobileIos)))
             .collect();
         assert_eq!(ios.len(), 1);
         assert_eq!(ios[0].path.escaped(), "apps/clients/ios");
@@ -786,7 +446,10 @@ mod tests {
         );
         let matches = nested_monorepo(t.path());
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].shape, DetectedShape::Hint(HintKind::NestedMonorepo));
+        assert_eq!(
+            matches[0].shape,
+            DetectedShape::Hint(HintKind::NestedMonorepo)
+        );
         assert_eq!(matches[0].path.escaped(), "vendor/foo");
     }
 
