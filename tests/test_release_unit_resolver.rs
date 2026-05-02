@@ -1,20 +1,147 @@
-//! Phase B.5 — integration tests for the release_unit resolver.
-//! Exercises the end-to-end pipeline: config TOML → ConfigurationFile
-//! → resolver::resolve() against a real filesystem layout, with
-//! expected ResolvedReleaseUnits.
+//! Integration tests for the release_unit resolver.
+//! Exercises the end-to-end pipeline: typed `ReleaseUnitConfig` → resolver
+//! against a real filesystem layout, with expected `ResolvedReleaseUnit`s.
 
 mod common;
 
+use belaf::core::config::NamedReleaseUnitConfig;
 use belaf::core::git::repository::Repository;
 use belaf::core::release_unit::resolver::resolve;
 use belaf::core::release_unit::syntax::{
-    ExplicitReleaseUnitConfig, GlobReleaseUnitConfig, ManifestFileConfig, SourceConfig,
+    CascadeRuleConfig, ExternalConfig, ManifestFileConfig, ManifestList, ReleaseUnitConfig,
 };
 use belaf::core::release_unit::{ResolveOrigin, VersionSource};
 use common::TestRepo;
 
 fn open_repo(t: &TestRepo) -> Repository {
     Repository::open(&t.path).expect("Repository::open must succeed")
+}
+
+// Test-builder helpers — keep tests focused on the resolver behaviour
+// rather than typed-builder boilerplate.
+
+#[derive(Default)]
+struct ExplicitBuilder {
+    ecosystem: String,
+    manifests: Vec<ManifestFileConfig>,
+    external: Option<ExternalConfig>,
+    satellites: Vec<String>,
+    cascade_from: Option<CascadeRuleConfig>,
+}
+
+fn explicit(name: &str, ecosystem: &str) -> ExplicitBuilder {
+    ExplicitBuilder {
+        ecosystem: ecosystem.to_string(),
+        ..Default::default()
+    }
+    .with_name(name)
+}
+
+impl ExplicitBuilder {
+    fn with_name(self, _: &str) -> Self {
+        // Name is captured separately when calling .build()
+        self
+    }
+    fn with_manifest(mut self, path: &str, version_field: &str) -> Self {
+        self.manifests.push(ManifestFileConfig {
+            path: path.to_string(),
+            ecosystem: None,
+            version_field: version_field.to_string(),
+            regex_pattern: None,
+            regex_replace: None,
+        });
+        self
+    }
+    fn with_satellite(mut self, sat: &str) -> Self {
+        self.satellites.push(sat.to_string());
+        self
+    }
+    fn with_external(mut self, ext: ExternalConfig) -> Self {
+        self.external = Some(ext);
+        self
+    }
+    fn with_cascade(mut self, source: &str, bump: &str) -> Self {
+        self.cascade_from = Some(CascadeRuleConfig {
+            source: source.to_string(),
+            bump: bump.to_string(),
+        });
+        self
+    }
+    fn build(self, name: &str) -> NamedReleaseUnitConfig {
+        NamedReleaseUnitConfig {
+            name: name.to_string(),
+            config: ReleaseUnitConfig {
+                ecosystem: self.ecosystem,
+                name: None,
+                glob: None,
+                manifests: if self.manifests.is_empty() {
+                    None
+                } else {
+                    Some(ManifestList::Explicit(self.manifests))
+                },
+                external: self.external,
+                fallback_manifests: vec![],
+                version_field: None,
+                satellites: self.satellites,
+                tag_format: None,
+                visibility: None,
+                cascade_from: self.cascade_from,
+            },
+        }
+    }
+}
+
+#[derive(Default)]
+struct GlobBuilder {
+    ecosystem: String,
+    glob: String,
+    name_template: String,
+    manifests: Vec<String>,
+    fallback_manifests: Vec<String>,
+    satellites: Vec<String>,
+}
+
+fn glob(config_key: &str, ecosystem: &str, glob: &str, name_template: &str) -> GlobBuilder {
+    let _ = config_key; // captured by .build()
+    GlobBuilder {
+        ecosystem: ecosystem.to_string(),
+        glob: glob.to_string(),
+        name_template: name_template.to_string(),
+        ..Default::default()
+    }
+}
+
+impl GlobBuilder {
+    fn with_manifest(mut self, template: &str) -> Self {
+        self.manifests.push(template.to_string());
+        self
+    }
+    fn with_fallback(mut self, template: &str) -> Self {
+        self.fallback_manifests.push(template.to_string());
+        self
+    }
+    fn with_satellite(mut self, template: &str) -> Self {
+        self.satellites.push(template.to_string());
+        self
+    }
+    fn build(self, config_key: &str) -> NamedReleaseUnitConfig {
+        NamedReleaseUnitConfig {
+            name: config_key.to_string(),
+            config: ReleaseUnitConfig {
+                ecosystem: self.ecosystem,
+                name: Some(self.name_template),
+                glob: Some(self.glob),
+                manifests: Some(ManifestList::Templates(self.manifests)),
+                external: None,
+                fallback_manifests: self.fallback_manifests,
+                version_field: None,
+                satellites: self.satellites,
+                tag_format: None,
+                visibility: None,
+                cascade_from: None,
+            },
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -25,7 +152,6 @@ fn open_repo(t: &TestRepo) -> Repository {
 fn clikd_shape_glob_expands_with_fallback_manifests() {
     let repo = TestRepo::new();
 
-    // Three services: aura + ekko (use bin), mondo (no bin, only workers).
     repo.write_file(
         "apps/services/aura/crates/bin/Cargo.toml",
         "[package]\nname=\"aura-bin\"\nversion=\"0.1.0\"\n",
@@ -50,26 +176,18 @@ fn clikd_shape_glob_expands_with_fallback_manifests() {
 
     let r = open_repo(&repo);
 
-    let glob_cfg = GlobReleaseUnitConfig {
-        glob: "apps/services/*".to_string(),
-        ecosystem: "cargo".to_string(),
-        manifests: vec!["{path}/crates/bin/Cargo.toml".to_string()],
-        fallback_manifests: vec!["{path}/crates/workers/Cargo.toml".to_string()],
-        satellites: vec!["{path}/crates".to_string()],
-        version_field: None,
-        name: "{basename}".to_string(),
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
+    let services = glob("services", "cargo", "apps/services/*", "{basename}")
+        .with_manifest("{path}/crates/bin/Cargo.toml")
+        .with_fallback("{path}/crates/workers/Cargo.toml")
+        .with_satellite("{path}/crates")
+        .build("services");
 
-    let resolved = resolve(&r, &[], &[glob_cfg]).expect("resolver must succeed");
+    let resolved = resolve(&r, &[services]).expect("resolver must succeed");
 
     let mut names: Vec<&str> = resolved.iter().map(|u| u.unit.name.as_str()).collect();
     names.sort();
     assert_eq!(names, vec!["aura", "ekko", "mondo"]);
 
-    // mondo should pick crates/workers/Cargo.toml via fallback
     let mondo = resolved.iter().find(|r| r.unit.name == "mondo").unwrap();
     if let VersionSource::Manifests(ms) = &mondo.unit.source {
         assert_eq!(
@@ -80,7 +198,6 @@ fn clikd_shape_glob_expands_with_fallback_manifests() {
         panic!("mondo should be Manifests source");
     }
 
-    // aura should pick the bin (primary) path
     let aura = resolved.iter().find(|r| r.unit.name == "aura").unwrap();
     if let VersionSource::Manifests(ms) = &aura.unit.source {
         assert_eq!(
@@ -89,7 +206,6 @@ fn clikd_shape_glob_expands_with_fallback_manifests() {
         );
     }
 
-    // Provenance preserved on every resolved unit
     for u in &resolved {
         match &u.origin {
             ResolveOrigin::Glob {
@@ -106,7 +222,6 @@ fn clikd_shape_glob_expands_with_fallback_manifests() {
 
 #[test]
 fn explicit_wins_over_glob_for_overlapping_path() {
-    // Edge case 7 — explicit must win, glob silently skips that path.
     let repo = TestRepo::new();
     repo.write_file(
         "apps/services/aura/crates/bin/Cargo.toml",
@@ -120,43 +235,20 @@ fn explicit_wins_over_glob_for_overlapping_path() {
 
     let r = open_repo(&repo);
 
-    let explicit = ExplicitReleaseUnitConfig {
-        name: "aura-custom".to_string(),
-        ecosystem: "cargo".to_string(),
-        source: SourceConfig {
-            manifests: vec![ManifestFileConfig {
-                path: "apps/services/aura/crates/bin/Cargo.toml".to_string(),
-                ecosystem: None,
-                version_field: "cargo_toml".to_string(),
-                regex_pattern: None,
-                regex_replace: None,
-            }],
-            external: None,
-        },
-        satellites: vec!["apps/services/aura/crates".to_string()],
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
+    let aura_custom = explicit("aura-custom", "cargo")
+        .with_manifest(
+            "apps/services/aura/crates/bin/Cargo.toml",
+            "cargo_toml",
+        )
+        .with_satellite("apps/services/aura/crates")
+        .build("aura-custom");
 
-    let glob_cfg = GlobReleaseUnitConfig {
-        glob: "apps/services/*".to_string(),
-        ecosystem: "cargo".to_string(),
-        manifests: vec!["{path}/crates/bin/Cargo.toml".to_string()],
-        fallback_manifests: vec![],
-        satellites: vec![],
-        version_field: None,
-        name: "{basename}".to_string(),
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
+    let services = glob("services", "cargo", "apps/services/*", "{basename}")
+        .with_manifest("{path}/crates/bin/Cargo.toml")
+        .build("services");
 
-    let resolved = resolve(&r, &[explicit], &[glob_cfg]).expect("must succeed");
+    let resolved = resolve(&r, &[aura_custom, services]).expect("must succeed");
 
-    // We should see 2 units: explicit "aura-custom" + glob-expanded "ekko".
-    // The glob's "aura" expansion is silently skipped because aura's path
-    // is already covered by the explicit unit.
     let mut names: Vec<&str> = resolved.iter().map(|u| u.unit.name.as_str()).collect();
     names.sort();
     assert_eq!(names, vec!["aura-custom", "ekko"]);
@@ -165,31 +257,16 @@ fn explicit_wins_over_glob_for_overlapping_path() {
 #[test]
 fn missing_manifest_path_is_hard_error() {
     let repo = TestRepo::new();
-    repo.write_file("README.md", "x"); // just to have something
+    repo.write_file("README.md", "x");
     repo.commit("seed");
 
     let r = open_repo(&repo);
 
-    let explicit = ExplicitReleaseUnitConfig {
-        name: "missing".to_string(),
-        ecosystem: "cargo".to_string(),
-        source: SourceConfig {
-            manifests: vec![ManifestFileConfig {
-                path: "does/not/exist/Cargo.toml".to_string(),
-                ecosystem: None,
-                version_field: "cargo_toml".to_string(),
-                regex_pattern: None,
-                regex_replace: None,
-            }],
-            external: None,
-        },
-        satellites: vec![],
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
+    let missing = explicit("missing", "cargo")
+        .with_manifest("does/not/exist/Cargo.toml", "cargo_toml")
+        .build("missing");
 
-    let err = resolve(&r, &[explicit], &[]).unwrap_err();
+    let err = resolve(&r, &[missing]).unwrap_err();
     assert_eq!(err.rule(), "path_does_not_exist");
 }
 
@@ -204,20 +281,12 @@ fn fallback_exhausted_lists_all_tried_paths() {
 
     let r = open_repo(&repo);
 
-    let glob_cfg = GlobReleaseUnitConfig {
-        glob: "apps/services/*".to_string(),
-        ecosystem: "cargo".to_string(),
-        manifests: vec!["{path}/crates/bin/Cargo.toml".to_string()],
-        fallback_manifests: vec!["{path}/crates/workers/Cargo.toml".to_string()],
-        satellites: vec![],
-        version_field: None,
-        name: "{basename}".to_string(),
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
+    let services = glob("services", "cargo", "apps/services/*", "{basename}")
+        .with_manifest("{path}/crates/bin/Cargo.toml")
+        .with_fallback("{path}/crates/workers/Cargo.toml")
+        .build("services");
 
-    let err = resolve(&r, &[], &[glob_cfg]).unwrap_err();
+    let err = resolve(&r, &[services]).unwrap_err();
     assert_eq!(err.rule(), "all_manifests_and_fallbacks_missing");
 }
 
@@ -232,32 +301,14 @@ fn two_globs_same_path_errors_with_both() {
 
     let r = open_repo(&repo);
 
-    let glob_a = GlobReleaseUnitConfig {
-        glob: "apps/services/*".to_string(),
-        ecosystem: "cargo".to_string(),
-        manifests: vec!["{path}/crates/bin/Cargo.toml".to_string()],
-        fallback_manifests: vec![],
-        satellites: vec![],
-        version_field: None,
-        name: "a-{basename}".to_string(),
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
-    let glob_b = GlobReleaseUnitConfig {
-        glob: "apps/*/aura".to_string(), // different glob, same matched path
-        ecosystem: "cargo".to_string(),
-        manifests: vec!["{path}/crates/bin/Cargo.toml".to_string()],
-        fallback_manifests: vec![],
-        satellites: vec![],
-        version_field: None,
-        name: "b-{basename}".to_string(),
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
+    let glob_a = glob("a", "cargo", "apps/services/*", "a-{basename}")
+        .with_manifest("{path}/crates/bin/Cargo.toml")
+        .build("a");
+    let glob_b = glob("b", "cargo", "apps/*/aura", "b-{basename}")
+        .with_manifest("{path}/crates/bin/Cargo.toml")
+        .build("b");
 
-    let err = resolve(&r, &[], &[glob_a, glob_b]).unwrap_err();
+    let err = resolve(&r, &[glob_a, glob_b]).unwrap_err();
     assert_eq!(err.rule(), "two_globs_same_path");
 }
 
@@ -269,29 +320,13 @@ fn cascade_source_unknown_errors() {
 
     let r = open_repo(&repo);
 
-    let kotlin = ExplicitReleaseUnitConfig {
-        name: "sdk-kotlin".to_string(),
-        ecosystem: "jvm-library".to_string(),
-        source: SourceConfig {
-            manifests: vec![ManifestFileConfig {
-                path: "sdks/kotlin/gradle.properties".to_string(),
-                ecosystem: None,
-                version_field: "gradle_properties".to_string(),
-                regex_pattern: None,
-                regex_replace: None,
-            }],
-            external: None,
-        },
-        satellites: vec!["sdks/kotlin".to_string()],
-        tag_format: None,
-        visibility: None,
-        cascade_from: Some(belaf::core::release_unit::syntax::CascadeRuleConfig {
-            source: "ghost-schema".to_string(),
-            bump: "floor_minor".to_string(),
-        }),
-    };
+    let kotlin = explicit("sdk-kotlin", "jvm-library")
+        .with_manifest("sdks/kotlin/gradle.properties", "gradle_properties")
+        .with_satellite("sdks/kotlin")
+        .with_cascade("ghost-schema", "floor_minor")
+        .build("sdk-kotlin");
 
-    let err = resolve(&r, &[kotlin], &[]).unwrap_err();
+    let err = resolve(&r, &[kotlin]).unwrap_err();
     assert_eq!(err.rule(), "cascade_source_unknown");
 }
 
@@ -306,60 +341,33 @@ fn ecosystem_mismatch_with_version_field_errors() {
 
     let r = open_repo(&repo);
 
-    // ecosystem=npm but version_field=cargo_toml — clear mismatch.
-    let bad = ExplicitReleaseUnitConfig {
-        name: "x".to_string(),
-        ecosystem: "npm".to_string(),
-        source: SourceConfig {
-            manifests: vec![ManifestFileConfig {
-                path: "packages/x/package.json".to_string(),
-                ecosystem: None, // inherits npm
-                version_field: "cargo_toml".to_string(),
-                regex_pattern: None,
-                regex_replace: None,
-            }],
-            external: None,
-        },
-        satellites: vec![],
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
+    let bad = explicit("x", "npm")
+        .with_manifest("packages/x/package.json", "cargo_toml")
+        .build("x");
 
-    let err = resolve(&r, &[bad], &[]).unwrap_err();
+    let err = resolve(&r, &[bad]).unwrap_err();
     assert_eq!(err.rule(), "ecosystem_mismatch_version_field");
 }
 
 #[test]
 fn external_source_no_filesystem_check() {
-    // External-source ReleaseUnits don't reference a file path, so
-    // the resolver should accept them without filesystem validation.
     let repo = TestRepo::new();
     repo.commit("seed empty");
 
     let r = open_repo(&repo);
 
-    let ext = ExplicitReleaseUnitConfig {
-        name: "schema".to_string(),
-        ecosystem: "external".to_string(),
-        source: SourceConfig {
-            manifests: vec![],
-            external: Some(belaf::core::release_unit::syntax::ExternalConfig {
-                tool: "buf".to_string(),
-                read_command: "buf mod info".to_string(),
-                write_command: "buf mod set-version {version}".to_string(),
-                cwd: Some("proto/events".to_string()),
-                timeout_sec: 60,
-                env: Default::default(),
-            }),
-        },
-        satellites: vec![],
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
+    let ext = explicit("schema", "external")
+        .with_external(ExternalConfig {
+            tool: "buf".to_string(),
+            read_command: "buf mod info".to_string(),
+            write_command: "buf mod set-version {version}".to_string(),
+            cwd: Some("proto/events".to_string()),
+            timeout_sec: 60,
+            env: Default::default(),
+        })
+        .build("schema");
 
-    let resolved = resolve(&r, &[ext], &[]).expect("external-source must resolve");
+    let resolved = resolve(&r, &[ext]).expect("external-source must resolve");
     assert_eq!(resolved.len(), 1);
     assert!(resolved[0].unit.source.is_external());
 }
@@ -379,44 +387,14 @@ fn nested_bundle_paths_rejected() {
 
     let r = open_repo(&repo);
 
-    let outer = ExplicitReleaseUnitConfig {
-        name: "outer".to_string(),
-        ecosystem: "cargo".to_string(),
-        source: SourceConfig {
-            manifests: vec![ManifestFileConfig {
-                path: "apps/services/Cargo.toml".to_string(),
-                ecosystem: None,
-                version_field: "cargo_toml".to_string(),
-                regex_pattern: None,
-                regex_replace: None,
-            }],
-            external: None,
-        },
-        satellites: vec![],
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
-    let inner = ExplicitReleaseUnitConfig {
-        name: "inner".to_string(),
-        ecosystem: "cargo".to_string(),
-        source: SourceConfig {
-            manifests: vec![ManifestFileConfig {
-                path: "apps/services/aura/Cargo.toml".to_string(),
-                ecosystem: None,
-                version_field: "cargo_toml".to_string(),
-                regex_pattern: None,
-                regex_replace: None,
-            }],
-            external: None,
-        },
-        satellites: vec![],
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
+    let outer = explicit("outer", "cargo")
+        .with_manifest("apps/services/Cargo.toml", "cargo_toml")
+        .build("outer");
+    let inner = explicit("inner", "cargo")
+        .with_manifest("apps/services/aura/Cargo.toml", "cargo_toml")
+        .build("inner");
 
-    let err = resolve(&r, &[outer, inner], &[]).unwrap_err();
+    let err = resolve(&r, &[outer, inner]).unwrap_err();
     assert_eq!(err.rule(), "nested_bundle_path");
 }
 
@@ -428,20 +406,10 @@ fn glob_zero_matches_does_not_error() {
 
     let r = open_repo(&repo);
 
-    let glob_cfg = GlobReleaseUnitConfig {
-        glob: "no-such-dir/*".to_string(),
-        ecosystem: "cargo".to_string(),
-        manifests: vec!["{path}/Cargo.toml".to_string()],
-        fallback_manifests: vec![],
-        satellites: vec![],
-        version_field: None,
-        name: "{basename}".to_string(),
-        tag_format: None,
-        visibility: None,
-        cascade_from: None,
-    };
+    let services = glob("services", "cargo", "no-such-dir/*", "{basename}")
+        .with_manifest("{path}/Cargo.toml")
+        .build("services");
 
-    // Edge case 6 — glob matches zero dirs is NOT an error.
-    let resolved = resolve(&r, &[], &[glob_cfg]).expect("must succeed");
+    let resolved = resolve(&r, &[services]).expect("must succeed");
     assert!(resolved.is_empty());
 }

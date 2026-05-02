@@ -1,7 +1,7 @@
 use rust_embed::RustEmbed;
 use std::str;
 
-use super::config::ConfigurationFile;
+use super::config::{syntax::ResolvedGroupConfig, ConfigurationFile, NamedReleaseUnitConfig};
 use super::errors::{Error, Result};
 
 const DEFAULT_CONFIG_NAME: &str = "default.toml";
@@ -31,15 +31,32 @@ impl EmbeddedConfig {
         let cfg: super::config::syntax::ReleaseConfiguration = toml::from_str(&content)
             .map_err(|e| Error::new(e).context("failed to parse embedded config as TOML"))?;
 
+        let mut groups: Vec<ResolvedGroupConfig> = cfg
+            .groups
+            .into_iter()
+            .map(|(id, g)| ResolvedGroupConfig {
+                id,
+                members: g.members,
+                tag_format: g.tag_format,
+            })
+            .collect();
+        groups.sort_by(|a, b| a.id.cmp(&b.id));
+
+        let mut release_units: Vec<NamedReleaseUnitConfig> = cfg
+            .release_units
+            .into_iter()
+            .map(|(name, config)| NamedReleaseUnitConfig { name, config })
+            .collect();
+        release_units.sort_by(|a, b| a.name.cmp(&b.name));
+
         Ok(ConfigurationFile {
             repo: cfg.repo,
             changelog: cfg.changelog,
             bump: cfg.bump,
             commit_attribution: cfg.commit_attribution,
-            groups: cfg.groups.into_normalised(),
+            groups,
             bump_sources: cfg.bump_sources,
-            release_units: cfg.release_units,
-            release_unit_globs: cfg.release_unit_globs,
+            release_units,
             ignore_paths: cfg.ignore_paths,
             allow_uncovered: cfg.allow_uncovered,
             ecosystems: cfg.ecosystems,

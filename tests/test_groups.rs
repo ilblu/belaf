@@ -55,7 +55,7 @@ edition = "2021"
     // Append a [[group]] section binding both projects together.
     let cfg = repo.read_file("belaf/config.toml");
     let cfg_with_group =
-        format!("{cfg}\n[[group]]\nid = \"schema\"\nmembers = [\"@org/schema\", \"schema-rs\"]\n");
+        format!("{cfg}\n[group.schema]\nmembers = [\"@org/schema\", \"schema-rs\"]\n");
     repo.write_file("belaf/config.toml", &cfg_with_group);
     repo.commit("chore: add schema group");
 
@@ -158,7 +158,7 @@ edition = "2021"
 
     let cfg = repo.read_file("belaf/config.toml");
     // `Schema` is invalid: capital letter not allowed by the pattern.
-    let cfg_bad = format!("{cfg}\n[[group]]\nid = \"Schema\"\nmembers = [\"bad-cfg\"]\n");
+    let cfg_bad = format!("{cfg}\n[group.Schema]\nmembers = [\"bad-cfg\"]\n");
     repo.write_file("belaf/config.toml", &cfg_bad);
     repo.commit("chore: bad group id");
 
@@ -199,7 +199,7 @@ edition = "2021"
 
     let cfg = repo.read_file("belaf/config.toml");
     let cfg_with_group =
-        format!("{cfg}\n[[group]]\nid = \"schema\"\nmembers = [\"@org/schema\", \"schema-rs\"]\n");
+        format!("{cfg}\n[group.schema]\nmembers = [\"@org/schema\", \"schema-rs\"]\n");
     repo.write_file("belaf/config.toml", &cfg_with_group);
 
     repo.write_file(
@@ -288,7 +288,7 @@ schema-rs = { path = "../cargo", version = "0.1.0" }
 
     let cfg = repo.read_file("belaf/config.toml");
     let cfg_with_group = format!(
-        "{cfg}\n[[group]]\nid = \"schema\"\nmembers = [\"schema-rs\", \"schema-rs-helper\"]\n"
+        "{cfg}\n[group.schema]\nmembers = [\"schema-rs\", \"schema-rs-helper\"]\n"
     );
     repo.write_file("belaf/config.toml", &cfg_with_group);
 
@@ -350,7 +350,7 @@ edition = "2021"
 
     let cfg = repo.read_file("belaf/config.toml");
     let cfg_with_group =
-        format!("{cfg}\n[[group]]\nid = \"schema\"\nmembers = [\"@org/schema\", \"schema-rs\"]\n");
+        format!("{cfg}\n[group.schema]\nmembers = [\"@org/schema\", \"schema-rs\"]\n");
     repo.write_file("belaf/config.toml", &cfg_with_group);
     repo.commit("chore: bind schema group");
 
@@ -404,7 +404,7 @@ edition = "2021"
 
     let cfg = repo.read_file("belaf/config.toml");
     let cfg_bad = format!(
-        "{cfg}\n[[group]]\nid = \"phantom\"\nmembers = [\"real-pkg\", \"does-not-exist\"]\n"
+        "{cfg}\n[group.phantom]\nmembers = [\"real-pkg\", \"does-not-exist\"]\n"
     );
     repo.write_file("belaf/config.toml", &cfg_bad);
     repo.commit("chore: phantom member");

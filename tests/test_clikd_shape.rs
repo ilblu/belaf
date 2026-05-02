@@ -117,8 +117,8 @@ fn auto_detect_emits_coherent_snippet() {
     let result = belaf::cmd::init::auto_detect::run(&r);
 
     assert!(
-        result.toml_snippet.contains("[[release_unit"),
-        "snippet must contain at least one release_unit block"
+        result.toml_snippet.contains("[release_unit."),
+        "snippet must contain at least one [release_unit.<name>] block"
     );
     assert!(
         result.toml_snippet.contains("[allow_uncovered]"),
@@ -155,15 +155,15 @@ fn auto_detect_run_filtered_excludes_paths_from_release_units() {
 
     let result = belaf::cmd::init::auto_detect::run_filtered(&r, &exclusions);
 
-    // Snippet must still contain at least one [[release_unit_glob]]
+    // Snippet must still contain a glob-form [release_unit.<name>]
     // for apps/services/* (the cargo services aren't excluded).
     assert!(
-        result.toml_snippet.contains("[[release_unit_glob]]"),
+        result.toml_snippet.contains("glob = \"apps/services/*\""),
         "filtered snippet must still emit the cargo services glob, got:\n{}",
         result.toml_snippet
     );
 
-    // Excluded paths must NOT have a [[release_unit]] block.
+    // Excluded paths must NOT have a release_unit block.
     assert!(
         !result.toml_snippet.contains("ecosystem = \"jvm-library\""),
         "kotlin SDK was excluded; no jvm-library block expected"

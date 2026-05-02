@@ -146,14 +146,14 @@ impl AppBuilder {
         if self.populate_graph {
             let mut registry = crate::core::ecosystem::registry::EcosystemRegistry::with_defaults();
 
-            // Phase C — resolve [[release_unit]] / [[release_unit_glob]]
-            // BEFORE the index scan so the resulting skip-list silences
-            // ecosystem-level scanning of paths the units already cover
-            // (manifests + satellites). Plus [ignore_paths] entries.
+            // Resolve `[release_unit.<name>]` entries (both explicit
+            // and glob-form via the unified type) BEFORE the index
+            // scan so the resulting skip-list silences ecosystem-level
+            // scanning of paths the units already cover (manifests +
+            // satellites). Plus [ignore_paths] entries.
             resolved_units = crate::core::release_unit::resolver::resolve(
                 &self.repo,
                 &config.release_units,
-                &config.release_unit_globs,
             )
             .map_err(|e| {
                 crate::core::errors::Error::msg(format!("release_unit resolution: {e}"))

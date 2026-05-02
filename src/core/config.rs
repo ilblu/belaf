@@ -8,10 +8,11 @@ pub mod syntax {
     use std::collections::HashMap;
 
     use crate::core::release_unit::syntax::{
-        AllowUncoveredConfig, EcosystemsConfig, ExplicitReleaseUnitConfig, GlobReleaseUnitConfig,
-        IgnorePathsConfig,
+        AllowUncoveredConfig, EcosystemsConfig, IgnorePathsConfig, ReleaseUnitConfig,
     };
 
+    /// Wire-form for the full `belaf/config.toml`. See the README + docs/configuration.md
+    /// for the user-facing documentation; this is the literal serde shape.
     #[derive(Clone, Debug, Deserialize, Serialize)]
     #[serde(deny_unknown_fields)]
     pub struct ReleaseConfiguration {
@@ -23,57 +24,33 @@ pub mod syntax {
 
         pub commit_attribution: CommitAttributionConfiguration,
 
-        // The `[projects.*]` config table was removed; per-unit
-        // overrides (tag_format etc.) live on `[[release_unit]]`.
-        // `deny_unknown_fields` makes a stray `[projects.*]` block in
-        // an old config fail to load with a clear error.
-        /// Two TOML surfaces, one Rust shape. Either:
-        ///
-        /// ```toml
-        /// [[group]]
-        /// id = "schema"
-        /// members = ["@org/schema", "com.org:schema"]
-        /// tag_format = "schema-v{version}"
-        /// ```
-        ///
-        /// or named-entry form (plan §8):
+        /// `[group.<id>]` — bundles projects that release together with
+        /// synchronised versions. Only the named-entry form is accepted
+        /// in 1.0; the legacy array-of-tables `[[group]]` is gone.
         ///
         /// ```toml
         /// [group.schema]
         /// members = ["@org/schema", "com.org:schema"]
         /// tag_format = "schema-v{version}"
         /// ```
-        ///
-        /// Both forms produce the same `Vec<GroupConfig>` after
-        /// normalisation in `ConfigurationFile::get`.
-        #[serde(
-            default,
-            rename = "group",
-            skip_serializing_if = "GroupsForm::is_empty"
-        )]
-        pub groups: GroupsForm,
+        #[serde(default, rename = "group", skip_serializing_if = "HashMap::is_empty")]
+        pub groups: HashMap<String, GroupConfig>,
 
         #[serde(default, rename = "bump_source", skip_serializing_if = "Vec::is_empty")]
         pub bump_sources: Vec<BumpSourceConfig>,
 
-        /// `[[release_unit]]` — explicit ReleaseUnit entries. Plan
-        /// Part I + II.
+        /// `[release_unit.<name>]` — named-entry release units. Each
+        /// entry is either explicit (no `glob` field) or glob-form
+        /// (with `glob` set, expanding at resolve-time into N units
+        /// per matching directory). The legacy array-of-tables
+        /// `[[release_unit]]` and the separate `[[release_unit_glob]]`
+        /// top-level key are both gone in 1.0.
         #[serde(
             default,
             rename = "release_unit",
-            skip_serializing_if = "Vec::is_empty"
+            skip_serializing_if = "HashMap::is_empty"
         )]
-        pub release_units: Vec<ExplicitReleaseUnitConfig>,
-
-        /// `[[release_unit_glob]]` — glob-form ReleaseUnit entries
-        /// expanded at resolve-time into N units, one per matching dir.
-        /// Plan §2.3.
-        #[serde(
-            default,
-            rename = "release_unit_glob",
-            skip_serializing_if = "Vec::is_empty"
-        )]
-        pub release_unit_globs: Vec<GlobReleaseUnitConfig>,
+        pub release_units: HashMap<String, ReleaseUnitConfig>,
 
         /// `[ignore_paths]` — paths belaf does not scan inside.
         #[serde(default, skip_serializing_if = "IgnorePathsConfig::is_empty")]
@@ -90,13 +67,10 @@ pub mod syntax {
         pub ecosystems: EcosystemsConfig,
     }
 
-    /// `[[group]]` table: bundles projects that must release together.
-    /// `id` is the wire-format group id (lowercased pattern); `members`
-    /// are user-facing project names (resolved to `ReleaseUnitId`s after the
-    /// graph is built).
+    /// `[group.<id>]` named-entry — the TOML key is the group id.
     #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[serde(deny_unknown_fields)]
     pub struct GroupConfig {
-        pub id: String,
         pub members: Vec<String>,
 
         /// Group-level tag-format override. Wins over the ecosystem
@@ -107,56 +81,14 @@ pub mod syntax {
         pub tag_format: Option<String>,
     }
 
-    /// Named-entry form of `GroupConfig` — same fields without `id`,
-    /// because the TOML key `[group.<id>]` carries it.
-    #[derive(Clone, Debug, Deserialize, Serialize)]
-    pub struct GroupNamedConfig {
+    /// Runtime-adjacent shape: same fields as [`GroupConfig`] plus the
+    /// id (lifted out of the TOML key). The rest of the codebase works
+    /// in terms of this; the TOML form only exists at deserialize.
+    #[derive(Clone, Debug)]
+    pub struct ResolvedGroupConfig {
+        pub id: String,
         pub members: Vec<String>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
         pub tag_format: Option<String>,
-    }
-
-    /// Either array-of-tables (`[[group]]`) or named-entry
-    /// (`[group.<id>]`). Both deserialize through this `untagged` enum
-    /// and are normalised to a single `Vec<GroupConfig>` by the
-    /// `into_normalised` helper before the rest of the codebase sees
-    /// them. Plan §8.
-    #[derive(Clone, Debug, Deserialize, Serialize)]
-    #[serde(untagged)]
-    pub enum GroupsForm {
-        Array(Vec<GroupConfig>),
-        Named(HashMap<String, GroupNamedConfig>),
-    }
-
-    impl Default for GroupsForm {
-        fn default() -> Self {
-            Self::Array(Vec::new())
-        }
-    }
-
-    impl GroupsForm {
-        pub fn is_empty(&self) -> bool {
-            match self {
-                Self::Array(v) => v.is_empty(),
-                Self::Named(m) => m.is_empty(),
-            }
-        }
-
-        /// Collapse both forms into a single `Vec<GroupConfig>`. Named
-        /// entries get their key promoted to `GroupConfig::id`.
-        pub fn into_normalised(self) -> Vec<GroupConfig> {
-            match self {
-                Self::Array(v) => v,
-                Self::Named(m) => m
-                    .into_iter()
-                    .map(|(id, named)| GroupConfig {
-                        id,
-                        members: named.members,
-                        tag_format: named.tag_format,
-                    })
-                    .collect(),
-            }
-        }
     }
 
     /// `[[bump_source]]` table: a subprocess belaf runs by default to
@@ -318,16 +250,23 @@ pub mod syntax {
     }
 }
 
+/// Runtime-adjacent shape: a single named release unit with the name
+/// lifted out of the HashMap key. Resolver consumes this.
+#[derive(Clone, Debug)]
+pub struct NamedReleaseUnitConfig {
+    pub name: String,
+    pub config: crate::core::release_unit::syntax::ReleaseUnitConfig,
+}
+
 #[derive(Clone, Debug)]
 pub struct ConfigurationFile {
     pub repo: syntax::RepoConfiguration,
     pub changelog: syntax::ChangelogConfiguration,
     pub bump: syntax::BumpConfiguration,
     pub commit_attribution: syntax::CommitAttributionConfiguration,
-    pub groups: Vec<syntax::GroupConfig>,
+    pub groups: Vec<syntax::ResolvedGroupConfig>,
     pub bump_sources: Vec<syntax::BumpSourceConfig>,
-    pub release_units: Vec<crate::core::release_unit::syntax::ExplicitReleaseUnitConfig>,
-    pub release_unit_globs: Vec<crate::core::release_unit::syntax::GlobReleaseUnitConfig>,
+    pub release_units: Vec<NamedReleaseUnitConfig>,
     pub ignore_paths: crate::core::release_unit::syntax::IgnorePathsConfig,
     pub allow_uncovered: crate::core::release_unit::syntax::AllowUncoveredConfig,
     pub ecosystems: crate::core::release_unit::syntax::EcosystemsConfig,
@@ -352,15 +291,35 @@ impl ConfigurationFile {
             .try_deserialize()
             .map_err(|e| Error::new(e).context("failed to deserialize configuration"))?;
 
+        // Promote the HashMap keys into runtime-adjacent shapes with a
+        // stable iteration order. Sort by name for deterministic
+        // resolution + downstream tests.
+        let mut groups: Vec<syntax::ResolvedGroupConfig> = cfg
+            .groups
+            .into_iter()
+            .map(|(id, g)| syntax::ResolvedGroupConfig {
+                id,
+                members: g.members,
+                tag_format: g.tag_format,
+            })
+            .collect();
+        groups.sort_by(|a, b| a.id.cmp(&b.id));
+
+        let mut release_units: Vec<NamedReleaseUnitConfig> = cfg
+            .release_units
+            .into_iter()
+            .map(|(name, config)| NamedReleaseUnitConfig { name, config })
+            .collect();
+        release_units.sort_by(|a, b| a.name.cmp(&b.name));
+
         Ok(ConfigurationFile {
             repo: cfg.repo,
             changelog: cfg.changelog,
             bump: cfg.bump,
             commit_attribution: cfg.commit_attribution,
-            groups: cfg.groups.into_normalised(),
+            groups,
             bump_sources: cfg.bump_sources,
-            release_units: cfg.release_units,
-            release_unit_globs: cfg.release_unit_globs,
+            release_units,
             ignore_paths: cfg.ignore_paths,
             allow_uncovered: cfg.allow_uncovered,
             ecosystems: cfg.ecosystems,
@@ -368,17 +327,33 @@ impl ConfigurationFile {
     }
 
     pub fn into_toml(self) -> Result<String> {
+        use std::collections::HashMap;
+        let groups: HashMap<String, syntax::GroupConfig> = self
+            .groups
+            .into_iter()
+            .map(|g| {
+                (
+                    g.id,
+                    syntax::GroupConfig {
+                        members: g.members,
+                        tag_format: g.tag_format,
+                    },
+                )
+            })
+            .collect();
+        let release_units: HashMap<String, crate::core::release_unit::syntax::ReleaseUnitConfig> =
+            self.release_units
+                .into_iter()
+                .map(|u| (u.name, u.config))
+                .collect();
         let cfg = syntax::ReleaseConfiguration {
             repo: self.repo,
             changelog: self.changelog,
             bump: self.bump,
             commit_attribution: self.commit_attribution,
-            // Always serialise back as the array-of-tables form so the
-            // canonical written-out config matches `belaf init`'s output.
-            groups: syntax::GroupsForm::Array(self.groups),
+            groups,
             bump_sources: self.bump_sources,
-            release_units: self.release_units,
-            release_unit_globs: self.release_unit_globs,
+            release_units,
             ignore_paths: self.ignore_paths,
             allow_uncovered: self.allow_uncovered,
             ecosystems: self.ecosystems,
@@ -387,64 +362,5 @@ impl ConfigurationFile {
             toml::to_string_pretty(&cfg);
             ["could not serialize configuration into TOML format"]
         ))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::syntax::GroupsForm;
-    use serde::Deserialize;
-
-    /// Tight harness around just the `[group]` surface — avoids dragging
-    /// the full `ReleaseConfiguration` schema into the test, which has
-    /// dozens of unrelated required fields.
-    #[derive(Debug, Deserialize)]
-    struct GroupsOnly {
-        #[serde(default, rename = "group")]
-        groups: GroupsForm,
-    }
-
-    /// Both TOML surfaces — array-of-tables `[[group]]` and
-    /// named-entry `[group.<id>]` — must produce identical
-    /// `Vec<GroupConfig>` after `into_normalised()`. Plan §8.
-    #[test]
-    fn group_config_array_and_named_forms_roundtrip_to_same_shape() {
-        let array_form = r#"
-[[group]]
-id = "schema"
-members = ["@org/schema", "com.org:schema"]
-tag_format = "schema-v{version}"
-"#;
-
-        let named_form = r#"
-[group.schema]
-members = ["@org/schema", "com.org:schema"]
-tag_format = "schema-v{version}"
-"#;
-
-        let from_array: GroupsOnly =
-            toml::from_str(array_form).expect("array-of-tables form should parse");
-        let from_named: GroupsOnly =
-            toml::from_str(named_form).expect("named-entry form should parse");
-
-        let arr = from_array.groups.into_normalised();
-        let nam = from_named.groups.into_normalised();
-
-        assert_eq!(arr.len(), 1);
-        assert_eq!(nam.len(), 1);
-        assert_eq!(arr[0].id, "schema");
-        assert_eq!(nam[0].id, "schema");
-        assert_eq!(arr[0].members, nam[0].members);
-        assert_eq!(arr[0].tag_format, nam[0].tag_format);
-        assert_eq!(arr[0].tag_format.as_deref(), Some("schema-v{version}"));
-    }
-
-    #[test]
-    fn empty_groups_roundtrip_through_either_default() {
-        // Default `GroupsForm::Array(vec![])` is the only possible
-        // empty state — the parser sees no `[group]` key at all.
-        let g = GroupsForm::default();
-        assert!(g.is_empty());
-        assert_eq!(g.into_normalised().len(), 0);
     }
 }

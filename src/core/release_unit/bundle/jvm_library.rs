@@ -76,7 +76,6 @@ fn emit_block(m: &DetectorMatch, snippet: &mut String, counters: &mut DetectionC
     counters.jvm_library += 1;
     let path = m.path.escaped();
     let name_raw = path.rsplit('/').next().unwrap_or("sdk");
-    let name_q = toml_quote(name_raw);
     let satellites_q = toml_quote(&path);
     let (vfield, manifest_raw) = match version_source {
         JvmVersionSource::GradleProperties => {
@@ -87,18 +86,20 @@ fn emit_block(m: &DetectorMatch, snippet: &mut String, counters: &mut DetectionC
         }
         JvmVersionSource::PluginManaged => {
             snippet.push_str(&format!(
-                "\n# Plugin-managed JVM library at {path} — recommend external_versioner.\n# Edit the [release_unit.source.external] block below to drive your gradle plugin.\n[[release_unit]]\nname = {name_q}\necosystem = \"external\"\nsatellites = [{satellites_q}]\n[release_unit.source.external]\ntool = \"gradle\"\nread_command = \"./gradlew :printVersion -q\"\nwrite_command = \"./gradlew :setVersion -PnewVersion={{version}}\"\ntimeout_sec = 120\n",
+                "\n# Plugin-managed JVM library at {path} — recommend external_versioner.\n# Edit the [release_unit.{name_raw}.external] block below to drive your gradle plugin.\n[release_unit.{name_raw}]\necosystem = \"external\"\nsatellites = [{satellites_q}]\n\n[release_unit.{name_raw}.external]\ntool = \"gradle\"\nread_command = \"./gradlew :printVersion -q\"\nwrite_command = \"./gradlew :setVersion -PnewVersion={{version}}\"\ntimeout_sec = 120\n",
             ));
             return;
         }
     };
     let manifest_q = toml_quote(&manifest_raw);
-    snippet.push_str(&format!(
-        "\n[[release_unit]]\nname = {name_q}\necosystem = \"jvm-library\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {manifest_q}\nversion_field = \"{vfield}\"\n",
-    ));
     if vfield == "generic_regex" {
-        snippet.push_str("regex_pattern = '(?m)^version\\s*=\\s*\"([^\"]+)\"'\n");
-        snippet.push_str("regex_replace = \"version = \\\"{version}\\\"\"\n");
+        snippet.push_str(&format!(
+            "\n[release_unit.{name_raw}]\necosystem = \"jvm-library\"\nsatellites = [{satellites_q}]\nmanifests = [{{ path = {manifest_q}, version_field = \"generic_regex\", regex_pattern = '(?m)^version\\s*=\\s*\"([^\"]+)\"', regex_replace = \"version = \\\"{{version}}\\\"\" }}]\n",
+        ));
+    } else {
+        snippet.push_str(&format!(
+            "\n[release_unit.{name_raw}]\necosystem = \"jvm-library\"\nsatellites = [{satellites_q}]\nmanifests = [{{ path = {manifest_q}, version_field = \"{vfield}\" }}]\n",
+        ));
     }
 }
 

@@ -1,28 +1,23 @@
-//! Resolution pipeline: takes the TOML-parsed
-//! [`ExplicitReleaseUnitConfig`] / [`GlobReleaseUnitConfig`] entries and
-//! produces a `Vec<ResolvedReleaseUnit>` ready for the rest of the
-//! release pipeline.
+//! Resolution pipeline: takes the TOML-parsed [`ReleaseUnitConfig`]
+//! entries (one per `[release_unit.<name>]` block) and produces a
+//! `Vec<ResolvedReleaseUnit>` ready for the rest of the release
+//! pipeline.
 //!
-//! Phase B of `BELAF_MASTER_PLAN.md`. Handles:
+//! Each entry is either explicit (`glob` field unset) or glob-form
+//! (`glob` field set). The dispatch is centralised in [`resolve`].
 //!
-//! - Glob expansion via the `glob` crate
-//! - Template substitution (`{path}`, `{basename}`, `{parent}`)
-//! - `fallback_manifests` first-existing-wins resolution
-//! - Validation per Part VI's 21 edge cases
-//! - Conflict resolution per §2.6 (explicit > glob, two-globs-same-path
-//!   error, nested-bundle error, name collision error)
-//!
-//! Cascade cycle detection (edge case 19) lives in the bump pass, not
-//! here — see [`crate::core::bump`] (Phase G).
+//! Cascade cycle detection lives in the bump pass — see
+//! [`crate::core::bump`].
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
+use crate::core::config::NamedReleaseUnitConfig;
 use crate::core::git::repository::{RepoPathBuf, Repository};
 use crate::core::wire::known::Ecosystem;
 
 use super::syntax::{
-    CascadeRuleConfig, ExplicitReleaseUnitConfig, GlobReleaseUnitConfig, ManifestFileConfig,
+    CascadeRuleConfig, ManifestFileConfig, ManifestList, ReleaseUnitConfig,
 };
 use super::validator::ResolverError;
 use super::{
@@ -31,17 +26,21 @@ use super::{
 };
 
 /// Public API: resolve the parsed config into a list of
-/// `ResolvedReleaseUnit`s, validating along the way.
+/// `ResolvedReleaseUnit`s, validating along the way. Each input entry
+/// is either explicit (no `glob` field) or glob-form (with `glob`
+/// expanding into N units).
 pub fn resolve(
     repo: &Repository,
-    explicit: &[ExplicitReleaseUnitConfig],
-    globs: &[GlobReleaseUnitConfig],
+    units: &[NamedReleaseUnitConfig],
 ) -> Result<Vec<ResolvedReleaseUnit>, ResolverError> {
     let mut resolved: Vec<ResolvedReleaseUnit> = Vec::new();
 
     // Step 1: explicit entries — straight conversion.
-    for (idx, cfg) in explicit.iter().enumerate() {
-        let unit = convert_explicit(cfg, repo)?;
+    for (idx, named) in units.iter().enumerate() {
+        if named.config.is_glob() {
+            continue;
+        }
+        let unit = convert_explicit(&named.name, &named.config, repo)?;
         resolved.push(ResolvedReleaseUnit {
             unit,
             origin: ResolveOrigin::Explicit { config_index: idx },
@@ -49,10 +48,9 @@ pub fn resolve(
     }
 
     // Step 2: collect every path already covered by an explicit unit so
-    // we can apply edge case 7 (explicit wins, glob skips that path).
-    // We collect the *manifest file paths* and *satellite paths* of every
-    // explicit unit; a glob expansion is shadowed if its matched
-    // directory is a parent of any of those paths (or equals one).
+    // we can apply "explicit wins, glob skips that path". A glob
+    // expansion is shadowed if its matched directory is a parent of
+    // any explicit-covered path (or equals one).
     let mut explicit_covered_paths: Vec<String> = Vec::new();
     for r in &resolved {
         for path in unit_paths(&r.unit) {
@@ -60,24 +58,26 @@ pub fn resolve(
         }
     }
 
-    // Step 3: glob expansion. Each glob may produce N units, one per
-    // matching directory. Track which (path, glob_idx) pairs already
-    // emitted to detect edge case 8 (two globs same path) and edge
-    // case 21 (two globs produce same name).
+    // Step 3: glob expansion. Track (path, glob_idx) pairs to detect
+    // two-globs-same-path and two-globs-same-name collisions.
     let mut glob_path_owners: HashMap<String, (usize, String)> = HashMap::new();
     let mut glob_name_owners: HashMap<String, (usize, String)> = HashMap::new();
 
-    for (glob_idx, glob_cfg) in globs.iter().enumerate() {
-        for resolved_glob in expand_glob(repo, glob_idx, glob_cfg)? {
+    for (glob_idx, named) in units.iter().enumerate() {
+        if !named.config.is_glob() {
+            continue;
+        }
+        let glob_pattern = named.config.glob.as_ref().expect("is_glob() implies glob set");
+        for resolved_glob in expand_glob(repo, glob_idx, &named.name, &named.config)? {
             let unit_path = match &resolved_glob.origin {
                 ResolveOrigin::Glob { matched_path, .. } => matched_path.escaped(),
                 _ => unreachable!("expand_glob returns only Glob-origin units"),
             };
 
-            // Edge case 7 — explicit wins; skip silently. The glob's
-            // matched_path is a directory; a sibling explicit
-            // [[release_unit]] can either point to that directory
-            // directly OR to a manifest/satellite inside it.
+            // Explicit wins; skip silently. The glob's matched_path is
+            // a directory; a sibling explicit `[release_unit.<name>]`
+            // can either point to that directory directly OR to a
+            // manifest/satellite inside it.
             let glob_anchor_prefix = format!("{unit_path}/");
             let covered = explicit_covered_paths
                 .iter()
@@ -86,20 +86,19 @@ pub fn resolve(
                 continue;
             }
 
-            // Edge case 8 — two globs match same path.
+            // Two globs matching the same path.
             if let Some((prev_idx, prev_glob)) = glob_path_owners.get(&unit_path) {
                 if *prev_idx != glob_idx {
                     return Err(ResolverError::TwoGlobsSamePath {
                         path: unit_path,
                         glob_a: prev_glob.clone(),
-                        glob_b: glob_cfg.glob.clone(),
+                        glob_b: glob_pattern.clone(),
                     });
                 }
             }
-            glob_path_owners.insert(unit_path.clone(), (glob_idx, glob_cfg.glob.clone()));
+            glob_path_owners.insert(unit_path.clone(), (glob_idx, glob_pattern.clone()));
 
-            // Edge case "two globs produce same name from different
-            // paths" (a sub-case of edge 20). Detect across globs.
+            // Two globs producing the same name from different paths.
             let unit_name = resolved_glob.unit.name.clone();
             if let Some((prev_idx, _prev_path)) = glob_name_owners.get(&unit_name) {
                 if *prev_idx != glob_idx {
@@ -131,40 +130,68 @@ pub fn resolve(
 // ===========================================================================
 
 fn convert_explicit(
-    cfg: &ExplicitReleaseUnitConfig,
+    name: &str,
+    cfg: &ReleaseUnitConfig,
     repo: &Repository,
 ) -> Result<ReleaseUnit, ResolverError> {
+    debug_assert!(!cfg.is_glob(), "convert_explicit only handles non-glob entries");
+
+    // `name` field forbidden on non-glob entries — TOML key drives the
+    // name. Validator surfaces a clear error.
+    if cfg.name.is_some() {
+        return Err(ResolverError::ExplicitUnitHasNameTemplate {
+            unit: name.to_string(),
+        });
+    }
+    // Glob-only fields must be unset.
+    if !cfg.fallback_manifests.is_empty() || cfg.version_field.is_some() {
+        return Err(ResolverError::ExplicitUnitHasGlobOnlyField {
+            unit: name.to_string(),
+        });
+    }
+
     let ecosystem = parse_ecosystem(&cfg.ecosystem);
 
     // Source: exactly one of manifests / external must be set.
-    let manifests_set = !cfg.source.manifests.is_empty();
-    let external_set = cfg.source.external.is_some();
+    let manifests_set = matches!(cfg.manifests, Some(ManifestList::Explicit(ref m)) if !m.is_empty());
+    let templates_set = matches!(cfg.manifests, Some(ManifestList::Templates(_)));
+    let external_set = cfg.external.is_some();
+
+    if templates_set {
+        // Glob-form `manifests = ["..."]` not allowed in non-glob entry.
+        return Err(ResolverError::ExplicitUnitHasGlobOnlyField {
+            unit: name.to_string(),
+        });
+    }
 
     let source = match (manifests_set, external_set) {
         (true, true) => {
             return Err(ResolverError::SourceBothSet {
-                unit: cfg.name.clone(),
-            })
+                unit: name.to_string(),
+            });
         }
         (false, false) => {
             return Err(ResolverError::SourceNotSet {
-                unit: cfg.name.clone(),
-            })
+                unit: name.to_string(),
+            });
         }
         (true, false) => {
+            let Some(ManifestList::Explicit(manifests_cfg)) = &cfg.manifests else {
+                unreachable!("manifests_set implies Explicit");
+            };
             let manifests = build_manifests(
-                &cfg.name,
+                name,
                 &cfg.ecosystem,
-                &cfg.source.manifests,
+                manifests_cfg,
                 repo,
                 /* require_existence: */ true,
             )?;
             VersionSource::Manifests(manifests)
         }
         (false, true) => {
-            let ext_cfg = cfg.source.external.as_ref().unwrap();
+            let ext_cfg = cfg.external.as_ref().unwrap();
             let cwd = match &ext_cfg.cwd {
-                Some(s) => Some(parse_repo_path(&cfg.name, s)?),
+                Some(s) => Some(parse_repo_path(name, s)?),
                 None => None,
             };
             VersionSource::External(ExternalVersioner {
@@ -181,17 +208,17 @@ fn convert_explicit(
     let satellites = cfg
         .satellites
         .iter()
-        .map(|s| parse_repo_path(&cfg.name, s))
+        .map(|s| parse_repo_path(name, s))
         .collect::<Result<Vec<_>, _>>()?;
 
-    let visibility = parse_visibility(&cfg.name, cfg.visibility.as_deref())?;
+    let visibility = parse_visibility(name, cfg.visibility.as_deref())?;
     let cascade_from = match &cfg.cascade_from {
-        Some(c) => Some(parse_cascade_rule(&cfg.name, c)?),
+        Some(c) => Some(parse_cascade_rule(name, c)?),
         None => None,
     };
 
     Ok(ReleaseUnit {
-        name: cfg.name.clone(),
+        name: name.to_string(),
         ecosystem,
         source,
         satellites,
@@ -208,24 +235,57 @@ fn convert_explicit(
 fn expand_glob(
     repo: &Repository,
     glob_idx: usize,
-    cfg: &GlobReleaseUnitConfig,
+    config_key: &str,
+    cfg: &ReleaseUnitConfig,
 ) -> Result<Vec<ResolvedReleaseUnit>, ResolverError> {
-    // Templates we accept anywhere — pre-validate the glob pattern
-    // itself for unknown vars. (The `glob` field itself is NOT
-    // template-substituted — it's the source of `{path}` for the rest.)
-    validate_template_vars_known(glob_idx, &cfg.glob)?;
+    let glob_pattern = cfg
+        .glob
+        .as_ref()
+        .expect("expand_glob called with non-glob entry");
+
+    // Glob entries must use template-form `manifests = ["..."]` and the
+    // unit-level `name` template; `external` is not supported because
+    // each match would need its own command.
+    if cfg.external.is_some() {
+        return Err(ResolverError::GlobUnitHasExternal {
+            config_key: config_key.to_string(),
+        });
+    }
+    let templates: &Vec<String> = match &cfg.manifests {
+        Some(ManifestList::Templates(t)) => t,
+        Some(ManifestList::Explicit(_)) => {
+            return Err(ResolverError::GlobUnitHasExplicitManifests {
+                config_key: config_key.to_string(),
+            });
+        }
+        None => {
+            return Err(ResolverError::SourceNotSet {
+                unit: config_key.to_string(),
+            });
+        }
+    };
+    let name_template = cfg.name.as_deref().ok_or_else(|| {
+        ResolverError::GlobUnitMissingNameTemplate {
+            config_key: config_key.to_string(),
+        }
+    })?;
+
+    // Pre-validate template syntax on the glob pattern (the pattern
+    // itself is not template-substituted, but typos in template-style
+    // braces would silently miss).
+    validate_template_vars_known(glob_idx, glob_pattern)?;
 
     let workdir_repopath = RepoPathBuf::new(b"");
     let workdir = repo
         .resolve_workdir(&workdir_repopath)
         .canonicalize()
         .map_err(|e| ResolverError::InvalidPath {
-            unit: format!("[[release_unit_glob #{glob_idx}]]"),
-            path: cfg.glob.clone(),
+            unit: format!("[release_unit.{config_key}]"),
+            path: glob_pattern.clone(),
             reason: format!("repo workdir canonicalize failed: {e}"),
         })?;
 
-    let pattern_abs = workdir.join(&cfg.glob);
+    let pattern_abs = workdir.join(glob_pattern);
     let pattern_str = pattern_abs.to_string_lossy().to_string();
 
     let mut units = Vec::new();
@@ -233,8 +293,8 @@ fn expand_glob(
         Ok(e) => e,
         Err(err) => {
             return Err(ResolverError::InvalidPath {
-                unit: format!("[[release_unit_glob #{glob_idx}]]"),
-                path: cfg.glob.clone(),
+                unit: format!("[release_unit.{config_key}]"),
+                path: glob_pattern.clone(),
                 reason: format!("invalid glob pattern: {err}"),
             });
         }
@@ -249,17 +309,15 @@ fn expand_glob(
         let matched_repopath =
             repo.convert_path(&entry)
                 .map_err(|e| ResolverError::InvalidPath {
-                    unit: format!("[[release_unit_glob #{glob_idx}]]"),
+                    unit: format!("[release_unit.{config_key}]"),
                     path: entry.display().to_string(),
                     reason: format!("convert_path: {e}"),
                 })?;
 
         let ctx = TemplateCtx::from_matched_path(&matched_repopath);
 
-        // Apply templates to every templated field.
-        let unit_name = substitute(glob_idx, &cfg.name, &ctx)?;
-        let manifests_paths_templated: Vec<String> = cfg
-            .manifests
+        let unit_name = substitute(glob_idx, name_template, &ctx)?;
+        let manifests_paths_templated: Vec<String> = templates
             .iter()
             .map(|m| substitute(glob_idx, m, &ctx))
             .collect::<Result<Vec<_>, _>>()?;
@@ -274,7 +332,6 @@ fn expand_glob(
             .map(|s| substitute(glob_idx, s, &ctx))
             .collect::<Result<Vec<_>, _>>()?;
 
-        // Resolve manifests via first-existing-wins.
         let chosen_manifest = pick_first_existing(
             &unit_name,
             &manifests_paths_templated,
@@ -282,8 +339,6 @@ fn expand_glob(
             repo,
         )?;
 
-        // Build ManifestFile entries. For glob form, version_field is
-        // either explicitly set or derived from the ecosystem.
         let version_field_key = match &cfg.version_field {
             Some(s) => s.clone(),
             None => default_version_field_for_ecosystem(&cfg.ecosystem).to_string(),
@@ -682,7 +737,7 @@ fn detect_name_collisions(units: &[ResolvedReleaseUnit]) -> Result<(), ResolverE
         let name = r.unit.name.clone();
         let path_label = match &r.origin {
             ResolveOrigin::Explicit { config_index } => {
-                format!("[[release_unit]] #{config_index}")
+                format!("[release_unit] #{config_index}")
             }
             ResolveOrigin::Glob { matched_path, .. } => matched_path.escaped().to_string(),
             ResolveOrigin::Detected { detector } => format!("detector {detector}"),

@@ -107,13 +107,22 @@ pub fn emit_all(
                 HexagonalPrimary::Workers => "workers",
                 HexagonalPrimary::BaseName => "bin",
             };
+            // Pick a stable config-key name for the glob entry from
+            // the parent path (e.g. `apps/services/*` → `services`).
+            // The TOML key is just an identifier; the per-match unit
+            // name comes from the `name = "{basename}"` template.
+            let parent_basename = parent
+                .rsplit('/')
+                .next()
+                .filter(|s| !s.is_empty())
+                .unwrap_or("services");
             let glob_value = toml_quote(&format!("{parent}/*"));
             let manifests_value = toml_quote(&format!("{{path}}/crates/{primary_str}/Cargo.toml"));
             let fallback_value = toml_quote("{path}/crates/workers/Cargo.toml");
             let satellites_value = toml_quote("{path}/crates");
             let name_value = toml_quote("{basename}");
             snippet.push_str(&format!(
-                "\n# Auto-detected {n} hexagonal cargo services under {parent}/*\n[[release_unit_glob]]\nglob = {glob_value}\necosystem = \"cargo\"\nmanifests = [{manifests_value}]\nfallback_manifests = [{fallback_value}]\nsatellites = [{satellites_value}]\nname = {name_value}\n",
+                "\n# Auto-detected {n} hexagonal cargo services under {parent}/*\n[release_unit.{parent_basename}]\necosystem = \"cargo\"\nglob = {glob_value}\nname = {name_value}\nmanifests = [{manifests_value}]\nfallback_manifests = [{fallback_value}]\nsatellites = [{satellites_value}]\n",
                 n = matches.len(),
             ));
         } else {
@@ -135,11 +144,10 @@ pub fn emit_all(
                     }
                 };
                 let basename = path.rsplit('/').next().unwrap_or("unit");
-                let name_q = toml_quote(basename);
                 let satellites_q = toml_quote(&format!("{path}/crates"));
                 let manifest_q = toml_quote(&format!("{path}/crates/{primary_str}/Cargo.toml"));
                 snippet.push_str(&format!(
-                    "\n[[release_unit]]\nname = {name_q}\necosystem = \"cargo\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {manifest_q}\nversion_field = \"cargo_toml\"\n",
+                    "\n[release_unit.{basename}]\necosystem = \"cargo\"\nsatellites = [{satellites_q}]\nmanifests = [{{ path = {manifest_q}, version_field = \"cargo_toml\" }}]\n",
                 ));
             }
         }

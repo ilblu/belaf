@@ -16,7 +16,7 @@ use petgraph::{
 use std::collections::{HashMap, HashSet};
 
 use crate::core::{
-    config::syntax::GroupConfig,
+    config::syntax::ResolvedGroupConfig,
     errors::Result,
     git::repository::{RepoHistory, Repository},
     group::{Group, GroupId, GroupSet},
@@ -282,7 +282,7 @@ impl ReleaseUnitGraphBuilder {
     /// graph's user-facing names; an unknown name is a hard error.
     pub fn complete_loading_with_groups(
         mut self,
-        group_configs: &[GroupConfig],
+        group_configs: &[ResolvedGroupConfig],
     ) -> Result<ReleaseUnitGraph> {
         // The first order of business is to determine every project's
         // user-facing name using progressive disambiguation with qualified names.
@@ -462,7 +462,7 @@ impl ReleaseUnitGraphBuilder {
         for gc in group_configs {
             let id = atry!(
                 GroupId::new(&gc.id);
-                ["invalid `[[group]]` id `{}` in belaf/config.toml", gc.id]
+                ["invalid `[group.{}]` id in belaf/config.toml", gc.id]
             );
             let mut members = Vec::with_capacity(gc.members.len());
             for member_name in &gc.members {

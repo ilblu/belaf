@@ -402,9 +402,10 @@ fn maven_tag_format_uses_slash_not_colon() {
 /// by user-facing name.
 #[test]
 fn release_unit_tag_format_lookup_by_name() {
+    use belaf::core::config::NamedReleaseUnitConfig;
     use belaf::core::release_unit::resolver::resolve;
     use belaf::core::release_unit::syntax::{
-        ExplicitReleaseUnitConfig, ManifestFileConfig, SourceConfig,
+        ManifestFileConfig, ManifestList, ReleaseUnitConfig,
     };
 
     let repo_path =
@@ -423,23 +424,27 @@ fn release_unit_tag_format_lookup_by_name() {
     )
     .unwrap();
 
-    let unit = ExplicitReleaseUnitConfig {
+    let unit = NamedReleaseUnitConfig {
         name: "my-crate".into(),
-        ecosystem: "cargo".into(),
-        source: SourceConfig {
-            manifests: vec![ManifestFileConfig {
+        config: ReleaseUnitConfig {
+            ecosystem: "cargo".into(),
+            name: None,
+            glob: None,
+            manifests: Some(ManifestList::Explicit(vec![ManifestFileConfig {
                 path: "crates/my-crate/Cargo.toml".into(),
                 ecosystem: None,
                 version_field: "cargo_toml".into(),
                 regex_pattern: None,
                 regex_replace: None,
-            }],
+            }])),
             external: None,
+            fallback_manifests: vec![],
+            version_field: None,
+            satellites: Vec::new(),
+            tag_format: Some("custom-{name}-v{version}".into()),
+            visibility: None,
+            cascade_from: None,
         },
-        satellites: Vec::new(),
-        tag_format: Some("custom-{name}-v{version}".into()),
-        visibility: None,
-        cascade_from: None,
     };
 
     let repo = belaf::core::git::repository::Repository::open_with(
@@ -451,12 +456,12 @@ fn release_unit_tag_format_lookup_by_name() {
         },
     )
     .unwrap();
-    let resolved = resolve(&repo, &[unit], &[]).unwrap();
+    let resolved = resolve(&repo, &[unit]).unwrap();
     assert_eq!(resolved.len(), 1);
     assert_eq!(
         resolved[0].unit.tag_format.as_deref(),
         Some("custom-{name}-v{version}"),
-        "ResolvedReleaseUnit must carry the tag_format from [[release_unit]]"
+        "ResolvedReleaseUnit must carry the tag_format from [release_unit.<name>]"
     );
     let _ = std::fs::remove_dir_all(&repo_path);
 }

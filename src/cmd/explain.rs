@@ -80,7 +80,7 @@ pub fn run(format: Option<ExplainOutputFormat>) -> Result<i32> {
     let cfg = ConfigurationFile::get(&cfg_path)
         .with_context(|| format!("failed to load config at {}", cfg_path.display()))?;
 
-    let resolved = resolve(&repo, &cfg.release_units, &cfg.release_unit_globs)
+    let resolved = resolve(&repo, &cfg.release_units)
         .map_err(|e| anyhow::anyhow!("release_unit resolution: {e}"))?;
 
     let json_mode = matches!(format, Some(ExplainOutputFormat::Json));

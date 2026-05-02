@@ -167,6 +167,32 @@ pub enum ResolverError {
         path: String,
         reason: String,
     },
+
+    /// `name` field set on a non-glob `[release_unit.<name>]` entry —
+    /// the TOML key already drives the unit name; `name` is reserved
+    /// for the glob-form template.
+    #[error("release_unit `{unit}`: `name` field is only valid on glob-form entries (those with a `glob` field). The TOML key `[release_unit.{unit}]` already names the unit.")]
+    ExplicitUnitHasNameTemplate { unit: String },
+
+    /// Glob-only field (`fallback_manifests` or `version_field`) set
+    /// on a non-glob entry, or template-form `manifests = ["..."]`
+    /// used without `glob`.
+    #[error("release_unit `{unit}`: `fallback_manifests`, top-level `version_field`, and template-string `manifests = [\"…\"]` are only valid on glob-form entries (those with a `glob` field).")]
+    ExplicitUnitHasGlobOnlyField { unit: String },
+
+    /// Glob-form entry with `external` set. Not supported because
+    /// each match would need its own command.
+    #[error("release_unit `{config_key}`: glob-form entries cannot use `external` — each match would need its own command. Use template-form `manifests = [\"…\"]` instead.")]
+    GlobUnitHasExternal { config_key: String },
+
+    /// Glob-form entry with explicit-form `manifests = [{{...}}]`
+    /// (inline tables) instead of template strings.
+    #[error("release_unit `{config_key}`: glob-form entries must use template-string `manifests = [\"{{path}}/Cargo.toml\"]`, not the explicit `[{{ path = …, version_field = … }}]` form.")]
+    GlobUnitHasExplicitManifests { config_key: String },
+
+    /// Glob-form entry without a `name` template field.
+    #[error("release_unit `{config_key}`: glob-form entries must set `name = \"{{basename}}\"` (or similar) so each match gets a distinct unit name.")]
+    GlobUnitMissingNameTemplate { config_key: String },
 }
 
 impl ResolverError {
@@ -201,6 +227,11 @@ impl ResolverError {
             Self::TwoGlobsSameName { .. } => "two_globs_same_name",
             Self::UnknownCascadeBumpStrategy { .. } => "unknown_cascade_bump_strategy",
             Self::InvalidPath { .. } => "invalid_path",
+            Self::ExplicitUnitHasNameTemplate { .. } => "explicit_unit_has_name_template",
+            Self::ExplicitUnitHasGlobOnlyField { .. } => "explicit_unit_has_glob_only_field",
+            Self::GlobUnitHasExternal { .. } => "glob_unit_has_external",
+            Self::GlobUnitHasExplicitManifests { .. } => "glob_unit_has_explicit_manifests",
+            Self::GlobUnitMissingNameTemplate { .. } => "glob_unit_missing_name_template",
         }
     }
 }

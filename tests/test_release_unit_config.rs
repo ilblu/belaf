@@ -1,16 +1,18 @@
-//! Phase A.5 — end-to-end TOML round-trip for the new release_unit config
-//! tables. Verifies that `[[release_unit]]`, `[[release_unit_glob]]`,
-//! `[ignore_paths]`, `[allow_uncovered]`, and `[ecosystems.*]` all parse,
-//! every field is preserved through the `ConfigurationFile::get` →
-//! `into_toml` → re-parse pipeline, and all 5 `VersionFieldSpec` variants
-//! plus both `VersionSource` variants survive the round-trip.
+//! End-to-end TOML round-trip for the 1.0 release_unit config syntax.
+//! Verifies that `[release_unit.<name>]` (named-entry, with optional
+//! `glob` field), `[ignore_paths]`, `[allow_uncovered]`, and
+//! `[ecosystems.*]` all parse, every field is preserved through
+//! `ConfigurationFile::get` → `into_toml` → re-parse, and all 5
+//! `VersionFieldSpec` variants plus both source-form variants
+//! (manifests / external) survive the round-trip.
 
 use std::fs;
 
 use belaf::core::config::ConfigurationFile;
+use belaf::core::release_unit::syntax::ManifestList;
 use tempfile::TempDir;
 
-/// User-supplied overlay covering every section we added in Phase A.
+/// User-supplied overlay covering every section we ship in 1.0.
 /// `ConfigurationFile::get` merges this on top of the embedded baseline,
 /// so the existing `repo`/`changelog`/`bump`/`commit_attribution` fields
 /// don't need to be set here.
@@ -18,61 +20,46 @@ const FULL_OVERLAY: &str = r#"
 # ---------------------------------------------------------------------------
 # Explicit ReleaseUnit — Manifests source
 # ---------------------------------------------------------------------------
-[[release_unit]]
-name = "aura"
+[release_unit.aura]
 ecosystem = "cargo"
 satellites = ["apps/services/aura/crates"]
 tag_format = "{name}-v{version}"
 visibility = "public"
-
-[[release_unit.source.manifests]]
-path = "apps/services/aura/crates/bin/Cargo.toml"
-version_field = "cargo_toml"
+manifests = [
+  { path = "apps/services/aura/crates/bin/Cargo.toml", version_field = "cargo_toml" },
+]
 
 # ---------------------------------------------------------------------------
 # Multi-manifest ReleaseUnit (Tauri legacy)
 # ---------------------------------------------------------------------------
-[[release_unit]]
-name = "desktop"
+[release_unit.desktop]
 ecosystem = "tauri"
 satellites = ["apps/clients/desktop"]
-
-[[release_unit.source.manifests]]
-path = "apps/clients/desktop/package.json"
-ecosystem = "npm"
-version_field = "npm_package_json"
-
-[[release_unit.source.manifests]]
-path = "apps/clients/desktop/src-tauri/Cargo.toml"
-ecosystem = "cargo"
-version_field = "cargo_toml"
-
-[[release_unit.source.manifests]]
-path = "apps/clients/desktop/src-tauri/tauri.conf.json"
-version_field = "tauri_conf_json"
+manifests = [
+  { path = "apps/clients/desktop/package.json", ecosystem = "npm", version_field = "npm_package_json" },
+  { path = "apps/clients/desktop/src-tauri/Cargo.toml", ecosystem = "cargo", version_field = "cargo_toml" },
+  { path = "apps/clients/desktop/src-tauri/tauri.conf.json", version_field = "tauri_conf_json" },
+]
 
 # ---------------------------------------------------------------------------
 # JVM library SDK with cascade — covers GradleProperties + CascadeRule
 # ---------------------------------------------------------------------------
-[[release_unit]]
-name = "sdk-kotlin"
+[release_unit.sdk-kotlin]
 ecosystem = "jvm-library"
 satellites = ["sdks/kotlin"]
 cascade_from = { source = "schema", bump = "floor_minor" }
-
-[[release_unit.source.manifests]]
-path = "sdks/kotlin/gradle.properties"
-version_field = "gradle_properties"
+manifests = [
+  { path = "sdks/kotlin/gradle.properties", version_field = "gradle_properties" },
+]
 
 # ---------------------------------------------------------------------------
 # External-source ReleaseUnit
 # ---------------------------------------------------------------------------
-[[release_unit]]
-name = "schema"
+[release_unit.schema]
 ecosystem = "external"
 satellites = ["proto/events"]
 
-[release_unit.source.external]
+[release_unit.schema.external]
 tool = "buf"
 read_command = "buf mod info --format json"
 write_command = "buf mod set-version {version}"
@@ -82,39 +69,34 @@ timeout_sec = 90
 # ---------------------------------------------------------------------------
 # GenericRegex VersionFieldSpec (escape hatch)
 # ---------------------------------------------------------------------------
-[[release_unit]]
-name = "version-txt"
+[release_unit.version-txt]
 ecosystem = "external"
-
-[[release_unit.source.manifests]]
-path = "config/version.txt"
-version_field = "generic_regex"
-regex_pattern = '^VERSION=(\d+\.\d+\.\d+)$'
-regex_replace = "VERSION={version}"
+manifests = [
+  { path = "config/version.txt", version_field = "generic_regex", regex_pattern = '^VERSION=(\d+\.\d+\.\d+)$', regex_replace = "VERSION={version}" },
+]
 
 # ---------------------------------------------------------------------------
 # Hidden satellite-aggregator unit (Visibility::Hidden)
 # ---------------------------------------------------------------------------
-[[release_unit]]
-name = "internal-aggregator"
+[release_unit.internal-aggregator]
 ecosystem = "cargo"
 satellites = ["packages/internal"]
 visibility = "hidden"
-
-[[release_unit.source.manifests]]
-path = "packages/internal/Cargo.toml"
-version_field = "cargo_toml"
+manifests = [
+  { path = "packages/internal/Cargo.toml", version_field = "cargo_toml" },
+]
 
 # ---------------------------------------------------------------------------
-# Glob form — services-as-bundles pattern
+# Glob form — services-as-bundles pattern. Same `[release_unit.<name>]`
+# table, just with `glob` set.
 # ---------------------------------------------------------------------------
-[[release_unit_glob]]
-glob = "apps/services/*"
+[release_unit.services]
 ecosystem = "cargo"
+glob = "apps/services/*"
+name = "{basename}"
 manifests = ["{path}/crates/bin/Cargo.toml"]
 fallback_manifests = ["{path}/crates/workers/Cargo.toml"]
 satellites = ["{path}/crates"]
-name = "{basename}"
 
 # ---------------------------------------------------------------------------
 # ignore_paths and allow_uncovered (distinct semantics)
@@ -151,23 +133,23 @@ fn full_overlay_parses_and_preserves_every_field() {
 
     let cfg = ConfigurationFile::get(&cfg_path).expect("must parse full overlay");
 
-    // 6 explicit release units (5 distinct shapes + 1 hidden aggregator)
+    // 7 release units (6 explicit + 1 glob), all under one named-entry table.
     assert_eq!(
         cfg.release_units.len(),
-        6,
-        "expected 6 explicit release_unit entries"
+        7,
+        "expected 7 release_unit entries (6 explicit + 1 glob)"
     );
 
-    // 1 glob entry
+    let services = cfg
+        .release_units
+        .iter()
+        .find(|u| u.name == "services")
+        .expect("services glob entry must be present");
+    assert!(services.config.is_glob());
+    assert_eq!(services.config.glob.as_deref(), Some("apps/services/*"));
+    assert_eq!(services.config.name.as_deref(), Some("{basename}"));
     assert_eq!(
-        cfg.release_unit_globs.len(),
-        1,
-        "expected 1 release_unit_glob entry"
-    );
-    assert_eq!(cfg.release_unit_globs[0].glob, "apps/services/*");
-    assert_eq!(cfg.release_unit_globs[0].name, "{basename}");
-    assert_eq!(
-        cfg.release_unit_globs[0].fallback_manifests,
+        services.config.fallback_manifests,
         vec!["{path}/crates/workers/Cargo.toml"]
     );
 
@@ -192,6 +174,15 @@ fn full_overlay_parses_and_preserves_every_field() {
     );
 }
 
+fn explicit_manifests(
+    list: Option<&ManifestList>,
+) -> &[belaf::core::release_unit::syntax::ManifestFileConfig] {
+    match list {
+        Some(ManifestList::Explicit(m)) => m.as_slice(),
+        _ => &[],
+    }
+}
+
 #[test]
 fn manifests_source_aura() {
     let dir = TempDir::new().unwrap();
@@ -204,14 +195,15 @@ fn manifests_source_aura() {
         .iter()
         .find(|u| u.name == "aura")
         .expect("aura must be present");
-    assert_eq!(aura.ecosystem, "cargo");
-    assert_eq!(aura.source.manifests.len(), 1);
-    assert!(aura.source.external.is_none());
-    assert_eq!(aura.source.manifests[0].version_field, "cargo_toml");
-    assert_eq!(aura.tag_format.as_deref(), Some("{name}-v{version}"));
-    assert_eq!(aura.visibility.as_deref(), Some("public"));
+    assert_eq!(aura.config.ecosystem, "cargo");
+    let manifests = explicit_manifests(aura.config.manifests.as_ref());
+    assert_eq!(manifests.len(), 1);
+    assert!(aura.config.external.is_none());
+    assert_eq!(manifests[0].version_field, "cargo_toml");
+    assert_eq!(aura.config.tag_format.as_deref(), Some("{name}-v{version}"));
+    assert_eq!(aura.config.visibility.as_deref(), Some("public"));
     assert_eq!(
-        aura.satellites,
+        aura.config.satellites,
         vec!["apps/services/aura/crates".to_string()]
     );
 }
@@ -228,18 +220,14 @@ fn multi_manifest_tauri_legacy() {
         .iter()
         .find(|u| u.name == "desktop")
         .expect("desktop must be present");
-    assert_eq!(desktop.ecosystem, "tauri");
+    assert_eq!(desktop.config.ecosystem, "tauri");
+    let manifests = explicit_manifests(desktop.config.manifests.as_ref());
     assert_eq!(
-        desktop.source.manifests.len(),
+        manifests.len(),
         3,
         "Tauri legacy multi-file = 3 manifests in lockstep"
     );
-    let kinds: Vec<_> = desktop
-        .source
-        .manifests
-        .iter()
-        .map(|m| m.version_field.as_str())
-        .collect();
+    let kinds: Vec<_> = manifests.iter().map(|m| m.version_field.as_str()).collect();
     assert_eq!(
         kinds,
         vec!["npm_package_json", "cargo_toml", "tauri_conf_json"]
@@ -259,14 +247,14 @@ fn external_source_with_custom_timeout() {
         .find(|u| u.name == "schema")
         .expect("schema must be present");
     let ext = schema
-        .source
+        .config
         .external
         .as_ref()
         .expect("schema must have external source");
     assert_eq!(ext.tool, "buf");
     assert_eq!(ext.timeout_sec, 90);
     assert_eq!(ext.cwd.as_deref(), Some("proto/events"));
-    assert!(schema.source.manifests.is_empty());
+    assert!(schema.config.manifests.is_none());
 }
 
 #[test]
@@ -282,6 +270,7 @@ fn cascade_rule_floor_minor() {
         .find(|u| u.name == "sdk-kotlin")
         .expect("sdk-kotlin must be present");
     let cascade = kotlin
+        .config
         .cascade_from
         .as_ref()
         .expect("kotlin SDK must have cascade_from");
@@ -301,7 +290,8 @@ fn generic_regex_with_pattern_and_replace() {
         .iter()
         .find(|u| u.name == "version-txt")
         .expect("version-txt must be present");
-    let mf = &vtxt.source.manifests[0];
+    let manifests = explicit_manifests(vtxt.config.manifests.as_ref());
+    let mf = &manifests[0];
     assert_eq!(mf.version_field, "generic_regex");
     assert_eq!(
         mf.regex_pattern.as_deref(),
@@ -322,7 +312,7 @@ fn hidden_visibility() {
         .iter()
         .find(|u| u.name == "internal-aggregator")
         .expect("internal-aggregator must be present");
-    assert_eq!(agg.visibility.as_deref(), Some("hidden"));
+    assert_eq!(agg.config.visibility.as_deref(), Some("hidden"));
 }
 
 #[test]
@@ -331,18 +321,14 @@ fn into_toml_round_trip_preserves_all_release_units() {
     let cfg_path = dir.path().join("config.toml");
     fs::write(&cfg_path, FULL_OVERLAY).unwrap();
 
-    // First parse — embedded defaults + overlay
     let cfg1 = ConfigurationFile::get(&cfg_path).unwrap();
 
-    // Serialise back via into_toml
     let serialised = cfg1.clone().into_toml().expect("into_toml must serialise");
 
-    // Write to a fresh temp file and re-parse
     let cfg2_path = dir.path().join("roundtrip.toml");
     fs::write(&cfg2_path, &serialised).unwrap();
     let cfg2 = ConfigurationFile::get(&cfg2_path).unwrap();
 
-    // Every release_unit must round-trip
     assert_eq!(
         cfg1.release_units.len(),
         cfg2.release_units.len(),
@@ -350,16 +336,17 @@ fn into_toml_round_trip_preserves_all_release_units() {
     );
     for (a, b) in cfg1.release_units.iter().zip(cfg2.release_units.iter()) {
         assert_eq!(a.name, b.name);
-        assert_eq!(a.ecosystem, b.ecosystem);
-        assert_eq!(a.source.manifests.len(), b.source.manifests.len());
-        assert_eq!(a.source.external.is_some(), b.source.external.is_some());
-        assert_eq!(a.satellites, b.satellites);
-        assert_eq!(a.tag_format, b.tag_format);
-        assert_eq!(a.visibility, b.visibility);
+        assert_eq!(a.config.ecosystem, b.config.ecosystem);
+        assert_eq!(
+            explicit_manifests(a.config.manifests.as_ref()).len(),
+            explicit_manifests(b.config.manifests.as_ref()).len()
+        );
+        assert_eq!(a.config.external.is_some(), b.config.external.is_some());
+        assert_eq!(a.config.satellites, b.config.satellites);
+        assert_eq!(a.config.tag_format, b.config.tag_format);
+        assert_eq!(a.config.visibility, b.config.visibility);
     }
 
-    // Glob, ignore_paths, allow_uncovered, ecosystems — all preserved
-    assert_eq!(cfg1.release_unit_globs.len(), cfg2.release_unit_globs.len());
     assert_eq!(cfg1.ignore_paths.paths, cfg2.ignore_paths.paths);
     assert_eq!(cfg1.allow_uncovered.paths, cfg2.allow_uncovered.paths);
     assert_eq!(
@@ -370,15 +357,12 @@ fn into_toml_round_trip_preserves_all_release_units() {
 
 #[test]
 fn no_release_unit_section_means_empty_collections() {
-    // Verify backward compatibility: a config file without ANY of the new
-    // sections still parses cleanly with empty collections.
     let dir = TempDir::new().unwrap();
     let cfg_path = dir.path().join("config.toml");
     fs::write(&cfg_path, "# empty user overlay\n").unwrap();
 
     let cfg = ConfigurationFile::get(&cfg_path).unwrap();
     assert!(cfg.release_units.is_empty());
-    assert!(cfg.release_unit_globs.is_empty());
     assert!(cfg.ignore_paths.paths.is_empty());
     assert!(cfg.allow_uncovered.paths.is_empty());
 }

@@ -69,13 +69,12 @@ fn emit_block(m: &DetectorMatch, snippet: &mut String, counters: &mut DetectionC
     };
     let path = m.path.escaped();
     let name_raw = path.rsplit('/').next().unwrap_or("desktop");
-    let name_q = toml_quote(name_raw);
     let satellites_q = toml_quote(&path);
     if single_source {
         counters.tauri_single_source += 1;
         let manifest_q = toml_quote(&format!("{path}/package.json"));
         snippet.push_str(&format!(
-            "\n[[release_unit]]\nname = {name_q}\necosystem = \"tauri\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {manifest_q}\nversion_field = \"npm_package_json\"\n",
+            "\n[release_unit.{name_raw}]\necosystem = \"tauri\"\nsatellites = [{satellites_q}]\nmanifests = [{{ path = {manifest_q}, version_field = \"npm_package_json\" }}]\n",
         ));
     } else {
         counters.tauri_legacy += 1;
@@ -83,7 +82,7 @@ fn emit_block(m: &DetectorMatch, snippet: &mut String, counters: &mut DetectionC
         let cargo_q = toml_quote(&format!("{path}/src-tauri/Cargo.toml"));
         let conf_q = toml_quote(&format!("{path}/src-tauri/tauri.conf.json"));
         snippet.push_str(&format!(
-            "\n# Tauri legacy multi-file (3 manifests in lockstep)\n[[release_unit]]\nname = {name_q}\necosystem = \"tauri\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {pkg_q}\nversion_field = \"npm_package_json\"\n[[release_unit.source.manifests]]\npath = {cargo_q}\nversion_field = \"cargo_toml\"\n[[release_unit.source.manifests]]\npath = {conf_q}\nversion_field = \"tauri_conf_json\"\n",
+            "\n# Tauri legacy multi-file (3 manifests in lockstep)\n[release_unit.{name_raw}]\necosystem = \"tauri\"\nsatellites = [{satellites_q}]\nmanifests = [\n  {{ path = {pkg_q}, version_field = \"npm_package_json\" }},\n  {{ path = {cargo_q}, version_field = \"cargo_toml\" }},\n  {{ path = {conf_q}, version_field = \"tauri_conf_json\" }},\n]\n",
         ));
     }
 }

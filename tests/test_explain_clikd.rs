@@ -82,35 +82,29 @@ initial_tag = "0.1.0"
 strategy = "scope_first"
 scope_matching = "smart"
 
-[[release_unit_glob]]
-glob = "apps/services/*"
+[release_unit.services]
 ecosystem = "cargo"
+glob = "apps/services/*"
+name = "{basename}"
 manifests = ["{path}/crates/bin/Cargo.toml"]
 fallback_manifests = ["{path}/crates/workers/Cargo.toml"]
 satellites = ["{path}/crates"]
-name = "{basename}"
 
-[[release_unit]]
-name = "desktop"
+[release_unit.desktop]
 ecosystem = "tauri"
 satellites = ["apps/desktop"]
-[[release_unit.source.manifests]]
-path = "apps/desktop/package.json"
-version_field = "npm_package_json"
-[[release_unit.source.manifests]]
-path = "apps/desktop/src-tauri/Cargo.toml"
-version_field = "cargo_toml"
-[[release_unit.source.manifests]]
-path = "apps/desktop/src-tauri/tauri.conf.json"
-version_field = "tauri_conf_json"
+manifests = [
+  { path = "apps/desktop/package.json", version_field = "npm_package_json" },
+  { path = "apps/desktop/src-tauri/Cargo.toml", version_field = "cargo_toml" },
+  { path = "apps/desktop/src-tauri/tauri.conf.json", version_field = "tauri_conf_json" },
+]
 
-[[release_unit]]
-name = "kotlin-sdk"
+[release_unit.kotlin-sdk]
 ecosystem = "jvm-library"
 satellites = ["sdks/kotlin"]
-[[release_unit.source.manifests]]
-path = "sdks/kotlin/gradle.properties"
-version_field = "gradle_properties"
+manifests = [
+  { path = "sdks/kotlin/gradle.properties", version_field = "gradle_properties" },
+]
 
 [allow_uncovered]
 paths = ["apps/mobile-ios/", "sdks/typescript/", "sdks/swift/"]
