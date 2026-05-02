@@ -6,7 +6,6 @@
 //! returned. Concrete steps live in their own modules.
 
 pub mod confirmation;
-pub mod glyphs;
 pub mod preset;
 pub mod single_mobile;
 pub mod state;

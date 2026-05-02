@@ -1,28 +1,27 @@
-//! Unified ReleaseUnit selection step.
+//! Init-wizard adapter around [`crate::core::ui::release_unit_view`].
 //!
-//! One screen with three categories — auto-detected bundles, manual
-//! standalone projects, externally-managed mobile apps — and one
-//! Space-toggle interaction model:
+//! Owns only:
+//! - cursor + initialisation state
+//! - key handling (Space/a/n/Enter/Esc)
+//! - flush back to `WizardState` on confirm + routing to next step
 //!
-//!   🔍 Bundles               (multi-manifest auto-detected units)
-//!   📦 Standalone            (single-manifest projects from loaders)
-//!   📱 Externally-managed    (mobile apps; auto-allow_uncovered, read-only)
-//!
-//! Enter confirms; toggled-off Bundle items land in
-//! `state.detector_excluded` (so they get neither a `[[release_unit]]`
-//! block nor drift firing on them). Toggled-off Standalone items have
-//! their `selected` field set to false.
+//! Classification, hint annotations, and rendering live in the
+//! shared component — the same code path the prepare and dashboard
+//! adapters consume.
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{Block, Borders, Paragraph},
     Frame,
 };
 
-use crate::core::release_unit::detector::{BundleKind, DetectedShape, ExtKind};
+use crate::core::ui::glyphs;
+use crate::core::ui::release_unit_view::{
+    render_summary, ReleaseUnitView, RenderMode, RowIdx, StandaloneEntry, ViewContext,
+};
 
 use super::{
     preset::PresetSelectionStep,
@@ -32,56 +31,13 @@ use super::{
     upstream::UpstreamConfigStep,
 };
 
-/// Category a row belongs to. Drives the indicator emoji + which
-/// underlying state slot the toggle writes through.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-enum RowCategory {
-    Bundle,
-    Standalone,
-    ExternallyManaged,
-}
-
-/// One row in the unified view. Holds enough info to render and to
-/// route the toggle action back to the right state field.
-#[derive(Clone, Debug)]
-struct Row {
-    category: RowCategory,
-    /// Display label shown to the user.
-    label: String,
-    /// Secondary text rendered next to the label (version / platform / kind).
-    secondary: String,
-    /// True if the row is currently selected (will be emitted /
-    /// included on confirm). False rows go to detector_excluded
-    /// (Bundle), or have `selected = false` (Standalone). Mobile
-    /// (ExternallyManaged) is not togglable.
-    selected: bool,
-    /// Backref index — used on confirm to mutate the right
-    /// `state.detection.matches[i]` or `state.standalone_units[i]`. Mobile
-    /// rows do not need a backref because they're read-only.
-    backref: BackRef,
-    /// Loader ecosystem (`cargo`, `npm`, `pypa`, …) — drives the
-    /// per-row glyph in `BELAF_ICONS=nerd` mode. Empty in the
-    /// default Unicode mode (no ecosystem column rendered).
-    ecosystem: Option<String>,
-}
-
-#[derive(Copy, Clone, Debug)]
-enum BackRef {
-    /// Index into `state.detection.matches`.
-    Detection(usize),
-    /// Index into `state.standalone_units`.
-    Standalone(usize),
-    /// Mobile app — no backref needed, lands in [allow_uncovered]
-    /// automatically via auto_detect snippet emission.
-    Mobile,
-}
-
 #[derive(Default)]
 pub struct UnifiedSelectionStep {
-    /// Lazily-built rows mirror, regenerated on every render so it
+    /// Lazily-built view, regenerated on every initialisation so it
     /// stays in lockstep with state mutations.
-    rows: Vec<Row>,
-    /// Cursor index into rows.
+    view: ReleaseUnitView,
+    /// Cursor index into the flat row order returned by
+    /// [`ReleaseUnitView::flat_indices`].
     cursor: usize,
     initialised: bool,
 }
@@ -91,170 +47,47 @@ impl UnifiedSelectionStep {
         Self::default()
     }
 
-    fn rebuild_rows(&mut self, state: &WizardState) {
-        self.rows.clear();
-
-        // Three-class dispatch: each detector match falls into exactly
-        // one [`DetectedShape`] arm. Bundles produce togglable Bundle
-        // rows + hide their inner manifests. Hints are *not* rendered
-        // as rows — they decorate Standalone rows (Schicht 3 will
-        // surface the annotation; for now they're suppressed). Mobile
-        // apps become read-only ExternallyManaged rows. This avoids
-        // the 3.0.x regression where `SdkCascadeMember` / `NpmWorkspace`
-        // / `SingleProject` / `NestedMonorepo` Hints were accidentally
-        // rendered as Bundle rows and hid the matching Standalones.
-        let mut bundle_seen: std::collections::HashSet<crate::core::git::repository::RepoPathBuf> =
-            std::collections::HashSet::new();
-        let mut bundle_paths: Vec<String> = Vec::new();
-        for (idx, m) in state.detection.matches.iter().enumerate() {
-            match &m.shape {
-                DetectedShape::Bundle(b) => {
-                    if !bundle_seen.insert(m.path.clone()) {
-                        continue;
-                    }
-                    self.rows.push(Row {
-                        category: RowCategory::Bundle,
-                        label: m.path.escaped().to_string(),
-                        secondary: bundle_kind_label(b),
-                        selected: !state.detector_excluded.contains(&m.path),
-                        backref: BackRef::Detection(idx),
-                        ecosystem: Some(ecosystem_for_bundle(b).to_string()),
-                    });
-                    bundle_paths.push(m.path.escaped().to_string());
-                }
-                DetectedShape::Hint(_) => {
-                    // Hints decorate Standalones (Schicht 3) — they
-                    // never produce a Bundle row, never hide Standalones,
-                    // never appear as togglable.
-                }
-                DetectedShape::ExternallyManaged(_) => {
-                    // Handled in the dedicated loop below to keep the
-                    // ExternallyManaged section visually grouped at
-                    // the bottom of the list.
-                }
-            }
-        }
-
-        // Standalone: manual project list. Skip units whose path is
-        // already covered by a Bundle — e.g. for a Tauri triplet at
-        // `apps/clients/desktop/` the loader picks up both the outer
-        // `package.json` (npm:desktop) and inner `src-tauri/Cargo.toml`
-        // (cargo:desktop), which would otherwise show up as duplicates
-        // of the Tauri Bundle row.
-        for (idx, p) in state.standalone_units.iter().enumerate() {
-            let covered_by_bundle = bundle_paths
-                .iter()
-                .any(|bp| p.prefix == *bp || p.prefix.starts_with(&format!("{bp}/")));
-            if covered_by_bundle {
-                continue;
-            }
-            self.rows.push(Row {
-                category: RowCategory::Standalone,
-                label: p.name.clone(),
-                secondary: format!("@ {} ({})", p.version, p.prefix),
-                selected: p.selected,
-                backref: BackRef::Standalone(idx),
-                ecosystem: p.ecosystem.clone(),
-            });
-        }
-
-        // Externally managed: mobile apps.
-        for m in state.detection.matches.iter() {
-            if let DetectedShape::ExternallyManaged(ext) = m.shape {
-                let plat = match ext {
-                    ExtKind::MobileIos => "iOS",
-                    ExtKind::MobileAndroid => "Android",
-                };
-                self.rows.push(Row {
-                    category: RowCategory::ExternallyManaged,
-                    label: m.path.escaped().to_string(),
-                    secondary: format!("{plat} app — auto [allow_uncovered]"),
-                    // Mobile rows are always "selected" in the visual
-                    // sense (they go to allow_uncovered) but the user
-                    // can't toggle them off — that lives in config
-                    // post-init.
-                    selected: true,
-                    backref: BackRef::Mobile,
-                    ecosystem: Some(match ext {
-                        ExtKind::MobileIos => "swift".to_string(),
-                        ExtKind::MobileAndroid => "kotlin".to_string(),
-                    }),
-                });
-            }
-        }
-
-        if self.cursor >= self.rows.len() {
+    fn rebuild(&mut self, state: &WizardState) {
+        let standalones: Vec<StandaloneEntry> = state
+            .standalone_units
+            .iter()
+            .map(|u| StandaloneEntry {
+                name: u.name.clone(),
+                version: u.version.clone(),
+                prefix: u.prefix.clone(),
+                selected: u.selected,
+                ecosystem: u.ecosystem.clone(),
+            })
+            .collect();
+        self.view =
+            ReleaseUnitView::from_detection(&state.detection, &standalones, &state.detector_excluded);
+        if self.cursor >= self.view.flat_indices().len() {
             self.cursor = 0;
         }
     }
 
     fn ensure_initialised(&mut self, state: &WizardState) {
         if !self.initialised {
-            self.rebuild_rows(state);
+            self.rebuild(state);
             self.initialised = true;
         }
     }
 
-    fn toggle_current(&mut self) {
-        let Some(row) = self.rows.get_mut(self.cursor) else {
-            return;
-        };
-        if matches!(row.category, RowCategory::ExternallyManaged) {
-            return; // Mobile is read-only.
-        }
-        row.selected = !row.selected;
+    fn current_idx(&self) -> Option<RowIdx> {
+        self.view.flat_indices().get(self.cursor).copied()
     }
 
-    fn select_all_togglable(&mut self) {
-        for row in &mut self.rows {
-            if !matches!(row.category, RowCategory::ExternallyManaged) {
-                row.selected = true;
-            }
-        }
-    }
-
-    fn deselect_all_togglable(&mut self) {
-        for row in &mut self.rows {
-            if !matches!(row.category, RowCategory::ExternallyManaged) {
-                row.selected = false;
-            }
-        }
-    }
-
-    /// Apply the row selection vector back to WizardState — call on
-    /// Enter before returning the routing StepResult.
     fn flush_to_state(&self, state: &mut WizardState) {
         state.detector_accepted = !state.detection.matches.is_empty();
         state.detector_excluded.clear();
-
-        for row in &self.rows {
-            match (row.category, row.backref) {
-                (RowCategory::Bundle, BackRef::Detection(idx)) => {
-                    if !row.selected {
-                        if let Some(m) = state.detection.matches.get(idx) {
-                            state.detector_excluded.insert(m.path.clone());
-                        }
-                    }
-                }
-                (RowCategory::Standalone, BackRef::Standalone(idx)) => {
-                    if let Some(p) = state.standalone_units.get_mut(idx) {
-                        p.selected = row.selected;
-                    }
-                }
-                (RowCategory::ExternallyManaged, _) => { /* mobile: snippet handles allow_uncovered */
-                }
-                _ => { /* mismatched — skip silently */ }
+        for path in self.view.excluded_bundle_paths() {
+            state.detector_excluded.insert(path);
+        }
+        for (idx, selected) in self.view.unit_backrefs() {
+            if let Some(p) = state.standalone_units.get_mut(idx) {
+                p.selected = selected;
             }
         }
-    }
-
-    /// Count togglable rows currently selected (excludes mobile).
-    fn selected_togglable_count(&self) -> usize {
-        self.rows
-            .iter()
-            .filter(|r| !matches!(r.category, RowCategory::ExternallyManaged))
-            .filter(|r| r.selected)
-            .count()
     }
 }
 
@@ -265,7 +98,7 @@ impl Step for UnifiedSelectionStep {
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &WizardState) {
         self.ensure_initialised(state);
-        render(frame, area, &self.rows, self.cursor);
+        render(frame, area, &self.view, self.cursor);
     }
 
     fn handle_event(&mut self, event: &Event, state: &mut WizardState) -> StepResult {
@@ -273,7 +106,7 @@ impl Step for UnifiedSelectionStep {
         let Event::Key(key) = event else {
             return StepResult::Continue;
         };
-        let n = self.rows.len();
+        let n = self.view.flat_indices().len();
 
         match (key.code, key.modifiers) {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('q'), _) => {
@@ -287,28 +120,26 @@ impl Step for UnifiedSelectionStep {
             }
             (KeyCode::Up | KeyCode::Char('k'), _) => {
                 if n > 0 {
-                    self.cursor = if self.cursor == 0 {
-                        n - 1
-                    } else {
-                        self.cursor - 1
-                    };
+                    self.cursor = if self.cursor == 0 { n - 1 } else { self.cursor - 1 };
                 }
                 StepResult::Continue
             }
             (KeyCode::Char(' '), _) => {
-                self.toggle_current();
+                if let Some(idx) = self.current_idx() {
+                    self.view.toggle(idx);
+                }
                 StepResult::Continue
             }
             (KeyCode::Char('a'), _) => {
-                self.select_all_togglable();
+                self.view.set_all_togglable(true);
                 StepResult::Continue
             }
             (KeyCode::Char('n'), _) => {
-                self.deselect_all_togglable();
+                self.view.set_all_togglable(false);
                 StepResult::Continue
             }
             (KeyCode::Enter | KeyCode::Char('y'), _) => {
-                let count = self.selected_togglable_count();
+                let count = self.view.selected_togglable_count();
                 if count == 0 {
                     state.error_message =
                         Some("Please select at least one ReleaseUnit".to_string());
@@ -317,9 +148,7 @@ impl Step for UnifiedSelectionStep {
                 state.error_message = None;
                 self.flush_to_state(state);
 
-                // Routing rule: if the user passed --preset on the CLI
-                // we skip PresetSelection and head straight to
-                // tag-format (single) or upstream-config (multi).
+                // Routing: --preset on the CLI skips PresetSelection.
                 if state.preset_from_cli {
                     if count == 1 {
                         StepResult::Next(Box::new(TagFormatStep::new()))
@@ -336,53 +165,7 @@ impl Step for UnifiedSelectionStep {
     }
 }
 
-/// Map a detector match to the ecosystem identifier used by the
-/// Ecosystem string driving the per-row glyph in `BELAF_ICONS=nerd`
-/// mode. Bundles always pin an ecosystem; the rest of the shapes are
-/// not rendered as rows in this step (Schicht 1 onwards) so they
-/// don't need a mapping here.
-fn ecosystem_for_bundle(b: &BundleKind) -> &'static str {
-    match b {
-        BundleKind::HexagonalCargo { .. } => "hexagonal-cargo",
-        BundleKind::Tauri { .. } => "tauri",
-        BundleKind::JvmLibrary { .. } => "kotlin",
-    }
-}
-
-fn bundle_kind_label(b: &BundleKind) -> String {
-    use crate::core::release_unit::detector::{HexagonalPrimary, JvmVersionSource};
-    match b {
-        BundleKind::HexagonalCargo { primary } => {
-            let p = match primary {
-                HexagonalPrimary::Bin => "bin",
-                HexagonalPrimary::Lib => "lib",
-                HexagonalPrimary::Workers => "workers",
-                HexagonalPrimary::BaseName => "basename",
-            };
-            format!("hexagonal-cargo/{p}")
-        }
-        BundleKind::Tauri { single_source } => {
-            if *single_source {
-                "tauri (single-source)".to_string()
-            } else {
-                "tauri (legacy multi-file)".to_string()
-            }
-        }
-        BundleKind::JvmLibrary { version_source } => {
-            let v = match version_source {
-                JvmVersionSource::GradleProperties => "gradle.properties",
-                JvmVersionSource::BuildGradleKtsLiteral => "build.gradle.kts",
-                JvmVersionSource::PluginManaged => "plugin-managed",
-            };
-            format!("jvm-library/{v}")
-        }
-    }
-}
-
-
-fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
-    use super::glyphs;
-
+fn render(frame: &mut Frame, area: Rect, view: &ReleaseUnitView, cursor: usize) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
@@ -392,8 +175,7 @@ fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
                 .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
         ));
-
-    let inner_area = block.inner(area);
+    let inner = block.inner(area);
     frame.render_widget(block, area);
 
     let chunks = Layout::default()
@@ -403,24 +185,12 @@ fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
             Constraint::Min(0),
             Constraint::Length(2),
         ])
-        .split(inner_area);
+        .split(inner);
 
-    // Header.
-    let total_togglable = rows
-        .iter()
-        .filter(|r| !matches!(r.category, RowCategory::ExternallyManaged))
-        .count();
-    let selected_togglable = rows
-        .iter()
-        .filter(|r| !matches!(r.category, RowCategory::ExternallyManaged))
-        .filter(|r| r.selected)
-        .count();
-    let mobile_count = rows
-        .iter()
-        .filter(|r| matches!(r.category, RowCategory::ExternallyManaged))
-        .count();
-
-    let mut header = vec![
+    // Header with summary line.
+    let selected = view.selected_togglable_count();
+    let total = view.bundles.len() + view.units.len();
+    let header = vec![
         Line::from(""),
         Line::from(vec![
             Span::styled(
@@ -435,9 +205,9 @@ fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
         Line::from(vec![
             Span::styled("   ", Style::default()),
             Span::styled(
-                format!("{}", selected_togglable),
+                format!("{}", selected),
                 Style::default()
-                    .fg(if selected_togglable > 0 {
+                    .fg(if selected > 0 {
                         Color::Green
                     } else {
                         Color::Yellow
@@ -445,128 +215,24 @@ fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" / {} selected", total_togglable),
+                format!(" / {} selected · {}", total, render_summary(view)),
                 Style::default().fg(Color::Gray),
             ),
         ]),
     ];
-    if mobile_count > 0 {
-        let suffix = format!(" • {} mobile-app(s) → [allow_uncovered]", mobile_count);
-        header.push(Line::from(Span::styled(
-            suffix,
-            Style::default().fg(Color::Yellow),
-        )));
-    }
     frame.render_widget(
         Paragraph::new(header).alignment(Alignment::Center),
         chunks[0],
     );
 
-    // Compute the longest visible label per category so the secondary
-    // column lines up across rows.  Width is in *display columns* —
-    // we approximate via UnicodeSegmentation graphemes.  Good enough
-    // for the ASCII paths/names we render here.
-    let label_width = rows
-        .iter()
-        .map(|r| r.label.chars().count())
-        .max()
-        .unwrap_or(0);
+    // Body — delegated to the shared component.
+    let ctx = ViewContext {
+        mode: RenderMode::Init,
+        cursor: Some(cursor),
+    };
+    view.render(frame, chunks[1], &ctx);
 
-    let mut items: Vec<ListItem> = Vec::with_capacity(rows.len() + 8);
-    let mut last_cat: Option<RowCategory> = None;
-    for (idx, row) in rows.iter().enumerate() {
-        if last_cat != Some(row.category) {
-            // Insert a blank visual separator before every category
-            // header except the first — gives the eye a clear break
-            // between Bundles / Standalone / Externally-managed.
-            if last_cat.is_some() {
-                items.push(ListItem::new(Line::from("")));
-            }
-            items.push(ListItem::new(Line::from(vec![
-                Span::styled(" ", Style::default()),
-                Span::styled(
-                    format!("{}  ", glyphs::category_glyph(category_name(row.category))),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    category_name(row.category).to_string(),
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ])));
-            last_cat = Some(row.category);
-        }
-
-        let is_current = idx == cursor;
-        let indicator = match row.category {
-            RowCategory::ExternallyManaged => glyphs::locked(),
-            _ => glyphs::checkbox(row.selected),
-        };
-        let indicator_color = match row.category {
-            RowCategory::ExternallyManaged => Color::DarkGray,
-            _ => {
-                if row.selected {
-                    Color::Green
-                } else {
-                    Color::DarkGray
-                }
-            }
-        };
-
-        let label_style = if is_current {
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD)
-        } else if row.selected && !matches!(row.category, RowCategory::ExternallyManaged) {
-            Style::default().fg(Color::Green)
-        } else if matches!(row.category, RowCategory::ExternallyManaged) {
-            Style::default().fg(Color::Yellow)
-        } else {
-            Style::default().fg(Color::White)
-        };
-
-        let bg = if is_current {
-            Style::default().bg(Color::Rgb(40, 40, 50))
-        } else {
-            Style::default()
-        };
-
-        // Build the row spans.  Indent + checkbox + ecosystem (nerd
-        // mode only) + padded label + secondary.
-        let eco_glyph = row
-            .ecosystem
-            .as_deref()
-            .map(glyphs::ecosystem)
-            .unwrap_or("");
-        let pad = label_width.saturating_sub(row.label.chars().count());
-        let padded_label = format!("{}{}", row.label, " ".repeat(pad));
-
-        items.push(
-            ListItem::new(Line::from(vec![
-                Span::styled("    ", Style::default()),
-                Span::styled(
-                    format!("{} ", indicator),
-                    Style::default().fg(indicator_color),
-                ),
-                Span::styled(eco_glyph, Style::default().fg(Color::DarkGray)),
-                Span::styled(padded_label, label_style),
-                Span::styled("  ", Style::default()),
-                Span::styled(row.secondary.clone(), Style::default().fg(Color::Gray)),
-            ]))
-            .style(bg),
-        );
-    }
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Gray)),
-    );
-    frame.render_widget(list, chunks[1]);
-
-    // Hints.
+    // Hints footer.
     let hints = Line::from(vec![
         Span::styled("↑↓", Style::default().fg(Color::Cyan)),
         Span::styled(" navigate  ", Style::default().fg(Color::Gray)),
@@ -587,14 +253,6 @@ fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
     );
 }
 
-fn category_name(c: RowCategory) -> &'static str {
-    match c {
-        RowCategory::Bundle => "Bundles",
-        RowCategory::Standalone => "Standalone",
-        RowCategory::ExternallyManaged => "Externally-managed",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::super::{
@@ -602,7 +260,9 @@ mod tests {
         step::test_support::render_to_string,
     };
     use super::*;
-    use crate::core::release_unit::detector::{DetectionReport, DetectorMatch, HintKind};
+    use crate::core::release_unit::detector::{
+        BundleKind, DetectedShape, DetectionReport, DetectorMatch, ExtKind, HintKind,
+    };
 
     fn state_with_mix() -> WizardState {
         let mut state = WizardState::new(false, None);
@@ -653,31 +313,19 @@ mod tests {
         let mut step = UnifiedSelectionStep::new();
         step.ensure_initialised(&state);
         // 1 tauri bundle + 2 standalone + 1 mobile = 4 rows
-        assert_eq!(step.rows.len(), 4);
-        step.cursor = 1;
-        assert!(matches!(
-            step.rows[step.cursor].category,
-            RowCategory::Standalone
-        ));
-        // Toggle off: alpha (was selected=true) goes to false.
-        step.toggle_current();
-        assert!(!step.rows[1].selected);
+        assert_eq!(step.view.flat_indices().len(), 4);
+        // Toggle off the first standalone (alpha was selected=true).
+        step.cursor = 1; // first standalone after the bundle
+        if let Some(idx) = step.current_idx() {
+            step.view.toggle(idx);
+        }
         step.flush_to_state(&mut state);
         assert!(!state.standalone_units[0].selected);
     }
 
-    /// Regression for the "Tauri triplet shows up three times" bug
-    /// reported against 3.0.1: the bundle hit at `apps/clients/desktop`
-    /// covers both the outer `package.json` (npm:desktop) and the
-    /// inner `src-tauri/Cargo.toml` (cargo:desktop), so neither
-    /// should appear in the Standalone section.
     #[test]
     fn tauri_bundle_hides_inner_and_outer_standalones() {
         let mut state = WizardState::new(false, None);
-        // Standalone units the loaders would normally pick up:
-        //   * npm:desktop  → outer package.json at apps/clients/desktop
-        //   * cargo:desktop → src-tauri/Cargo.toml at apps/clients/desktop/src-tauri
-        // Plus an unrelated standalone that must NOT be hidden.
         state.standalone_units = vec![
             DetectedUnit {
                 name: "npm:desktop".into(),
@@ -714,39 +362,31 @@ mod tests {
         let mut step = UnifiedSelectionStep::new();
         step.ensure_initialised(&state);
 
-        // Expect: 1 Tauri Bundle + 1 Standalone (`elsewhere`) = 2 rows.
-        // The two desktop standalones should be filtered out.
-        assert_eq!(step.rows.len(), 2);
-        assert!(matches!(step.rows[0].category, RowCategory::Bundle));
-        assert_eq!(step.rows[0].label, "apps/clients/desktop");
-        assert!(matches!(step.rows[1].category, RowCategory::Standalone));
-        assert_eq!(step.rows[1].label, "elsewhere");
+        // Expect: 1 bundle + 1 standalone (`elsewhere`) = 2 rows.
+        assert_eq!(step.view.flat_indices().len(), 2);
+        assert_eq!(step.view.bundles.len(), 1);
+        assert_eq!(step.view.units.len(), 1);
+        assert_eq!(step.view.units[0].name, "elsewhere");
     }
 
-    /// Regression for the "sdks/kotlin appears twice in Bundles" bug:
-    /// jvm_library produces a Bundle hit, sdk_cascade_member produces
-    /// a Hint hit at the same path. After Schicht 1, only the Bundle
-    /// gets a row (the Hint never produces a row), so the dedup is
-    /// structurally guaranteed.
     #[test]
-    fn same_path_bundles_dedup_keeping_first_emission() {
-        use crate::core::release_unit::detector::JvmVersionSource;
+    fn hint_annotates_matching_standalone() {
+        // SdkCascade hint at sdks/typescript decorates the standalone
+        // whose prefix matches.
+        use crate::core::ui::release_unit_view::HintAnnotation;
 
         let mut state = WizardState::new(false, None);
+        state.standalone_units = vec![DetectedUnit {
+            name: "@org/sdk-ts".into(),
+            version: "1.0.0".into(),
+            prefix: "sdks/typescript".into(),
+            selected: true,
+            ecosystem: Some("npm".into()),
+        }];
         let mut report = DetectionReport::default();
-        let kotlin_path = crate::core::git::repository::RepoPathBuf::new(b"sdks/kotlin");
-        // jvm_library produces a Bundle hit.
-        report.matches.push(DetectorMatch {
-            shape: DetectedShape::Bundle(BundleKind::JvmLibrary {
-                version_source: JvmVersionSource::GradleProperties,
-            }),
-            path: kotlin_path.clone(),
-            note: None,
-        });
-        // sdk_cascade_member produces a Hint at the same path.
         report.matches.push(DetectorMatch {
             shape: DetectedShape::Hint(HintKind::SdkCascade),
-            path: kotlin_path.clone(),
+            path: crate::core::git::repository::RepoPathBuf::new(b"sdks/typescript"),
             note: None,
         });
         state.detection = report;
@@ -754,57 +394,9 @@ mod tests {
         let mut step = UnifiedSelectionStep::new();
         step.ensure_initialised(&state);
 
-        let bundle_rows: Vec<&Row> = step
-            .rows
-            .iter()
-            .filter(|r| matches!(r.category, RowCategory::Bundle))
-            .collect();
-        assert_eq!(
-            bundle_rows.len(),
-            1,
-            "expected exactly one bundle row for sdks/kotlin"
-        );
-        assert!(
-            bundle_rows[0].secondary.contains("jvm-library"),
-            "expected the jvm-library label to win; got: {}",
-            bundle_rows[0].secondary
-        );
-    }
-
-    #[test]
-    fn mobile_row_not_togglable() {
-        let mut state = state_with_mix();
-        let mut step = UnifiedSelectionStep::new();
-        step.ensure_initialised(&state);
-        // Last row is the mobile one.
-        let mobile_idx = step.rows.len() - 1;
-        assert!(matches!(
-            step.rows[mobile_idx].category,
-            RowCategory::ExternallyManaged
-        ));
-        let was = step.rows[mobile_idx].selected;
-        step.cursor = mobile_idx;
-        step.toggle_current();
-        assert_eq!(
-            step.rows[mobile_idx].selected, was,
-            "mobile must stay locked"
-        );
-        step.flush_to_state(&mut state);
-    }
-
-    #[test]
-    fn flush_writes_excluded_paths_for_off_bundles() {
-        let mut state = state_with_mix();
-        let mut step = UnifiedSelectionStep::new();
-        step.ensure_initialised(&state);
-        // Toggle the tauri bundle off.
-        assert!(matches!(step.rows[0].category, RowCategory::Bundle));
-        step.cursor = 0;
-        step.toggle_current();
-        step.flush_to_state(&mut state);
-        assert!(state
-            .detector_excluded
-            .iter()
-            .any(|p| p.escaped() == "apps/desktop"));
+        assert_eq!(step.view.units.len(), 1);
+        assert!(step.view.units[0]
+            .annotations
+            .contains(&HintAnnotation::SdkCascade));
     }
 }
