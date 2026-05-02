@@ -65,6 +65,35 @@ pub struct UnitRow {
     /// (init wizard) or the resolved-unit list (prepare). Used to
     /// route toggles back to the right slot.
     pub backref: usize,
+    /// Optional bump hint label (`MAJOR` / `MINOR` / `PATCH`) — set by
+    /// the prepare wizard to surface conventional-commit recommendations.
+    /// `None` in init mode (no commit history yet).
+    pub bump_hint: Option<BumpHint>,
+    /// Optional commit count since the last tag — prepare-only.
+    pub commit_count: Option<usize>,
+}
+
+/// Bump recommendation label rendered after the unit's secondary
+/// text in [`RenderMode::Prepare`]. Mirrors `core::bump::BumpRecommendation`
+/// without taking a dependency on it (the view stays pure UI).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BumpHint {
+    Major,
+    Minor,
+    Patch,
+    None,
+}
+
+impl BumpHint {
+    /// `(label, ratatui::style::Color)`.
+    pub fn label_and_color(self) -> (&'static str, Color) {
+        match self {
+            Self::Major => ("MAJOR", Color::Red),
+            Self::Minor => ("MINOR", Color::Yellow),
+            Self::Patch => ("PATCH", Color::Green),
+            Self::None => ("", Color::Gray),
+        }
+    }
 }
 
 /// Read-only externally-managed path (iOS / Android app). Auto-added
@@ -238,6 +267,8 @@ impl ReleaseUnitView {
                 annotations,
                 selected: p.selected,
                 backref: idx,
+                bump_hint: None,
+                commit_count: None,
             });
         }
 
@@ -327,6 +358,81 @@ impl ReleaseUnitView {
             .map(|b| b.path.clone())
             .collect()
     }
+}
+
+/// Render a single [`UnitRow`] as a `(Line, background-style)` pair —
+/// used by the prepare wizard's selection table to share the row
+/// shape with init/dashboard while still interleaving prepare-specific
+/// Group rows. Caller wraps in `ListItem` themselves; `label_width`
+/// aligns the secondary column with the surrounding rows.
+pub fn build_unit_row_line(
+    row: &UnitRow,
+    is_current: bool,
+    mode: RenderMode,
+    label_width: usize,
+) -> (Line<'static>, Style) {
+    let bg = if is_current {
+        Style::default().bg(Color::Rgb(40, 40, 50))
+    } else {
+        Style::default()
+    };
+    let cursor_color = if row.selected {
+        Color::Green
+    } else {
+        Color::DarkGray
+    };
+    let label_style = if is_current {
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
+    } else if row.selected {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default().fg(Color::White)
+    };
+
+    let indicator = checkbox_or_lock(mode, row.selected, false);
+    let pad = label_width.saturating_sub(row.name.chars().count());
+    let padded = format!("{}{}", row.name, " ".repeat(pad));
+    let secondary = match (mode, row.commit_count) {
+        (RenderMode::Prepare, Some(n)) => format!("({} commits)", n),
+        _ => format!("@ {} ({})", row.version, row.prefix),
+    };
+    let mut spans = vec![
+        Span::styled("    ".to_string(), Style::default()),
+        Span::styled(format!("{} ", indicator), Style::default().fg(cursor_color)),
+        Span::styled(
+            row.ecosystem
+                .as_deref()
+                .map(glyphs::ecosystem)
+                .unwrap_or("")
+                .to_string(),
+            Style::default().fg(Color::DarkGray),
+        ),
+        Span::styled(padded, label_style),
+        Span::styled("  ".to_string(), Style::default()),
+        Span::styled(secondary, Style::default().fg(Color::Gray)),
+    ];
+    for ann in &row.annotations {
+        spans.push(Span::styled("  ".to_string(), Style::default()));
+        spans.push(Span::styled(
+            format!("↳ {}", ann.label()),
+            Style::default().fg(Color::Yellow),
+        ));
+    }
+    if matches!(mode, RenderMode::Prepare) {
+        if let Some(hint) = row.bump_hint {
+            let (text, color) = hint.label_and_color();
+            if !text.is_empty() {
+                spans.push(Span::styled("  ".to_string(), Style::default()));
+                spans.push(Span::styled(
+                    format!("→ {}", text),
+                    Style::default().fg(color),
+                ));
+            }
+        }
+    }
+    (Line::from(spans), bg)
 }
 
 // ---------------------------------------------------------------------------
@@ -462,7 +568,12 @@ impl ReleaseUnitView {
                 let indicator = checkbox_or_lock(mode, u.selected, false);
                 let pad = label_width.saturating_sub(u.name.chars().count());
                 let padded = format!("{}{}", u.name, " ".repeat(pad));
-                let secondary = format!("@ {} ({})", u.version, u.prefix);
+                // Prepare mode swaps the secondary text to commit-count
+                // form and appends the bump-hint label after annotations.
+                let secondary = match (mode, u.commit_count) {
+                    (RenderMode::Prepare, Some(n)) => format!("({} commits)", n),
+                    _ => format!("@ {} ({})", u.version, u.prefix),
+                };
                 let mut spans = vec![
                     Span::styled("    ", Style::default()),
                     Span::styled(
@@ -483,6 +594,18 @@ impl ReleaseUnitView {
                         format!("↳ {}", ann.label()),
                         Style::default().fg(Color::Yellow),
                     ));
+                }
+                if matches!(mode, RenderMode::Prepare) {
+                    if let Some(hint) = u.bump_hint {
+                        let (text, color) = hint.label_and_color();
+                        if !text.is_empty() {
+                            spans.push(Span::styled("  ", Style::default()));
+                            spans.push(Span::styled(
+                                format!("→ {}", text),
+                                Style::default().fg(color),
+                            ));
+                        }
+                    }
                 }
                 ListItem::new(Line::from(spans)).style(bg)
             }

@@ -30,7 +30,12 @@ use crate::core::{
     config::syntax::{BumpConfiguration, ChangelogConfiguration},
     git::repository::RepoPathBuf,
     session::AppSession,
-    ui::{components::toggle_panel::TogglePanel, markdown, utils::centered_rect},
+    ui::{
+        components::toggle_panel::TogglePanel,
+        markdown,
+        release_unit_view::{build_unit_row_line, BumpHint, RenderMode, UnitRow},
+        utils::centered_rect,
+    },
     wire::known::Ecosystem,
     workflow::{
         generate_changelog_entry, BumpChoice, PrepareContext, ReleaseUnitCandidate,
@@ -895,6 +900,14 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
     // Plan §5: render groups as a single header row with members shown
     // as a read-only tree below. Cursor lands on the header row only.
     let display_rows = state.display_rows();
+    // Compute the label width across solo rows so the secondary column
+    // lines up — same shape the init wizard uses via the shared view.
+    let label_width = state
+        .units
+        .iter()
+        .map(|u| u.name().chars().count())
+        .max()
+        .unwrap_or(0);
     let items: Vec<ListItem> = display_rows
         .iter()
         .enumerate()
@@ -904,7 +917,7 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
             match row {
                 DisplayRow::Solo { unit_idx } => {
                     let project = &state.units[*unit_idx];
-                    render_solo_row(project, is_current)
+                    render_solo_row(project, is_current, label_width)
                 }
                 DisplayRow::Group { id, member_indices } => {
                     render_group_row(id, member_indices, &state.units, is_current)
@@ -971,47 +984,39 @@ fn compute_display_rows(units: &[ReleaseUnitItem]) -> Vec<DisplayRow> {
     out
 }
 
-/// Render one ungrouped project as a single list row.
-fn render_solo_row(project: &ReleaseUnitItem, is_current: bool) -> ListItem<'_> {
-    let checkbox = if project.selected { "✅" } else { "⬜" };
-    let (suggestion_text, suggestion_color) = match project.suggested_bump() {
-        BumpRecommendation::Major => ("MAJOR", Color::Red),
-        BumpRecommendation::Minor => ("MINOR", Color::Yellow),
-        BumpRecommendation::Patch => ("PATCH", Color::Green),
-        BumpRecommendation::None => ("", Color::Gray),
-    };
+/// Render one ungrouped project as a single list row by delegating
+/// to the shared [`build_unit_row_line`] helper. The caller maps each
+/// `ReleaseUnitItem` into a [`UnitRow`] (with bump_hint + commit_count
+/// populated from the candidate analysis), and the shared component
+/// owns the visual layout — same component init/dashboard consume.
+fn render_solo_row(
+    project: &ReleaseUnitItem,
+    is_current: bool,
+    label_width: usize,
+) -> ListItem<'static> {
+    let row = solo_to_unit_row(project);
+    let (line, bg) = build_unit_row_line(&row, is_current, RenderMode::Prepare, label_width);
+    ListItem::new(vec![line]).style(bg)
+}
 
-    let mut spans = vec![
-        Span::styled(format!(" {} ", checkbox), Style::default()),
-        Span::styled(
-            project.name(),
-            if is_current {
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD)
-            } else if project.selected {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::White)
-            },
-        ),
-        Span::styled(
-            format!(" ({} commits)", project.commit_count()),
-            Style::default().fg(Color::Gray),
-        ),
-    ];
-    if !suggestion_text.is_empty() {
-        spans.push(Span::styled(
-            format!("  → {}", suggestion_text),
-            Style::default().fg(suggestion_color),
-        ));
-    }
-    let style = if is_current {
-        Style::default().bg(Color::Rgb(40, 40, 50))
-    } else {
-        Style::default()
+fn solo_to_unit_row(project: &ReleaseUnitItem) -> UnitRow {
+    let bump_hint = match project.suggested_bump() {
+        BumpRecommendation::Major => Some(BumpHint::Major),
+        BumpRecommendation::Minor => Some(BumpHint::Minor),
+        BumpRecommendation::Patch => Some(BumpHint::Patch),
+        BumpRecommendation::None => Some(BumpHint::None),
     };
-    ListItem::new(vec![Line::from(spans)]).style(style)
+    UnitRow {
+        name: project.name().to_string(),
+        version: project.current_version().to_string(),
+        prefix: String::new(),
+        ecosystem: Some(project.ecosystem().as_str().to_string()),
+        annotations: Vec::new(),
+        selected: project.selected,
+        backref: 0, // prepare doesn't route through view-toggles; uses ListState directly
+        bump_hint,
+        commit_count: Some(project.commit_count()),
+    }
 }
 
 /// Render one group as a header row + a tree of read-only member rows

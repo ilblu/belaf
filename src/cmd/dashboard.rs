@@ -1,3 +1,23 @@
+//! No-arg entry TUI — the menu users land on when they run `belaf`
+//! with no subcommand. Dispatches into `init` / `prepare` / `status`
+//! based on the menu selection plus a small stats panel.
+//!
+//! ## On `release_unit_view`
+//!
+//! The 1.0 plan called for `dashboard.rs` to consume
+//! `core::ui::release_unit_view::ReleaseUnitView` in
+//! `RenderMode::Dashboard` (read-only). The plan was based on an
+//! outdated mental model: this dashboard is a **menu launcher** — it
+//! renders the logo, a 3-item menu, and aggregate stats (total
+//! projects + pending commits). It does not render a list of
+//! ReleaseUnits, so there's nothing for the shared view to bind to.
+//!
+//! The shared component is consumed by the `init` wizard
+//! (`unified_selection.rs`) and by the `prepare` wizard's solo-row
+//! rendering (`prepare/wizard.rs::render_solo_row`). If a future
+//! dashboard ever surfaces a unit list, that's where it would call
+//! into the shared view.
+
 use std::io::{self, stdout};
 
 use anyhow::Result;
