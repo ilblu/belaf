@@ -12,8 +12,8 @@ use super::walk::{
     list_subdirs_with_file, relative_repopath, walk_capped,
 };
 use super::{
-    DetectorKind, DetectorMatch, HexagonalPrimary, JvmVersionSource, MobilePlatform,
-    SingleProjectEcosystem,
+    BundleKind, DetectedShape, DetectorMatch, ExtKind, HexagonalPrimary, HintKind,
+    JvmVersionSource, SingleProjectEcosystem,
 };
 
 // F.1 — Hexagonal cargo
@@ -57,7 +57,7 @@ pub(super) fn hexagonal_cargo(workdir: &Path) -> Vec<DetectorMatch> {
             None => continue,
         };
         out.push(DetectorMatch {
-            kind: DetectorKind::HexagonalCargo { primary },
+            shape: DetectedShape::Bundle(BundleKind::HexagonalCargo { primary }),
             path: repopath,
             note: Some(format!(
                 "primary crate: {}",
@@ -96,7 +96,7 @@ pub(super) fn tauri(workdir: &Path) -> Vec<DetectorMatch> {
             None => continue,
         };
         out.push(DetectorMatch {
-            kind: DetectorKind::Tauri { single_source },
+            shape: DetectedShape::Bundle(BundleKind::Tauri { single_source }),
             path: repopath,
             note: Some(if single_source {
                 "single-source (version derived from package.json)".to_string()
@@ -153,9 +153,9 @@ pub(super) fn jvm_library(workdir: &Path) -> Vec<DetectorMatch> {
             None => continue,
         };
         out.push(DetectorMatch {
-            kind: DetectorKind::JvmLibrary {
+            shape: DetectedShape::Bundle(BundleKind::JvmLibrary {
                 version_source: kind.clone(),
-            },
+            }),
             path: repopath,
             note: Some(jvm_label(&kind).to_string()),
         });
@@ -203,9 +203,7 @@ pub(super) fn mobile_app(workdir: &Path) -> Vec<DetectorMatch> {
             None => continue,
         };
         out.push(DetectorMatch {
-            kind: DetectorKind::MobileApp {
-                platform: MobilePlatform::Ios,
-            },
+            shape: DetectedShape::ExternallyManaged(ExtKind::MobileIos),
             path: repopath,
             note: Some("iOS app (recommend Bitrise/fastlane)".to_string()),
         });
@@ -216,9 +214,7 @@ pub(super) fn mobile_app(workdir: &Path) -> Vec<DetectorMatch> {
             None => continue,
         };
         out.push(DetectorMatch {
-            kind: DetectorKind::MobileApp {
-                platform: MobilePlatform::Android,
-            },
+            shape: DetectedShape::ExternallyManaged(ExtKind::MobileAndroid),
             path: repopath,
             note: Some("Android app (recommend Bitrise/Codemagic)".to_string()),
         });
@@ -271,7 +267,7 @@ pub(super) fn nested_npm_workspace(workdir: &Path) -> Vec<DetectorMatch> {
         if pkg.exists() && file_contains_pattern(&pkg, r#""workspaces"\s*:"#) {
             if let Some(repopath) = relative_repopath(workdir, p) {
                 out.push(DetectorMatch {
-                    kind: DetectorKind::NestedNpmWorkspace,
+                    shape: DetectedShape::Hint(HintKind::NpmWorkspace),
                     path: repopath,
                     note: None,
                 });
@@ -314,7 +310,7 @@ pub(super) fn sdk_cascade_members(workdir: &Path) -> Vec<DetectorMatch> {
             if has_indicator || has_package {
                 if let Some(repopath) = relative_repopath(workdir, &p) {
                     out.push(DetectorMatch {
-                        kind: DetectorKind::SdkCascadeMember,
+                        shape: DetectedShape::Hint(HintKind::SdkCascade),
                         path: repopath,
                         note: None,
                     });
@@ -384,7 +380,7 @@ pub(super) fn single_project_repo(workdir: &Path) -> Vec<DetectorMatch> {
     };
 
     vec![DetectorMatch {
-        kind: DetectorKind::SingleProject { ecosystem },
+        shape: DetectedShape::Hint(HintKind::SingleProject { ecosystem }),
         path: RepoPathBuf::new(b"."),
         note: None,
     }]
@@ -455,7 +451,7 @@ pub(super) fn nested_monorepo(workdir: &Path) -> Vec<DetectorMatch> {
             if has_belaf_config || manifest_count >= 2 {
                 if let Some(repopath) = relative_repopath(workdir, &sub) {
                     out.push(DetectorMatch {
-                        kind: DetectorKind::NestedMonorepo,
+                        shape: DetectedShape::Hint(HintKind::NestedMonorepo),
                         path: repopath,
                         note: Some(if has_belaf_config {
                             "submodule has its own belaf/config.toml".to_string()
@@ -497,8 +493,8 @@ mod tests {
         let matches = hexagonal_cargo(root);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0].path.escaped(), "apps/services/aura");
-        match &matches[0].kind {
-            DetectorKind::HexagonalCargo { primary } => {
+        match &matches[0].shape {
+            DetectedShape::Bundle(BundleKind::HexagonalCargo { primary }) => {
                 assert_eq!(*primary, HexagonalPrimary::Bin);
             }
             _ => panic!("expected HexagonalCargo"),
@@ -519,8 +515,8 @@ mod tests {
         );
         let matches = hexagonal_cargo(root);
         assert_eq!(matches.len(), 1);
-        match &matches[0].kind {
-            DetectorKind::HexagonalCargo { primary } => {
+        match &matches[0].shape {
+            DetectedShape::Bundle(BundleKind::HexagonalCargo { primary }) => {
                 assert_eq!(*primary, HexagonalPrimary::Workers);
             }
             _ => panic!("expected HexagonalCargo"),
@@ -557,8 +553,8 @@ mod tests {
         );
         let matches = tauri(root);
         assert_eq!(matches.len(), 1);
-        match &matches[0].kind {
-            DetectorKind::Tauri { single_source } => assert!(*single_source),
+        match &matches[0].shape {
+            DetectedShape::Bundle(BundleKind::Tauri { single_source }) => assert!(*single_source),
             _ => panic!("expected Tauri"),
         }
     }
@@ -581,8 +577,8 @@ mod tests {
         );
         let matches = tauri(root);
         assert_eq!(matches.len(), 1);
-        match &matches[0].kind {
-            DetectorKind::Tauri { single_source } => assert!(!*single_source),
+        match &matches[0].shape {
+            DetectedShape::Bundle(BundleKind::Tauri { single_source }) => assert!(!*single_source),
             _ => panic!("expected Tauri"),
         }
     }
@@ -597,8 +593,8 @@ mod tests {
         );
         let matches = jvm_library(root);
         assert_eq!(matches.len(), 1);
-        match &matches[0].kind {
-            DetectorKind::JvmLibrary { version_source } => {
+        match &matches[0].shape {
+            DetectedShape::Bundle(BundleKind::JvmLibrary { version_source }) => {
                 assert_eq!(*version_source, JvmVersionSource::GradleProperties);
             }
             _ => panic!("expected JvmLibrary"),
@@ -615,8 +611,8 @@ mod tests {
         );
         let matches = jvm_library(root);
         assert_eq!(matches.len(), 1);
-        match &matches[0].kind {
-            DetectorKind::JvmLibrary { version_source } => {
+        match &matches[0].shape {
+            DetectedShape::Bundle(BundleKind::JvmLibrary { version_source }) => {
                 assert_eq!(*version_source, JvmVersionSource::BuildGradleKtsLiteral);
             }
             _ => panic!("expected JvmLibrary"),
@@ -633,8 +629,8 @@ mod tests {
         );
         let matches = jvm_library(root);
         assert_eq!(matches.len(), 1);
-        match &matches[0].kind {
-            DetectorKind::JvmLibrary { version_source } => {
+        match &matches[0].shape {
+            DetectedShape::Bundle(BundleKind::JvmLibrary { version_source }) => {
                 assert_eq!(*version_source, JvmVersionSource::PluginManaged);
             }
             _ => panic!("expected JvmLibrary"),
@@ -653,12 +649,7 @@ mod tests {
         let ios: Vec<_> = matches
             .iter()
             .filter(|m| {
-                matches!(
-                    m.kind,
-                    DetectorKind::MobileApp {
-                        platform: MobilePlatform::Ios
-                    }
-                )
+                matches!(m.shape, DetectedShape::ExternallyManaged(ExtKind::MobileIos))
             })
             .collect();
         assert_eq!(ios.len(), 1);
@@ -678,10 +669,8 @@ mod tests {
             .iter()
             .filter(|m| {
                 matches!(
-                    m.kind,
-                    DetectorKind::MobileApp {
-                        platform: MobilePlatform::Android
-                    }
+                    m.shape,
+                    DetectedShape::ExternallyManaged(ExtKind::MobileAndroid)
                 )
             })
             .collect();
@@ -728,8 +717,8 @@ mod tests {
         );
         let matches = single_project_repo(t.path());
         assert_eq!(matches.len(), 1);
-        match &matches[0].kind {
-            DetectorKind::SingleProject { ecosystem } => {
+        match &matches[0].shape {
+            DetectedShape::Hint(HintKind::SingleProject { ecosystem }) => {
                 assert_eq!(*ecosystem, SingleProjectEcosystem::Cargo);
             }
             other => panic!("expected SingleProject; got {other:?}"),
@@ -797,7 +786,7 @@ mod tests {
         );
         let matches = nested_monorepo(t.path());
         assert_eq!(matches.len(), 1);
-        assert_eq!(matches[0].kind, DetectorKind::NestedMonorepo);
+        assert_eq!(matches[0].shape, DetectedShape::Hint(HintKind::NestedMonorepo));
         assert_eq!(matches[0].path.escaped(), "vendor/foo");
     }
 

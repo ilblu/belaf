@@ -13,7 +13,7 @@ mod fixtures;
 use std::path::Path;
 
 use belaf::core::git::repository::Repository;
-use belaf::core::release_unit::detector::{self, DetectorKind};
+use belaf::core::release_unit::detector::{self, BundleKind, DetectedShape, HintKind};
 
 use common::TestRepo;
 use fixtures::Seedable;
@@ -49,15 +49,15 @@ fn detector_finds_expected_bundle_kinds() {
     let kinds: Vec<&'static str> = report
         .matches
         .iter()
-        .map(|m| match &m.kind {
-            DetectorKind::HexagonalCargo { .. } => "hexagonal_cargo",
-            DetectorKind::Tauri { .. } => "tauri",
-            DetectorKind::JvmLibrary { .. } => "jvm_library",
-            DetectorKind::MobileApp { .. } => "mobile_app",
-            DetectorKind::NestedNpmWorkspace => "nested_npm_workspace",
-            DetectorKind::SdkCascadeMember => "sdk_cascade_member",
-            DetectorKind::SingleProject { .. } => "single_project",
-            DetectorKind::NestedMonorepo => "nested_monorepo",
+        .map(|m| match &m.shape {
+            DetectedShape::Bundle(BundleKind::HexagonalCargo { .. }) => "hexagonal_cargo",
+            DetectedShape::Bundle(BundleKind::Tauri { .. }) => "tauri",
+            DetectedShape::Bundle(BundleKind::JvmLibrary { .. }) => "jvm_library",
+            DetectedShape::ExternallyManaged(_) => "mobile_app",
+            DetectedShape::Hint(HintKind::NpmWorkspace) => "nested_npm_workspace",
+            DetectedShape::Hint(HintKind::SdkCascade) => "sdk_cascade_member",
+            DetectedShape::Hint(HintKind::SingleProject { .. }) => "single_project",
+            DetectedShape::Hint(HintKind::NestedMonorepo) => "nested_monorepo",
         })
         .collect();
 

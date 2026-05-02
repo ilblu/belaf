@@ -11,7 +11,7 @@ mod fixtures;
 use std::path::Path;
 
 use belaf::core::git::repository::Repository;
-use belaf::core::release_unit::detector::{self, DetectorKind, MobilePlatform};
+use belaf::core::release_unit::detector::{self, DetectedShape, ExtKind, HintKind};
 
 use common::TestRepo;
 use fixtures::Seedable;
@@ -49,8 +49,8 @@ fn lerna_fixed_does_not_trigger_detector_warnings() {
 
     let any_loud = report.matches.iter().any(|m| {
         !matches!(
-            m.kind,
-            DetectorKind::NestedNpmWorkspace | DetectorKind::SdkCascadeMember
+            m.shape,
+            DetectedShape::Hint(HintKind::NpmWorkspace | HintKind::SdkCascade)
         )
     });
     assert!(
@@ -80,8 +80,8 @@ fn tokio_single_has_no_detector_hits() {
         report.matches
     );
     assert!(matches!(
-        report.matches[0].kind,
-        DetectorKind::SingleProject { .. }
+        report.matches[0].shape,
+        DetectedShape::Hint(HintKind::SingleProject { .. })
     ));
     assert_eq!(report.count_release_unit_candidates(), 0);
 }
@@ -102,10 +102,14 @@ fn cargo_monorepo_independent_no_hexagonal_match() {
     let r = open_repo(&repo);
     let report = detector::detect_all(&r);
 
-    let any_hex = report
-        .matches
-        .iter()
-        .any(|m| matches!(m.kind, DetectorKind::HexagonalCargo { .. }));
+    let any_hex = report.matches.iter().any(|m| {
+        matches!(
+            m.shape,
+            DetectedShape::Bundle(belaf::core::release_unit::detector::BundleKind::HexagonalCargo {
+                ..
+            })
+        )
+    });
     assert!(
         !any_hex,
         "cargo-monorepo-independent must not match hexagonal-cargo; got: {:#?}",
@@ -152,7 +156,14 @@ fn kotlin_library_only_hits_jvm_library_detector() {
     let jvm_hits: Vec<_> = report
         .matches
         .iter()
-        .filter(|m| matches!(m.kind, DetectorKind::JvmLibrary { .. }))
+        .filter(|m| {
+            matches!(
+                m.shape,
+                DetectedShape::Bundle(belaf::core::release_unit::detector::BundleKind::JvmLibrary {
+                    ..
+                })
+            )
+        })
         .collect();
     assert!(
         !jvm_hits.is_empty(),
@@ -164,7 +175,7 @@ fn kotlin_library_only_hits_jvm_library_detector() {
     let mobile = report
         .matches
         .iter()
-        .any(|m| matches!(m.kind, DetectorKind::MobileApp { .. }));
+        .any(|m| matches!(m.shape, DetectedShape::ExternallyManaged(_)));
     assert!(!mobile, "kotlin-library-only is NOT a mobile repo");
     assert!(!report.is_single_mobile_repo());
 }
@@ -187,13 +198,9 @@ fn ios_only_triggers_single_mobile_repo() {
         report.matches
     );
 
-    let any_ios = report.matches.iter().any(|m| {
-        matches!(
-            m.kind,
-            DetectorKind::MobileApp {
-                platform: MobilePlatform::Ios
-            }
-        )
-    });
+    let any_ios = report
+        .matches
+        .iter()
+        .any(|m| matches!(m.shape, DetectedShape::ExternallyManaged(ExtKind::MobileIos)));
     assert!(any_ios, "ios-only must hit the iOS detector");
 }

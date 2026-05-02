@@ -6,11 +6,20 @@
 //! [`detect_all`] and drift coverage is computed in
 //! [`detect_drift_from_report`]. Per-detector logic lives in
 //! [`scanners`]; shared filesystem helpers live in [`walk`].
+//!
+//! Classification — Bundle vs Hint vs ExternallyManaged — lives in the
+//! [`super::shape`] module. Consumers of [`DetectionReport`] should
+//! `match` on `m.shape` exhaustively, never on the leaf enum variants.
 
 use std::path::Path;
 
 use crate::core::config::ConfigurationFile;
 use crate::core::git::repository::{RepoPathBuf, Repository};
+
+pub use super::shape::{
+    BundleKind, DetectedShape, DetectorMatch, ExtKind, HexagonalPrimary, HintKind,
+    JvmVersionSource, SingleProjectEcosystem,
+};
 
 use super::ResolvedReleaseUnit;
 
@@ -21,91 +30,6 @@ mod walk;
 // Public types
 // ---------------------------------------------------------------------------
 
-/// One match produced by a detector: the directory hit, the kind of
-/// pattern matched, plus optional sub-classification details so the
-/// wizard can render specific TUI prompts.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DetectorMatch {
-    pub kind: DetectorKind,
-    pub path: RepoPathBuf,
-    pub note: Option<String>,
-}
-
-/// Stable detector identifiers + sub-classification for the variants
-/// that have meaningfully-different remediation paths.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DetectorKind {
-    HexagonalCargo { primary: HexagonalPrimary },
-    Tauri { single_source: bool },
-    JvmLibrary { version_source: JvmVersionSource },
-    MobileApp { platform: MobilePlatform },
-    NestedNpmWorkspace,
-    SdkCascadeMember,
-    SingleProject { ecosystem: SingleProjectEcosystem },
-    NestedMonorepo,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum SingleProjectEcosystem {
-    Cargo,
-    Npm,
-    Pypa,
-    Go,
-    Maven,
-    Swift,
-    Elixir,
-}
-
-impl std::fmt::Display for SingleProjectEcosystem {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            Self::Cargo => "cargo",
-            Self::Npm => "npm",
-            Self::Pypa => "pypa",
-            Self::Go => "go",
-            Self::Maven => "maven",
-            Self::Swift => "swift",
-            Self::Elixir => "elixir",
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HexagonalPrimary {
-    Bin,
-    Lib,
-    Workers,
-    BaseName,
-}
-
-impl std::fmt::Display for HexagonalPrimary {
-    /// Lowercase so error messages and config snippets read uniformly
-    /// (`crates/bin/Cargo.toml`) rather than the PascalCase that the
-    /// `Debug` derive would produce.
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s = match self {
-            HexagonalPrimary::Bin => "bin",
-            HexagonalPrimary::Lib => "lib",
-            HexagonalPrimary::Workers => "workers",
-            HexagonalPrimary::BaseName => "basename",
-        };
-        f.write_str(s)
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum JvmVersionSource {
-    GradleProperties,
-    BuildGradleKtsLiteral,
-    PluginManaged,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MobilePlatform {
-    Ios,
-    Android,
-}
-
 /// Aggregate report covering every detector hit in the repo.
 #[derive(Debug, Default)]
 pub struct DetectionReport {
@@ -115,32 +39,38 @@ pub struct DetectionReport {
 impl DetectionReport {
     pub fn matches_of(
         &self,
-        kind_predicate: impl Fn(&DetectorKind) -> bool,
+        shape_predicate: impl Fn(&DetectedShape) -> bool,
     ) -> Vec<&DetectorMatch> {
         self.matches
             .iter()
-            .filter(|m| kind_predicate(&m.kind))
+            .filter(|m| shape_predicate(&m.shape))
             .collect()
     }
 
+    /// True when every detector hit is an externally-managed mobile
+    /// app — used by the wizard to short-circuit into the
+    /// [`super::super::cmd::init::wizard::single_mobile`] flow.
     pub fn is_single_mobile_repo(&self) -> bool {
         !self.matches.is_empty()
             && self
                 .matches
                 .iter()
-                .all(|m| matches!(m.kind, DetectorKind::MobileApp { .. }))
+                .all(|m| matches!(m.shape, DetectedShape::ExternallyManaged(_)))
     }
 
+    /// Bundles + Hints (which decorate Standalones) count toward the
+    /// release-unit candidate count; ExternallyManaged + bare-repo
+    /// hints (`SingleProject`, `NestedMonorepo`) do not.
     pub fn count_release_unit_candidates(&self) -> usize {
         self.matches
             .iter()
-            .filter(|m| {
-                !matches!(
-                    m.kind,
-                    DetectorKind::MobileApp { .. }
-                        | DetectorKind::SingleProject { .. }
-                        | DetectorKind::NestedMonorepo
-                )
+            .filter(|m| match &m.shape {
+                DetectedShape::Bundle(_) => true,
+                DetectedShape::Hint(HintKind::SdkCascade | HintKind::NpmWorkspace) => true,
+                DetectedShape::Hint(HintKind::SingleProject { .. } | HintKind::NestedMonorepo) => {
+                    false
+                }
+                DetectedShape::ExternallyManaged(_) => false,
             })
             .count()
     }
@@ -152,7 +82,7 @@ impl DetectionReport {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UncoveredHit {
     pub path: RepoPathBuf,
-    pub kind: DetectorKind,
+    pub shape: DetectedShape,
 }
 
 #[derive(Debug, Default)]
@@ -175,7 +105,7 @@ impl DriftReport {
             s.push_str(&format!(
                 "  - {:50} ({})\n",
                 h.path.escaped(),
-                drift_kind_label(&h.kind),
+                drift_shape_label(&h.shape),
             ));
         }
         s.push_str(
@@ -185,32 +115,36 @@ impl DriftReport {
     }
 }
 
-fn drift_kind_label(k: &DetectorKind) -> String {
-    match k {
-        DetectorKind::HexagonalCargo { primary } => {
-            format!("hexagonal cargo: crates/{primary}/Cargo.toml present")
-        }
-        DetectorKind::Tauri { single_source } => format!(
-            "tauri triplet ({})",
-            if *single_source {
-                "single-source"
-            } else {
-                "legacy multi-file"
+fn drift_shape_label(s: &DetectedShape) -> String {
+    match s {
+        DetectedShape::Bundle(b) => match b {
+            BundleKind::HexagonalCargo { primary } => {
+                format!("hexagonal cargo: crates/{primary}/Cargo.toml present")
             }
-        ),
-        DetectorKind::JvmLibrary { version_source } => {
-            format!("jvm library ({})", jvm_label(version_source))
-        }
-        DetectorKind::MobileApp { platform } => match platform {
-            MobilePlatform::Ios => "iOS app — recommend Bitrise/fastlane".to_string(),
-            MobilePlatform::Android => "Android app — recommend Bitrise/Codemagic".to_string(),
+            BundleKind::Tauri { single_source } => format!(
+                "tauri triplet ({})",
+                if *single_source {
+                    "single-source"
+                } else {
+                    "legacy multi-file"
+                }
+            ),
+            BundleKind::JvmLibrary { version_source } => {
+                format!("jvm library ({})", jvm_label(version_source))
+            }
         },
-        DetectorKind::NestedNpmWorkspace => "nested npm workspace".to_string(),
-        DetectorKind::SdkCascadeMember => "generated SDK package under sdks/*".to_string(),
-        DetectorKind::SingleProject { ecosystem } => {
-            format!("single-project repo ({ecosystem})")
-        }
-        DetectorKind::NestedMonorepo => "nested submodule with its own monorepo".to_string(),
+        DetectedShape::Hint(h) => match h {
+            HintKind::NpmWorkspace => "nested npm workspace".to_string(),
+            HintKind::SdkCascade => "generated SDK package under sdks/*".to_string(),
+            HintKind::SingleProject { ecosystem } => {
+                format!("single-project repo ({ecosystem})")
+            }
+            HintKind::NestedMonorepo => "nested submodule with its own monorepo".to_string(),
+        },
+        DetectedShape::ExternallyManaged(e) => match e {
+            ExtKind::MobileIos => "iOS app — recommend Bitrise/fastlane".to_string(),
+            ExtKind::MobileAndroid => "Android app — recommend Bitrise/Codemagic".to_string(),
+        },
     }
 }
 
@@ -222,10 +156,9 @@ fn jvm_label(s: &JvmVersionSource) -> &'static str {
     }
 }
 
-/// Phase H — `pre_prepare_drift_check`. Convenience wrapper that
-/// runs [`detect_drift`] and returns an error with the §3.9-format
-/// message when uncovered hits exist. Callers (the prepare command,
-/// hooked up in Phase I) just `?`-propagate.
+/// Convenience wrapper that runs [`detect_drift`] and returns an error
+/// with the formatted message when uncovered hits exist. Callers (the
+/// prepare command) `?`-propagate.
 pub fn pre_prepare_drift_check(
     repo: &Repository,
     resolved: &[ResolvedReleaseUnit],
@@ -306,10 +239,10 @@ pub fn detect_drift_from_report(
     let uncovered: Vec<UncoveredHit> = report
         .matches
         .iter()
-        .filter(|m| is_drift_signal(&m.kind) && !is_covered(&m.path, &coverage))
+        .filter(|m| is_drift_signal(&m.shape) && !is_covered(&m.path, &coverage))
         .map(|m| UncoveredHit {
             path: m.path.clone(),
-            kind: m.kind.clone(),
+            shape: m.shape.clone(),
         })
         .collect();
 
@@ -317,14 +250,14 @@ pub fn detect_drift_from_report(
 }
 
 /// Whether a detector hit should ever surface as a drift error.
-/// Informational hints (`SingleProject`, `NestedMonorepo`) are
-/// wizard-only — they help on first init but are not drift signals
-/// once a config exists, because they describe the repo as a whole
-/// rather than a missed bundle the resolver should have covered.
-fn is_drift_signal(kind: &DetectorKind) -> bool {
+/// Repo-shape Hints (`SingleProject`, `NestedMonorepo`) describe the
+/// repo as a whole, not a missed bundle; they are wizard-only
+/// signals. Everything else (bundles, sdk-cascade hints, npm-workspace
+/// hints, externally-managed paths) does signal drift if uncovered.
+fn is_drift_signal(shape: &DetectedShape) -> bool {
     !matches!(
-        kind,
-        DetectorKind::SingleProject { .. } | DetectorKind::NestedMonorepo
+        shape,
+        DetectedShape::Hint(HintKind::SingleProject { .. } | HintKind::NestedMonorepo)
     )
 }
 
@@ -355,7 +288,7 @@ pub fn detect_all(repo: &Repository) -> DetectionReport {
 
 /// Drift check: find paths matching a detector pattern that are not
 /// covered by any resolved ReleaseUnit, `[ignore_paths]`, or
-/// `[allow_uncovered]`. Runs on every `belaf prepare` (Phase H).
+/// `[allow_uncovered]`. Runs on every `belaf prepare`.
 pub fn detect_drift(
     repo: &Repository,
     resolved: &[ResolvedReleaseUnit],
@@ -401,9 +334,7 @@ mod tests {
     fn detection_report_helpers() {
         let mobile_only = DetectionReport {
             matches: vec![DetectorMatch {
-                kind: DetectorKind::MobileApp {
-                    platform: MobilePlatform::Ios,
-                },
+                shape: DetectedShape::ExternallyManaged(ExtKind::MobileIos),
                 path: RepoPathBuf::new(b"apps/ios"),
                 note: None,
             }],
@@ -414,16 +345,14 @@ mod tests {
         let mixed = DetectionReport {
             matches: vec![
                 DetectorMatch {
-                    kind: DetectorKind::HexagonalCargo {
+                    shape: DetectedShape::Bundle(BundleKind::HexagonalCargo {
                         primary: HexagonalPrimary::Bin,
-                    },
+                    }),
                     path: RepoPathBuf::new(b"apps/services/aura"),
                     note: None,
                 },
                 DetectorMatch {
-                    kind: DetectorKind::MobileApp {
-                        platform: MobilePlatform::Ios,
-                    },
+                    shape: DetectedShape::ExternallyManaged(ExtKind::MobileIos),
                     path: RepoPathBuf::new(b"apps/ios"),
                     note: None,
                 },
@@ -445,15 +374,15 @@ mod tests {
             uncovered: vec![
                 UncoveredHit {
                     path: RepoPathBuf::new(b"apps/services/foobar"),
-                    kind: DetectorKind::HexagonalCargo {
+                    shape: DetectedShape::Bundle(BundleKind::HexagonalCargo {
                         primary: HexagonalPrimary::Bin,
-                    },
+                    }),
                 },
                 UncoveredHit {
                     path: RepoPathBuf::new(b"sdks/python"),
-                    kind: DetectorKind::JvmLibrary {
+                    shape: DetectedShape::Bundle(BundleKind::JvmLibrary {
                         version_source: JvmVersionSource::GradleProperties,
-                    },
+                    }),
                 },
             ],
         };

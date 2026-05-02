@@ -17,7 +17,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::core::release_unit::detector::{DetectorKind, MobilePlatform};
+use crate::core::release_unit::detector::{DetectedShape, ExtKind};
 
 use super::{
     state::WizardState,
@@ -101,10 +101,10 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState) {
 
     let mut body = vec![Line::from("")];
     for m in &state.detection.matches {
-        if let DetectorKind::MobileApp { platform } = &m.kind {
-            let label = match platform {
-                MobilePlatform::Ios => "iOS",
-                MobilePlatform::Android => "Android",
+        if let DetectedShape::ExternallyManaged(ext) = &m.shape {
+            let label = match ext {
+                ExtKind::MobileIos => "iOS",
+                ExtKind::MobileAndroid => "Android",
             };
             body.push(Line::from(vec![
                 Span::styled("   • ", Style::default().fg(Color::Yellow)),
@@ -198,16 +198,12 @@ mod tests {
         state.detection = DetectionReport {
             matches: vec![
                 DetectorMatch {
-                    kind: DetectorKind::MobileApp {
-                        platform: MobilePlatform::Ios,
-                    },
+                    shape: DetectedShape::ExternallyManaged(ExtKind::MobileIos),
                     path: RepoPathBuf::new(b"ios"),
                     note: None,
                 },
                 DetectorMatch {
-                    kind: DetectorKind::MobileApp {
-                        platform: MobilePlatform::Android,
-                    },
+                    shape: DetectedShape::ExternallyManaged(ExtKind::MobileAndroid),
                     path: RepoPathBuf::new(b"android"),
                     note: None,
                 },

@@ -22,7 +22,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::core::release_unit::detector::{DetectorKind, MobilePlatform};
+use crate::core::release_unit::detector::{BundleKind, DetectedShape, ExtKind};
 
 use super::{
     preset::PresetSelectionStep,
@@ -94,48 +94,48 @@ impl UnifiedSelectionStep {
     fn rebuild_rows(&mut self, state: &WizardState) {
         self.rows.clear();
 
-        // Bundles: every detector match except mobile.  Per path we
-        // keep only the first hit — the detector emission order in
-        // `detect_all` runs higher-specificity scanners (hexagonal /
-        // tauri / jvm-library) before the broader `sdk_cascade_member`,
-        // so the first hit per path is automatically the most useful
-        // label for the user.  Without this dedup `sdks/kotlin`
-        // appears twice (jvm-library + sdk-cascade-member) for the
-        // same physical bundle.
+        // Three-class dispatch: each detector match falls into exactly
+        // one [`DetectedShape`] arm. Bundles produce togglable Bundle
+        // rows + hide their inner manifests. Hints are *not* rendered
+        // as rows — they decorate Standalone rows (Schicht 3 will
+        // surface the annotation; for now they're suppressed). Mobile
+        // apps become read-only ExternallyManaged rows. This avoids
+        // the 3.0.x regression where `SdkCascadeMember` / `NpmWorkspace`
+        // / `SingleProject` / `NestedMonorepo` Hints were accidentally
+        // rendered as Bundle rows and hid the matching Standalones.
         let mut bundle_seen: std::collections::HashSet<crate::core::git::repository::RepoPathBuf> =
             std::collections::HashSet::new();
-        // Paths covered by an actual bundle — used below to filter the
-        // standalone list so we don't render the inner manifests of a
-        // bundle as separate units.  `SingleProject` / `NestedMonorepo`
-        // hits are informational only (they describe the repo shape,
-        // not a multi-manifest bundle) so we don't add them here.
         let mut bundle_paths: Vec<String> = Vec::new();
         for (idx, m) in state.detection.matches.iter().enumerate() {
-            if matches!(m.kind, DetectorKind::MobileApp { .. }) {
-                continue;
-            }
-            if !bundle_seen.insert(m.path.clone()) {
-                continue;
-            }
-            let kind_label = detector_kind_label(&m.kind);
-            let ecosystem = ecosystem_for_detector_kind(&m.kind);
-            self.rows.push(Row {
-                category: RowCategory::Bundle,
-                label: m.path.escaped().to_string(),
-                secondary: kind_label,
-                selected: !state.detector_excluded.contains(&m.path),
-                backref: BackRef::Detection(idx),
-                ecosystem,
-            });
-            if !matches!(
-                m.kind,
-                DetectorKind::SingleProject { .. } | DetectorKind::NestedMonorepo
-            ) {
-                bundle_paths.push(m.path.escaped().to_string());
+            match &m.shape {
+                DetectedShape::Bundle(b) => {
+                    if !bundle_seen.insert(m.path.clone()) {
+                        continue;
+                    }
+                    self.rows.push(Row {
+                        category: RowCategory::Bundle,
+                        label: m.path.escaped().to_string(),
+                        secondary: bundle_kind_label(b),
+                        selected: !state.detector_excluded.contains(&m.path),
+                        backref: BackRef::Detection(idx),
+                        ecosystem: Some(ecosystem_for_bundle(b).to_string()),
+                    });
+                    bundle_paths.push(m.path.escaped().to_string());
+                }
+                DetectedShape::Hint(_) => {
+                    // Hints decorate Standalones (Schicht 3) — they
+                    // never produce a Bundle row, never hide Standalones,
+                    // never appear as togglable.
+                }
+                DetectedShape::ExternallyManaged(_) => {
+                    // Handled in the dedicated loop below to keep the
+                    // ExternallyManaged section visually grouped at
+                    // the bottom of the list.
+                }
             }
         }
 
-        // Standalone: manual project list.  Skip units whose path is
+        // Standalone: manual project list. Skip units whose path is
         // already covered by a Bundle — e.g. for a Tauri triplet at
         // `apps/clients/desktop/` the loader picks up both the outer
         // `package.json` (npm:desktop) and inner `src-tauri/Cargo.toml`
@@ -160,10 +160,10 @@ impl UnifiedSelectionStep {
 
         // Externally managed: mobile apps.
         for m in state.detection.matches.iter() {
-            if let DetectorKind::MobileApp { platform } = m.kind {
-                let plat = match platform {
-                    MobilePlatform::Ios => "iOS",
-                    MobilePlatform::Android => "Android",
+            if let DetectedShape::ExternallyManaged(ext) = m.shape {
+                let plat = match ext {
+                    ExtKind::MobileIos => "iOS",
+                    ExtKind::MobileAndroid => "Android",
                 };
                 self.rows.push(Row {
                     category: RowCategory::ExternallyManaged,
@@ -175,9 +175,9 @@ impl UnifiedSelectionStep {
                     // post-init.
                     selected: true,
                     backref: BackRef::Mobile,
-                    ecosystem: Some(match platform {
-                        MobilePlatform::Ios => "swift".to_string(),
-                        MobilePlatform::Android => "kotlin".to_string(),
+                    ecosystem: Some(match ext {
+                        ExtKind::MobileIos => "swift".to_string(),
+                        ExtKind::MobileAndroid => "kotlin".to_string(),
                     }),
                 });
             }
@@ -337,34 +337,22 @@ impl Step for UnifiedSelectionStep {
 }
 
 /// Map a detector match to the ecosystem identifier used by the
-/// glyph module. Returns `None` when the kind doesn't pin an
-/// ecosystem (e.g. nested-monorepo).
-fn ecosystem_for_detector_kind(kind: &DetectorKind) -> Option<String> {
-    use crate::core::release_unit::detector::SingleProjectEcosystem;
-    Some(match kind {
-        DetectorKind::HexagonalCargo { .. } => "hexagonal-cargo".to_string(),
-        DetectorKind::Tauri { .. } => "tauri".to_string(),
-        DetectorKind::JvmLibrary { .. } => "kotlin".to_string(),
-        DetectorKind::MobileApp { .. } => return None,
-        DetectorKind::NestedNpmWorkspace => "npm".to_string(),
-        DetectorKind::SdkCascadeMember => "cascade".to_string(),
-        DetectorKind::SingleProject { ecosystem } => match ecosystem {
-            SingleProjectEcosystem::Cargo => "cargo".to_string(),
-            SingleProjectEcosystem::Npm => "npm".to_string(),
-            SingleProjectEcosystem::Pypa => "pypa".to_string(),
-            SingleProjectEcosystem::Go => "go".to_string(),
-            SingleProjectEcosystem::Maven => "maven".to_string(),
-            SingleProjectEcosystem::Swift => "swift".to_string(),
-            SingleProjectEcosystem::Elixir => "elixir".to_string(),
-        },
-        DetectorKind::NestedMonorepo => return None,
-    })
+/// Ecosystem string driving the per-row glyph in `BELAF_ICONS=nerd`
+/// mode. Bundles always pin an ecosystem; the rest of the shapes are
+/// not rendered as rows in this step (Schicht 1 onwards) so they
+/// don't need a mapping here.
+fn ecosystem_for_bundle(b: &BundleKind) -> &'static str {
+    match b {
+        BundleKind::HexagonalCargo { .. } => "hexagonal-cargo",
+        BundleKind::Tauri { .. } => "tauri",
+        BundleKind::JvmLibrary { .. } => "kotlin",
+    }
 }
 
-fn detector_kind_label(kind: &DetectorKind) -> String {
+fn bundle_kind_label(b: &BundleKind) -> String {
     use crate::core::release_unit::detector::{HexagonalPrimary, JvmVersionSource};
-    match kind {
-        DetectorKind::HexagonalCargo { primary } => {
+    match b {
+        BundleKind::HexagonalCargo { primary } => {
             let p = match primary {
                 HexagonalPrimary::Bin => "bin",
                 HexagonalPrimary::Lib => "lib",
@@ -373,14 +361,14 @@ fn detector_kind_label(kind: &DetectorKind) -> String {
             };
             format!("hexagonal-cargo/{p}")
         }
-        DetectorKind::Tauri { single_source } => {
+        BundleKind::Tauri { single_source } => {
             if *single_source {
                 "tauri (single-source)".to_string()
             } else {
                 "tauri (legacy multi-file)".to_string()
             }
         }
-        DetectorKind::JvmLibrary { version_source } => {
+        BundleKind::JvmLibrary { version_source } => {
             let v = match version_source {
                 JvmVersionSource::GradleProperties => "gradle.properties",
                 JvmVersionSource::BuildGradleKtsLiteral => "build.gradle.kts",
@@ -388,15 +376,9 @@ fn detector_kind_label(kind: &DetectorKind) -> String {
             };
             format!("jvm-library/{v}")
         }
-        DetectorKind::MobileApp { .. } => "mobile-app".to_string(),
-        DetectorKind::NestedNpmWorkspace => "nested-npm-workspace".to_string(),
-        DetectorKind::SdkCascadeMember => "sdk-cascade-member".to_string(),
-        DetectorKind::SingleProject { ecosystem } => {
-            format!("single-project/{ecosystem}")
-        }
-        DetectorKind::NestedMonorepo => "nested-monorepo".to_string(),
     }
 }
+
 
 fn render(frame: &mut Frame, area: Rect, rows: &[Row], cursor: usize) {
     use super::glyphs;
@@ -620,7 +602,7 @@ mod tests {
         step::test_support::render_to_string,
     };
     use super::*;
-    use crate::core::release_unit::detector::{DetectionReport, DetectorKind, DetectorMatch};
+    use crate::core::release_unit::detector::{DetectionReport, DetectorMatch, HintKind};
 
     fn state_with_mix() -> WizardState {
         let mut state = WizardState::new(false, None);
@@ -642,16 +624,14 @@ mod tests {
         ];
         let mut report = DetectionReport::default();
         report.matches.push(DetectorMatch {
-            kind: DetectorKind::Tauri {
+            shape: DetectedShape::Bundle(BundleKind::Tauri {
                 single_source: true,
-            },
+            }),
             path: crate::core::git::repository::RepoPathBuf::new(b"apps/desktop"),
             note: None,
         });
         report.matches.push(DetectorMatch {
-            kind: DetectorKind::MobileApp {
-                platform: MobilePlatform::Ios,
-            },
+            shape: DetectedShape::ExternallyManaged(ExtKind::MobileIos),
             path: crate::core::git::repository::RepoPathBuf::new(b"apps/ios"),
             note: None,
         });
@@ -723,9 +703,9 @@ mod tests {
         ];
         let mut report = DetectionReport::default();
         report.matches.push(DetectorMatch {
-            kind: DetectorKind::Tauri {
+            shape: DetectedShape::Bundle(BundleKind::Tauri {
                 single_source: true,
-            },
+            }),
             path: crate::core::git::repository::RepoPathBuf::new(b"apps/clients/desktop"),
             note: None,
         });
@@ -744,9 +724,10 @@ mod tests {
     }
 
     /// Regression for the "sdks/kotlin appears twice in Bundles" bug:
-    /// jvm_library + sdk_cascade_member both hit the same path. The
-    /// wizard should only show one row per path; emission order in
-    /// `detect_all` puts jvm_library first, so that's the label kept.
+    /// jvm_library produces a Bundle hit, sdk_cascade_member produces
+    /// a Hint hit at the same path. After Schicht 1, only the Bundle
+    /// gets a row (the Hint never produces a row), so the dedup is
+    /// structurally guaranteed.
     #[test]
     fn same_path_bundles_dedup_keeping_first_emission() {
         use crate::core::release_unit::detector::JvmVersionSource;
@@ -754,17 +735,17 @@ mod tests {
         let mut state = WizardState::new(false, None);
         let mut report = DetectionReport::default();
         let kotlin_path = crate::core::git::repository::RepoPathBuf::new(b"sdks/kotlin");
-        // jvm_library emits first in detect_all.
+        // jvm_library produces a Bundle hit.
         report.matches.push(DetectorMatch {
-            kind: DetectorKind::JvmLibrary {
+            shape: DetectedShape::Bundle(BundleKind::JvmLibrary {
                 version_source: JvmVersionSource::GradleProperties,
-            },
+            }),
             path: kotlin_path.clone(),
             note: None,
         });
-        // sdk_cascade_member emits later for the same path.
+        // sdk_cascade_member produces a Hint at the same path.
         report.matches.push(DetectorMatch {
-            kind: DetectorKind::SdkCascadeMember,
+            shape: DetectedShape::Hint(HintKind::SdkCascade),
             path: kotlin_path.clone(),
             note: None,
         });

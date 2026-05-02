@@ -1,12 +1,23 @@
-//! `belaf init --auto-detect` — runs the Phase F detectors and emits
+//! `belaf init --auto-detect` — runs the detectors and emits
 //! release_unit / allow_uncovered TOML blocks ready to be appended
 //! to `belaf/config.toml`.
 //!
-//! Phase I.2 + I.5 of `BELAF_MASTER_PLAN.md`. Mobile-app detector
-//! hits are auto-added to `[allow_uncovered]` so the drift detector
-//! doesn't fire on them. Other detector hits are emitted as
-//! `[[release_unit]]` blocks (or, where idiomatic, a single
-//! `[[release_unit_glob]]` collapsing many sibling matches).
+//! Three classes of dispatch correspond directly to the
+//! [`DetectedShape`] taxonomy in [`crate::core::release_unit::shape`]:
+//!
+//! - `Bundle(_)`  → [`emit_bundle_block`]: writes a `[[release_unit]]`
+//!   or, for hexagonal-cargo siblings, a single
+//!   `[[release_unit_glob]]`.
+//! - `Hint(_)`    → [`emit_hint_comment`]: drops a comment-only hint
+//!   into the snippet (no toggleable config — hints decorate
+//!   Standalone rows in the wizard).
+//! - `ExternallyManaged(_)` → [`register_externally_managed`]: collects
+//!   the path for the trailing `[allow_uncovered]` block so the drift
+//!   detector stays silent on it.
+//!
+//! That structural separation eliminates the 3.0.x bug class where
+//! `SdkCascadeMember` (a hint) was accidentally reachable from a
+//! Bundle-emit path.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -14,7 +25,8 @@ use std::path::Path;
 use super::toml_util::toml_quote;
 use crate::core::git::repository::{RepoPathBuf, Repository};
 use crate::core::release_unit::detector::{
-    self, DetectorKind, DetectorMatch, HexagonalPrimary, JvmVersionSource, MobilePlatform,
+    self, BundleKind, DetectedShape, DetectorMatch, ExtKind, HexagonalPrimary, HintKind,
+    JvmVersionSource,
 };
 
 /// Result of an auto-detect pass: TOML snippet to append, plus
@@ -86,32 +98,88 @@ pub fn run(repo: &Repository) -> AutoDetectResult {
 /// the singleton-explicit-block path automatically.
 pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> AutoDetectResult {
     let mut report = detector::detect_all(repo);
-    // Filter the matches up-front. The excluded paths are still
-    // tracked so we can append them to the [ignore_paths] block at
-    // the bottom of the snippet.
     if !exclusions.is_empty() {
         report.matches.retain(|m| !exclusions.contains(&m.path));
     }
     let mut snippet = String::new();
     let mut counters = DetectionCounters::default();
     let mut allow_uncovered: Vec<String> = Vec::new();
-    // Excluded paths sorted for byte-deterministic output.
     let mut ignore_paths: Vec<String> = exclusions
         .iter()
         .map(|p| format!("{}/", p.escaped()))
         .collect();
     ignore_paths.sort();
 
-    // Group hexagonal cargo matches into a single glob block per
-    // common parent (e.g. `apps/services/*`) when at least 2
-    // matches share the same parent — clikd-shape collapses 13
-    // services into 1 glob block. We use a sorted Vec instead of
-    // HashMap iteration to keep the snippet output byte-deterministic
-    // across runs (DoD #7) — `HashMap` iteration order is unspecified
-    // and would shuffle the emitted blocks.
-    let mut hex_by_parent: HashMap<String, Vec<&DetectorMatch>> = HashMap::new();
+    // Bundles: hexagonal-cargo glob-collapses; the rest go through
+    // the per-shape emit path below.
+    emit_hexagonal_cargo_block(&mut snippet, &mut counters, &report.matches);
+
     for m in &report.matches {
-        if matches!(m.kind, DetectorKind::HexagonalCargo { .. }) {
+        match &m.shape {
+            DetectedShape::Bundle(b) => match b {
+                BundleKind::HexagonalCargo { .. } => {
+                    // already handled above (glob-aware).
+                }
+                BundleKind::Tauri { single_source } => {
+                    emit_tauri_block(&mut snippet, &mut counters, m, *single_source);
+                }
+                BundleKind::JvmLibrary { version_source } => {
+                    emit_jvm_library_block(&mut snippet, &mut counters, m, version_source);
+                }
+            },
+            DetectedShape::Hint(h) => emit_hint_comment(&mut snippet, &mut counters, m, h),
+            DetectedShape::ExternallyManaged(e) => {
+                register_externally_managed(&mut allow_uncovered, &mut counters, m, *e);
+            }
+        }
+    }
+
+    if !allow_uncovered.is_empty() {
+        snippet.push_str("\n# Mobile apps detected — handed off to Bitrise / fastlane / Codemagic.\n# Belaf doesn't manage mobile app releases; these paths are listed in\n# allow_uncovered so the drift detector doesn't fire on them.\n[allow_uncovered]\n");
+        let quoted: Vec<String> = allow_uncovered.iter().map(|p| toml_quote(p)).collect();
+        snippet.push_str(&format!("paths = [{}]\n", quoted.join(", ")));
+    }
+
+    if counters.sdk_cascade_member > 0 {
+        snippet.push_str(&format!(
+            "\n# {} SDK packages detected under sdks/* — consider adding\n# `cascade_from = {{ source = \"<schema-unit>\", bump = \"floor_minor\" }}`\n# to each so they bump in lockstep when the schema bumps.\n",
+            counters.sdk_cascade_member
+        ));
+    }
+
+    if !ignore_paths.is_empty() {
+        snippet.push_str(
+            "\n# User-deselected detector hits — kept out of belaf's release\n# pipeline AND silenced for the drift detector. Move to\n# [allow_uncovered] manually if these are released externally.\n[ignore_paths]\n",
+        );
+        let quoted: Vec<String> = ignore_paths.iter().map(|p| toml_quote(p)).collect();
+        snippet.push_str(&format!("paths = [{}]\n", quoted.join(", ")));
+    }
+
+    let prefixed_snippet = if snippet.is_empty() {
+        snippet
+    } else {
+        format!("\n{AUTO_DETECT_MARKER}\n{snippet}")
+    };
+
+    AutoDetectResult {
+        toml_snippet: prefixed_snippet,
+        counters,
+    }
+}
+
+/// Hexagonal-cargo Bundle emitter: groups siblings into a glob block
+/// when 2+ share a parent; otherwise emits one explicit
+/// `[[release_unit]]` per service. We use a sorted Vec instead of
+/// HashMap iteration so the snippet output is byte-deterministic
+/// across runs.
+fn emit_hexagonal_cargo_block(
+    snippet: &mut String,
+    counters: &mut DetectionCounters,
+    matches: &[DetectorMatch],
+) {
+    let mut hex_by_parent: HashMap<String, Vec<&DetectorMatch>> = HashMap::new();
+    for m in matches {
+        if let DetectedShape::Bundle(BundleKind::HexagonalCargo { .. }) = m.shape {
             counters.hexagonal_cargo += 1;
             let parent = parent_of(&m.path).unwrap_or_default();
             hex_by_parent.entry(parent).or_default().push(m);
@@ -121,15 +189,12 @@ pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> Aut
     hex_groups.sort_by(|a, b| a.0.cmp(&b.0));
     for (parent, matches) in hex_groups {
         if matches.len() >= 2 && !parent.is_empty() {
-            // Glob block — pick the primary by majority vote so the
-            // emitted `manifests = […]` matches most members. Ties
-            // break in favour of `Bin` (the convention), then `Lib`,
-            // then `Workers`. The `fallback_manifests` line below
-            // catches the outlier (e.g. clikd's `mondo` has only
-            // `crates/workers`, while aura/ekko have `crates/bin`).
+            // Majority-vote primary so the emitted `manifests = […]`
+            // matches the most members. Tie-break: Bin > Lib > Workers
+            // > BaseName. The `fallback_manifests` line catches outliers.
             let mut votes: HashMap<HexagonalPrimary, usize> = HashMap::new();
             for m in &matches {
-                if let DetectorKind::HexagonalCargo { primary } = m.kind {
+                if let DetectedShape::Bundle(BundleKind::HexagonalCargo { primary }) = m.shape {
                     *votes.entry(primary).or_insert(0) += 1;
                 }
             }
@@ -150,18 +215,15 @@ pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> Aut
                 n = matches.len(),
             ));
         } else {
-            // Singletons → explicit blocks.
             for m in matches {
-                let primary = match &m.kind {
-                    DetectorKind::HexagonalCargo { primary } => *primary,
-                    _ => continue,
+                let DetectedShape::Bundle(BundleKind::HexagonalCargo { primary }) = m.shape else {
+                    continue;
                 };
                 let path = m.path.escaped();
-                // Owned `String` so the `BaseName` branch doesn't have
-                // to leak a heap allocation (previous code did
+                // Owned `String` so the BaseName branch doesn't leak
+                // a heap allocation (the previous code did
                 // `.to_string().leak()` to coerce to `&'static str`,
-                // which permanently leaked memory on every call —
-                // unbounded under repeated `belaf init` / `prepare`).
+                // which permanently leaked memory on every call).
                 let primary_str: String = match primary {
                     HexagonalPrimary::Bin => "bin".to_string(),
                     HexagonalPrimary::Lib => "lib".to_string(),
@@ -180,120 +242,98 @@ pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> Aut
             }
         }
     }
+}
 
-    // Tauri
-    for m in &report.matches {
-        if let DetectorKind::Tauri { single_source } = &m.kind {
-            let path = m.path.escaped();
-            let name_raw = path.rsplit('/').next().unwrap_or("desktop");
-            let name_q = toml_quote(name_raw);
-            let satellites_q = toml_quote(&path);
-            if *single_source {
-                counters.tauri_single_source += 1;
-                let manifest_q = toml_quote(&format!("{path}/package.json"));
-                snippet.push_str(&format!(
-                    "\n[[release_unit]]\nname = {name_q}\necosystem = \"tauri\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {manifest_q}\nversion_field = \"npm_package_json\"\n",
-                ));
-            } else {
-                counters.tauri_legacy += 1;
-                let pkg_q = toml_quote(&format!("{path}/package.json"));
-                let cargo_q = toml_quote(&format!("{path}/src-tauri/Cargo.toml"));
-                let conf_q = toml_quote(&format!("{path}/src-tauri/tauri.conf.json"));
-                snippet.push_str(&format!(
-                    "\n# Tauri legacy multi-file (3 manifests in lockstep)\n[[release_unit]]\nname = {name_q}\necosystem = \"tauri\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {pkg_q}\nversion_field = \"npm_package_json\"\n[[release_unit.source.manifests]]\npath = {cargo_q}\nversion_field = \"cargo_toml\"\n[[release_unit.source.manifests]]\npath = {conf_q}\nversion_field = \"tauri_conf_json\"\n",
-                ));
-            }
-        }
+fn emit_tauri_block(
+    snippet: &mut String,
+    counters: &mut DetectionCounters,
+    m: &DetectorMatch,
+    single_source: bool,
+) {
+    let path = m.path.escaped();
+    let name_raw = path.rsplit('/').next().unwrap_or("desktop");
+    let name_q = toml_quote(name_raw);
+    let satellites_q = toml_quote(&path);
+    if single_source {
+        counters.tauri_single_source += 1;
+        let manifest_q = toml_quote(&format!("{path}/package.json"));
+        snippet.push_str(&format!(
+            "\n[[release_unit]]\nname = {name_q}\necosystem = \"tauri\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {manifest_q}\nversion_field = \"npm_package_json\"\n",
+        ));
+    } else {
+        counters.tauri_legacy += 1;
+        let pkg_q = toml_quote(&format!("{path}/package.json"));
+        let cargo_q = toml_quote(&format!("{path}/src-tauri/Cargo.toml"));
+        let conf_q = toml_quote(&format!("{path}/src-tauri/tauri.conf.json"));
+        snippet.push_str(&format!(
+            "\n# Tauri legacy multi-file (3 manifests in lockstep)\n[[release_unit]]\nname = {name_q}\necosystem = \"tauri\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {pkg_q}\nversion_field = \"npm_package_json\"\n[[release_unit.source.manifests]]\npath = {cargo_q}\nversion_field = \"cargo_toml\"\n[[release_unit.source.manifests]]\npath = {conf_q}\nversion_field = \"tauri_conf_json\"\n",
+        ));
     }
+}
 
-    // JVM library
-    for m in &report.matches {
-        if let DetectorKind::JvmLibrary { version_source } = &m.kind {
-            counters.jvm_library += 1;
-            let path = m.path.escaped();
-            let name_raw = path.rsplit('/').next().unwrap_or("sdk");
-            let name_q = toml_quote(name_raw);
-            let satellites_q = toml_quote(&path);
-            let (vfield, manifest_raw) = match version_source {
-                JvmVersionSource::GradleProperties => {
-                    ("gradle_properties", format!("{path}/gradle.properties"))
-                }
-                JvmVersionSource::BuildGradleKtsLiteral => {
-                    ("generic_regex", format!("{path}/build.gradle.kts"))
-                }
-                JvmVersionSource::PluginManaged => {
-                    snippet.push_str(&format!(
-                        "\n# Plugin-managed JVM library at {path} — recommend external_versioner.\n# Edit the [release_unit.source.external] block below to drive your gradle plugin.\n[[release_unit]]\nname = {name_q}\necosystem = \"external\"\nsatellites = [{satellites_q}]\n[release_unit.source.external]\ntool = \"gradle\"\nread_command = \"./gradlew :printVersion -q\"\nwrite_command = \"./gradlew :setVersion -PnewVersion={{version}}\"\ntimeout_sec = 120\n",
-                    ));
-                    continue;
-                }
-            };
-            let manifest_q = toml_quote(&manifest_raw);
+fn emit_jvm_library_block(
+    snippet: &mut String,
+    counters: &mut DetectionCounters,
+    m: &DetectorMatch,
+    version_source: &JvmVersionSource,
+) {
+    counters.jvm_library += 1;
+    let path = m.path.escaped();
+    let name_raw = path.rsplit('/').next().unwrap_or("sdk");
+    let name_q = toml_quote(name_raw);
+    let satellites_q = toml_quote(&path);
+    let (vfield, manifest_raw) = match version_source {
+        JvmVersionSource::GradleProperties => {
+            ("gradle_properties", format!("{path}/gradle.properties"))
+        }
+        JvmVersionSource::BuildGradleKtsLiteral => {
+            ("generic_regex", format!("{path}/build.gradle.kts"))
+        }
+        JvmVersionSource::PluginManaged => {
             snippet.push_str(&format!(
-                "\n[[release_unit]]\nname = {name_q}\necosystem = \"jvm-library\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {manifest_q}\nversion_field = \"{vfield}\"\n",
+                "\n# Plugin-managed JVM library at {path} — recommend external_versioner.\n# Edit the [release_unit.source.external] block below to drive your gradle plugin.\n[[release_unit]]\nname = {name_q}\necosystem = \"external\"\nsatellites = [{satellites_q}]\n[release_unit.source.external]\ntool = \"gradle\"\nread_command = \"./gradlew :printVersion -q\"\nwrite_command = \"./gradlew :setVersion -PnewVersion={{version}}\"\ntimeout_sec = 120\n",
             ));
-            // GenericRegex needs pattern + replace
-            if vfield == "generic_regex" {
-                snippet.push_str("regex_pattern = '(?m)^version\\s*=\\s*\"([^\"]+)\"'\n");
-                snippet.push_str("regex_replace = \"version = \\\"{version}\\\"\"\n");
-            }
+            return;
         }
+    };
+    let manifest_q = toml_quote(&manifest_raw);
+    snippet.push_str(&format!(
+        "\n[[release_unit]]\nname = {name_q}\necosystem = \"jvm-library\"\nsatellites = [{satellites_q}]\n[[release_unit.source.manifests]]\npath = {manifest_q}\nversion_field = \"{vfield}\"\n",
+    ));
+    if vfield == "generic_regex" {
+        snippet.push_str("regex_pattern = '(?m)^version\\s*=\\s*\"([^\"]+)\"'\n");
+        snippet.push_str("regex_replace = \"version = \\\"{version}\\\"\"\n");
     }
+}
 
-    // Mobile apps → allow_uncovered (Phase I.5).
-    for m in &report.matches {
-        if let DetectorKind::MobileApp { platform } = &m.kind {
-            match platform {
-                MobilePlatform::Ios => counters.mobile_ios += 1,
-                MobilePlatform::Android => counters.mobile_android += 1,
-            }
-            allow_uncovered.push(format!("{}/", m.path.escaped()));
+/// Pure metadata; never togglable, never produces a `[[release_unit]]`.
+/// Hint comments help the user understand what the wizard saw without
+/// committing config they'd have to maintain.
+fn emit_hint_comment(
+    snippet: &mut String,
+    counters: &mut DetectionCounters,
+    m: &DetectorMatch,
+    hint: &HintKind,
+) {
+    match hint {
+        HintKind::SdkCascade => {
+            counters.sdk_cascade_member += 1;
+            // Aggregated message after the per-shape loop.
         }
-    }
-    if !allow_uncovered.is_empty() {
-        snippet.push_str("\n# Mobile apps detected — handed off to Bitrise / fastlane / Codemagic.\n# Belaf doesn't manage mobile app releases; these paths are listed in\n# allow_uncovered so the drift detector doesn't fire on them.\n[allow_uncovered]\n");
-        let quoted: Vec<String> = allow_uncovered.iter().map(|p| toml_quote(p)).collect();
-        snippet.push_str(&format!("paths = [{}]\n", quoted.join(", ")));
-    }
-
-    // Nested npm workspace
-    for m in &report.matches {
-        if matches!(m.kind, DetectorKind::NestedNpmWorkspace) {
+        HintKind::NpmWorkspace => {
             counters.nested_npm_workspace += 1;
-            // Just a comment hint — the npm loader already covers the
-            // packages within. User can add explicit blocks if they
-            // want different release-unit granularity.
             let path = m.path.escaped();
             snippet.push_str(&format!(
                 "\n# Nested npm workspace detected at {path} — its members will\n# be auto-detected by the npm loader. Add an explicit [[release_unit]]\n# here if you want a non-default tag-format / cascade / visibility.\n",
             ));
         }
-    }
-
-    // SDK cascade members
-    for m in &report.matches {
-        if matches!(m.kind, DetectorKind::SdkCascadeMember) {
-            counters.sdk_cascade_member += 1;
-        }
-    }
-    if counters.sdk_cascade_member > 0 {
-        snippet.push_str(&format!(
-            "\n# {} SDK packages detected under sdks/* — consider adding\n# `cascade_from = {{ source = \"<schema-unit>\", bump = \"floor_minor\" }}`\n# to each so they bump in lockstep when the schema bumps.\n",
-            counters.sdk_cascade_member
-        ));
-    }
-
-    for m in &report.matches {
-        if let DetectorKind::SingleProject { ecosystem } = &m.kind {
+        HintKind::SingleProject { ecosystem } => {
             counters.single_project += 1;
             snippet.push_str(&format!(
                 "\n# Single-project repo detected ({ecosystem}) — `v{{version}}`\n# tag format is suggested instead of the ecosystem default.\n# Override per-unit if you publish under a different naming convention.\n",
             ));
         }
-    }
-
-    for m in &report.matches {
-        if matches!(m.kind, DetectorKind::NestedMonorepo) {
+        HintKind::NestedMonorepo => {
             counters.nested_monorepo += 1;
             let path = m.path.escaped();
             let note = m
@@ -305,32 +345,19 @@ pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> Aut
             ));
         }
     }
+}
 
-    // User-excluded matches — emit as `[ignore_paths]` so the
-    // resolver skips them AND the drift detector stays silent. The
-    // user opted these out interactively in `DetectorReviewStep`.
-    if !ignore_paths.is_empty() {
-        snippet.push_str(
-            "\n# User-deselected detector hits — kept out of belaf's release\n# pipeline AND silenced for the drift detector. Move to\n# [allow_uncovered] manually if these are released externally.\n[ignore_paths]\n",
-        );
-        let quoted: Vec<String> = ignore_paths.iter().map(|p| toml_quote(p)).collect();
-        snippet.push_str(&format!("paths = [{}]\n", quoted.join(", ")));
+fn register_externally_managed(
+    allow_uncovered: &mut Vec<String>,
+    counters: &mut DetectionCounters,
+    m: &DetectorMatch,
+    ext: ExtKind,
+) {
+    match ext {
+        ExtKind::MobileIos => counters.mobile_ios += 1,
+        ExtKind::MobileAndroid => counters.mobile_android += 1,
     }
-
-    // Prepend the idempotency marker so re-runs of `belaf init
-    // --auto-detect` don't duplicate-append the same blocks. The
-    // marker is a unique comment line that `append_to_config` greps
-    // for before writing.
-    let prefixed_snippet = if snippet.is_empty() {
-        snippet
-    } else {
-        format!("\n{AUTO_DETECT_MARKER}\n{snippet}")
-    };
-
-    AutoDetectResult {
-        toml_snippet: prefixed_snippet,
-        counters,
-    }
+    allow_uncovered.push(format!("{}/", m.path.escaped()));
 }
 
 /// Append the snippet to `belaf/config.toml`. Idempotent via the
@@ -394,7 +421,6 @@ mod tests {
 
     #[test]
     fn empty_repo_produces_empty_snippet() {
-        // Use a temp dir as repo with nothing inside.
         let dir = tempfile::TempDir::new().unwrap();
         let _ = std::process::Command::new("git")
             .args(["init"])
@@ -446,15 +472,12 @@ mod tests {
 
     #[test]
     fn toml_quote_escapes_control_characters() {
-        // \x07 (BEL) is below 0x20 — must surface as .
+        // \x07 (BEL) is below 0x20 — must surface as .
         assert_eq!(toml_quote("\x07"), "\"\\u0007\"");
     }
 
     #[test]
     fn toml_quote_round_trips_via_toml_parser() {
-        // The strongest end-to-end check: feed the quoted output to a
-        // TOML parser and confirm we get the original bytes back, even
-        // with malicious metacharacters mixed in.
         let nasty = r#"a"b\c]] = inject"#;
         let s = format!("key = {}", toml_quote(nasty));
         let parsed: toml::Value = toml::from_str(&s).expect("must parse as valid TOML");
@@ -482,9 +505,6 @@ mod tests {
 
     #[test]
     fn append_to_config_re_appends_when_marker_removed() {
-        // The user yanks the marker line — next `--auto-detect` run
-        // should re-emit the snippet because the idempotency anchor
-        // is gone.
         let dir = tempfile::TempDir::new().unwrap();
         let cfg = dir.path().join("config.toml");
         std::fs::write(&cfg, "# user removed the marker\n").unwrap();
