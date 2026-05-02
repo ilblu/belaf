@@ -18,6 +18,10 @@ use uuid::Uuid;
 use super::codegen::{self, BelafReleaseManifest, Release as WireRelease};
 use super::known::{BumpType, Ecosystem};
 
+/// Wire-format schema version. Single integer (Kubernetes/Terraform-style):
+/// additive changes ship without a bump, breaking changes bump the integer.
+pub const SCHEMA_VERSION: &str = "1";
+
 // ---------------------------------------------------------------------------
 // Manifest
 // ---------------------------------------------------------------------------
@@ -42,7 +46,7 @@ impl Manifest {
         let format = time::format_description::well_known::Rfc3339;
         let created_at = now.format(&format).unwrap_or_else(|_| now.to_string());
         Self {
-            schema_version: "3.0".to_string(),
+            schema_version: SCHEMA_VERSION.to_string(),
             manifest_id: Uuid::now_v7().to_string(),
             created_at,
             created_by,
@@ -193,7 +197,7 @@ impl From<Manifest> for BelafReleaseManifest {
 impl From<BelafReleaseManifest> for Manifest {
     fn from(wire: BelafReleaseManifest) -> Self {
         Self {
-            schema_version: "3.0".to_string(),
+            schema_version: SCHEMA_VERSION.to_string(),
             manifest_id: wire.manifest_id.into(),
             created_at: wire.created_at.into(),
             created_by: wire.created_by.into(),

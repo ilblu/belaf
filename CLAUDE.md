@@ -77,7 +77,7 @@ src/
 │   └── ui/             shared Ratatui components
 └── utils/              theme, file_io, version_check
 schemas/
-└── manifest.v3.0.schema.json  canonical wire format (belaf-owned)
+└── manifest.v1.schema.json  canonical wire format (belaf-owned)
 ```
 
 ### Release pipeline (the core flow)
@@ -116,9 +116,9 @@ scenarios in `tests/test_ecosystem_edge_cases.rs`.
 
 ### Manifest schema is the wire format
 
-belaf is the owner of `belaf/schemas/manifest.v3.0.schema.json`
+belaf is the owner of `belaf/schemas/manifest.v1.schema.json`
 (JSON Schema Draft 2020-12). `build.rs` runs `typify` against it to
-produce `$OUT_DIR/manifest_v3_codegen.rs`, which is `include!`d by
+produce `$OUT_DIR/manifest_v1_codegen.rs`, which is `include!`d by
 `core::wire::codegen` and wrapped by hand-written domain types in
 `core::wire::domain`. The github-app vendors a copy (mirror of the
 OpenAPI direction): drift between producer + consumer is a build error

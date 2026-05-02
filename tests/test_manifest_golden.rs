@@ -1,6 +1,6 @@
-//! Golden-file roundtrip for manifest 2.0 (plan §2 / Gap #5).
+//! Golden-file roundtrip for manifest v1.
 //!
-//! Commits one representative 2.0 manifest at `tests/golden/`. The test
+//! Commits one representative v1 manifest at `tests/golden/`. The test
 //! asserts that `parse → serialize → parse` produces the same in-memory
 //! Manifest structure and that `serialize → parse → serialize` produces
 //! byte-equal JSON.
@@ -8,20 +8,20 @@
 //! The goal is to catch silent changes in the wire format: any
 //! refactor that drops a field or reorders keys differently than today
 //! shows up here as a snapshot diff. The golden file is committed
-//! alongside the schema, so a v2.0 producer + v2.0 consumer (in either
+//! alongside the schema, so a v1 producer + v1 consumer (in either
 //! repo) can replay it and confirm wire compatibility.
 
 use std::fs;
 
 use belaf::core::manifest::ReleaseManifest;
 
-const GOLDEN_PATH: &str = "tests/golden/manifest-3.0-canonical.json";
+const GOLDEN_PATH: &str = "tests/golden/manifest-1-canonical.json";
 
 #[test]
 fn golden_manifest_parses() {
     let raw = fs::read_to_string(GOLDEN_PATH).expect("read golden");
     let m = ReleaseManifest::from_json(&raw).expect("parse golden");
-    assert_eq!(m.schema_version, "3.0");
+    assert_eq!(m.schema_version, "1");
     assert_eq!(m.manifest_id, "01890afa-7c5c-7000-8b00-aaaaaaaaaaaa");
     assert_eq!(m.releases.len(), 3);
     assert_eq!(m.groups.len(), 1);
@@ -97,12 +97,12 @@ fn golden_manifest_canonical_form_is_stable() {
     );
 }
 
-/// The golden file MUST validate against `schemas/manifest.v3.0.schema.json`.
+/// The golden file MUST validate against `schemas/manifest.v1.schema.json`.
 /// Catches drift between the canonical schema and the committed example.
 #[test]
 fn golden_manifest_validates_against_schema() {
     use serde_json::Value;
-    let schema_raw = fs::read_to_string("schemas/manifest.v3.0.schema.json").expect("read schema");
+    let schema_raw = fs::read_to_string("schemas/manifest.v1.schema.json").expect("read schema");
     let schema_json: Value = serde_json::from_str(&schema_raw).expect("parse schema");
     let golden_raw = fs::read_to_string(GOLDEN_PATH).expect("read golden");
     let golden_json: Value = serde_json::from_str(&golden_raw).expect("parse golden");

@@ -127,14 +127,14 @@ discriminator.
 
 When you change the manifest schema:
 
-1. Edit `belaf/schemas/manifest.v3.0.schema.json`.
+1. Edit `belaf/schemas/manifest.v1.schema.json`.
 2. `cargo build` here regenerates the Rust wire types via `typify`
    (see `belaf/build.rs`).
 3. Vendor the schema into github-app:
-   `cp belaf/schemas/manifest.v3.0.schema.json github-app/api-spec/manifest.v3.0.schema.json`.
+   `cp belaf/schemas/manifest.v1.schema.json github-app/api-spec/manifest.v1.schema.json`.
 4. In github-app:
    `bun run packages/shared/scripts/generate-manifest-zod.ts` →
-   regenerates `manifest-v3-schema.gen.ts`.
+   regenerates `manifest-v1-schema.gen.ts`.
 5. Commit both sides together.
 
 Drift between producer and consumer surfaces as a Rust compile error

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://belaf.dev/schemas/manifest.v3.0.schema.json",
+  "$id": "https://belaf.dev/schemas/manifest.v1.schema.json",
   "title": "Belaf Release Manifest",
-  "description": "Wire format produced by the belaf CLI and consumed by the belaf GitHub App. Version 3.0 — promotes config-side metadata (bundle_manifests, external_versioner, version_field_spec, cascade_from, visibility, satellites) to first-class typed fields on each release entry so downstream consumers (github-app, dashboard) can display unit semantics without re-fetching config. Belaf is the schema-owner; downstream consumers vendor a copy of this file.",
+  "description": "Wire format produced by the belaf CLI and consumed by the belaf GitHub App. Version 1 — first stable manifest format. Major-only versioning (Kubernetes/Terraform-style); additive changes ship without a bump, breaking changes bump the integer. Belaf is the schema-owner; downstream consumers vendor a copy of this file.",
   "type": "object",
   "required": [
     "schema_version",
@@ -15,9 +15,9 @@
   "additionalProperties": false,
   "properties": {
     "schema_version": {
-      "description": "Manifest schema version. The producer (CLI) emits the version it wrote; the consumer (App) dispatches to the matching parser. Bump only on breaking changes.",
+      "description": "Manifest schema version. Single integer (Kubernetes/Terraform-style); additive changes don't bump, breaking changes bump the integer. The producer (CLI) emits the version it wrote; the consumer (App) dispatches to the matching parser.",
       "type": "string",
-      "const": "3.0"
+      "const": "1"
     },
     "manifest_id": {
       "description": "UUID v7 identifying this manifest. Sortable. The on-disk filename is `belaf/releases/<manifest_id>.json`.",
@@ -162,35 +162,35 @@
           ]
         },
         "bundle_manifests": {
-          "description": "3.0 typed promotion. List of manifest file paths (relative to repo root) that compose this multi-manifest ReleaseUnit. Empty / absent for single-manifest units. Dashboard consumers render this as a `<ManifestFileList>` badge.",
+          "description": "List of manifest file paths (relative to repo root) that compose this multi-manifest ReleaseUnit. Empty / absent for single-manifest units. Dashboard consumers render this as a `<ManifestFileList>` badge.",
           "type": "array",
           "default": [],
           "items": { "type": "string", "minLength": 1 }
         },
         "external_versioner": {
-          "description": "3.0 typed promotion. Present when this release's version is sourced via an external command (e.g. a plugin-managed Gradle build that derives version from git tags). Absent for normal manifest-sourced units.",
+          "description": "Present when this release's version is sourced via an external command (e.g. a plugin-managed Gradle build that derives version from git tags). Absent for normal manifest-sourced units.",
           "oneOf": [
             { "type": "null" },
             { "$ref": "#/$defs/external_versioner" }
           ]
         },
         "version_field_spec": {
-          "description": "3.0 typed promotion. Names how the version is encoded in the manifest file(s) — drives the rewriter selection on the producer side. Stored as a free-form string so new specs can land additively (Known/Unknown classification on consumer). Standard values: `cargo_toml`, `npm_package_json`, `tauri_conf_json`, `gradle_properties`, `generic_regex`.",
+          "description": "Names how the version is encoded in the manifest file(s) — drives the rewriter selection on the producer side. Stored as a free-form string so new specs can land additively (Known/Unknown classification on consumer). Standard values: `cargo_toml`, `npm_package_json`, `tauri_conf_json`, `gradle_properties`, `generic_regex`.",
           "type": ["string", "null"]
         },
         "cascade_from": {
-          "description": "3.0 typed promotion. Present when this release was bumped because a cascade source (typically a schema unit) was bumped — encodes which source and which bump strategy was applied.",
+          "description": "Present when this release was bumped because a cascade source (typically a schema unit) was bumped — encodes which source and which bump strategy was applied.",
           "oneOf": [
             { "type": "null" },
             { "$ref": "#/$defs/cascade_from" }
           ]
         },
         "visibility": {
-          "description": "3.0 typed promotion. Whether this unit is publicly published (publish to a registry) or internal-only. Stored as free-form string for forward extensibility. Standard values: `public`, `internal`.",
+          "description": "Whether this unit is publicly published (publish to a registry) or internal-only. Stored as free-form string for forward extensibility. Standard values: `public`, `internal`.",
           "type": ["string", "null"]
         },
         "satellites": {
-          "description": "3.0 typed promotion. Repo-relative directories that are part of this ReleaseUnit but contain no version-bearing manifest of their own — e.g. `crates/foo/` of a hexagonal cargo unit whose primary manifest is `crates/foo/bin/Cargo.toml`.",
+          "description": "Repo-relative directories that are part of this ReleaseUnit but contain no version-bearing manifest of their own — e.g. `crates/foo/` of a hexagonal cargo unit whose primary manifest is `crates/foo/bin/Cargo.toml`.",
           "type": "array",
           "default": [],
           "items": { "type": "string", "minLength": 1 }

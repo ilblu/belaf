@@ -1,4 +1,4 @@
-//! Wire-format types for the belaf release manifest (`schema_version: "3.0"`).
+//! Wire-format types for the belaf release manifest (`schema_version: "1"`).
 //!
 //! This module is the boundary between the **JSON Schema** (the on-disk wire
 //! format, owned by belaf, vendored by github-app) and the **domain model**
@@ -7,7 +7,7 @@
 //! ## Layout
 //!
 //! - [`codegen`] — the `typify`-generated structs from
-//!   `schemas/manifest.v3.0.schema.json`. Auto-generated; do not edit.
+//!   `schemas/manifest.v1.schema.json`. Auto-generated; do not edit.
 //!   All field types are 1:1 with the schema (newtypes for pattern-validated
 //!   strings, plain `String` for free-form fields).
 //! - [`known`] — hand-maintained whitelists for variant fields the schema

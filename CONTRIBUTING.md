@@ -127,7 +127,7 @@ See `CLAUDE.md` for the canonical module map. High-level:
   - `ecosystem/` — one file per language plus the `Ecosystem` trait + registry
   - `group.rs`, `tag_format.rs`, `bump_source.rs` — v2 release-shape primitives
   - `workflow.rs` — orchestrator (`ReleasePipeline`)
-- `schemas/manifest.v3.0.schema.json` — canonical wire format
+- `schemas/manifest.v1.schema.json` — canonical wire format
 
 ## Adding Language Support
 
