@@ -8,7 +8,7 @@
 //! - `build.gradle.kts` literal — `version = "…"` in the Kotlin DSL.
 //! - plugin-managed — version derived from a Gradle plugin
 //!   (`io.github.reactivecircus.app-versioning`, etc.). Emitted as
-//!   an `external_versioner` `[release_unit]` because we can't write
+//!   an `external` `[release_unit.<name>]` because we can't write
 //!   the version through file rewrites.
 
 use std::path::{Path, PathBuf};
@@ -63,7 +63,10 @@ pub fn emit_all(
     counters: &mut DetectionCounters,
 ) {
     for m in matches {
-        if matches!(m.shape, DetectedShape::Bundle(BundleKind::JvmLibrary { .. })) {
+        if matches!(
+            m.shape,
+            DetectedShape::Bundle(BundleKind::JvmLibrary { .. })
+        ) {
             emit_block(m, snippet, counters);
         }
     }

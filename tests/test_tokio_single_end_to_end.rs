@@ -45,7 +45,7 @@ fn tokio_single_auto_detect_emits_no_release_unit_blocks() {
     let result = auto_detect::run(&r);
 
     assert!(
-        !result.toml_snippet.contains("[[release_unit"),
+        !result.toml_snippet.contains("[release_unit."),
         "tokio-single must not produce any release_unit blocks; got snippet:\n{}",
         result.toml_snippet
     );
@@ -95,12 +95,10 @@ fn tokio_single_explain_reports_no_release_units() {
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    // No `[[release_unit]]` configured → friendly message rather
+    // No `[release_unit.<name>]` configured → friendly message rather
     // than a unit count.
     assert!(
-        stdout.contains("No [[release_unit]]")
-            || stdout.contains("No [[release_unit_glob]]")
-            || stdout.contains("0 ReleaseUnits"),
+        stdout.contains("No [release_unit.<name>]") || stdout.contains("0 ReleaseUnits"),
         "explain on a no-release_unit config should say so, got:\n{stdout}"
     );
 }

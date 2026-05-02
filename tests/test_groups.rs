@@ -287,9 +287,8 @@ schema-rs = { path = "../cargo", version = "0.1.0" }
     );
 
     let cfg = repo.read_file("belaf/config.toml");
-    let cfg_with_group = format!(
-        "{cfg}\n[group.schema]\nmembers = [\"schema-rs\", \"schema-rs-helper\"]\n"
-    );
+    let cfg_with_group =
+        format!("{cfg}\n[group.schema]\nmembers = [\"schema-rs\", \"schema-rs-helper\"]\n");
     repo.write_file("belaf/config.toml", &cfg_with_group);
 
     repo.write_file("packages/cargo/src/feat.rs", "pub fn next() {}\n");
@@ -403,9 +402,7 @@ edition = "2021"
     assert!(init_out.status.success());
 
     let cfg = repo.read_file("belaf/config.toml");
-    let cfg_bad = format!(
-        "{cfg}\n[group.phantom]\nmembers = [\"real-pkg\", \"does-not-exist\"]\n"
-    );
+    let cfg_bad = format!("{cfg}\n[group.phantom]\nmembers = [\"real-pkg\", \"does-not-exist\"]\n");
     repo.write_file("belaf/config.toml", &cfg_bad);
     repo.commit("chore: phantom member");
 

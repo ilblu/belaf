@@ -109,7 +109,7 @@ impl DriftReport {
             ));
         }
         s.push_str(
-            "\nChoose one:\n  → run `belaf init --ci --auto-detect --force` to re-detect bundles and append release_unit blocks to belaf/config.toml (idempotent — the auto-detect marker prevents duplicate appends)\n  → add explicit [[release_unit]] entries\n  → if intentional (mobile app, archive, etc.), add to [ignore_paths] or [allow_uncovered]\n\nAborting prepare. No releases will be drafted.",
+            "\nChoose one:\n  → run `belaf init --ci --auto-detect --force` to re-detect bundles and append release_unit blocks to belaf/config.toml (idempotent — the auto-detect marker prevents duplicate appends)\n  → add explicit [release_unit.<name>] entries\n  → if intentional (mobile app, archive, etc.), add to [ignore_paths] or [allow_uncovered]\n\nAborting prepare. No releases will be drafted.",
         );
         s
     }

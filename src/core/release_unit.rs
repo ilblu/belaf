@@ -340,12 +340,13 @@ pub struct ResolvedReleaseUnit {
 /// Provenance of a [`ResolvedReleaseUnit`].
 #[derive(Clone, Debug)]
 pub enum ResolveOrigin {
-    /// Came from an explicit `[[release_unit]]` block at the given
+    /// Came from an explicit `[release_unit.<name>]` block at the given
     /// index in the config.
     Explicit { config_index: usize },
 
-    /// Came from a `[[release_unit_glob]]` block at the given index,
-    /// matched the given repo-relative directory.
+    /// Came from a glob-form `[release_unit.<name>]` block (with `glob`
+    /// field) at the given index, matched the given repo-relative
+    /// directory.
     Glob {
         glob_index: usize,
         matched_path: RepoPathBuf,
@@ -361,13 +362,13 @@ impl ResolveOrigin {
     pub fn label(&self) -> String {
         match self {
             Self::Explicit { config_index } => {
-                format!("explicit [[release_unit]] #{config_index}")
+                format!("explicit [release_unit] #{config_index}")
             }
             Self::Glob {
                 glob_index,
                 matched_path,
             } => format!(
-                "glob [[release_unit_glob]] #{} matched {}",
+                "glob [release_unit] #{} matched {}",
                 glob_index,
                 matched_path.escaped()
             ),

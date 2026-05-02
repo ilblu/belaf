@@ -310,7 +310,12 @@ mod tests {
         let matches = mobile_app(root);
         let ios: Vec<_> = matches
             .iter()
-            .filter(|m| matches!(m.shape, DetectedShape::ExternallyManaged(ExtKind::MobileIos)))
+            .filter(|m| {
+                matches!(
+                    m.shape,
+                    DetectedShape::ExternallyManaged(ExtKind::MobileIos)
+                )
+            })
             .collect();
         assert_eq!(ios.len(), 1);
         assert_eq!(ios[0].path.escaped(), "apps/clients/ios");

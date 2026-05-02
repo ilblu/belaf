@@ -8,7 +8,7 @@ use thiserror::Error as ThisError;
 
 #[derive(Debug, ThisError, PartialEq, Eq)]
 pub enum ResolverError {
-    /// Edge case 1 — a `[[release_unit]]` (or `manifests[i]`) refers to
+    /// Edge case 1 — a `[release_unit.<name>]` (or `manifests[i]`) refers to
     /// a path that does not exist in the working tree.
     #[error("release_unit `{unit}`: path `{path}` does not exist in the working tree")]
     PathDoesNotExist { unit: String, path: String },
@@ -33,7 +33,7 @@ pub enum ResolverError {
 
     /// Edge case 8 — two glob blocks expand to the same path.
     #[error(
-        "release_unit_glob conflict: globs `{glob_a}` and `{glob_b}` both match path `{path}` — disambiguate by removing one or making them more specific"
+        "release_unit glob conflict: globs `{glob_a}` and `{glob_b}` both match path `{path}` — disambiguate by removing one or making them more specific"
     )]
     TwoGlobsSamePath {
         path: String,
@@ -83,7 +83,7 @@ pub enum ResolverError {
     /// Edge case 20 — two units (or one glob expansion) produce the
     /// same `name` from different paths.
     #[error(
-        "release_unit name `{name}` is produced by multiple paths: {paths:?} — pick a more specific glob `name` template (e.g. `{{parent}}-{{basename}}`) or use explicit `[[release_unit]]` entries"
+        "release_unit name `{name}` is produced by multiple paths: {paths:?} — pick a more specific glob `name` template (e.g. `{{parent}}-{{basename}}`) or use explicit `[release_unit.<name>]` entries"
     )]
     NameCollision { name: String, paths: Vec<String> },
 
@@ -93,7 +93,7 @@ pub enum ResolverError {
     /// by `gradle_properties.rs` at write-time.
 
     /// Source-related: both `manifests` and `external` set on the
-    /// same `[[release_unit]]`.
+    /// same `[release_unit.<name>]`.
     #[error("release_unit `{unit}`: only one of `source.manifests` or `source.external` may be set — found both")]
     SourceBothSet { unit: String },
 
@@ -124,12 +124,12 @@ pub enum ResolverError {
     },
 
     /// Unknown template variable used in a glob template field.
-    #[error("release_unit_glob #{glob_index}: unknown template variable `{{{var}}}` — supported: {{path}}, {{basename}}, {{parent}}")]
+    #[error("release_unit glob #{glob_index}: unknown template variable `{{{var}}}` — supported: {{path}}, {{basename}}, {{parent}}")]
     UnknownTemplateVar { glob_index: usize, var: String },
 
     /// `manifests[i].path` after template substitution still contains
     /// unresolved `{...}` placeholders.
-    #[error("release_unit_glob #{glob_index}: template `{template}` did not fully substitute (result: `{result}`)")]
+    #[error("release_unit glob #{glob_index}: template `{template}` did not fully substitute (result: `{result}`)")]
     TemplateNotFullySubstituted {
         glob_index: usize,
         template: String,
@@ -148,7 +148,7 @@ pub enum ResolverError {
     /// Two globs produce two units with the same name on the same
     /// matched path — this is rare and caught here distinctly so the
     /// error message can mention both globs.
-    #[error("two release_unit_glob blocks (#{glob_a} and #{glob_b}) both produce a unit named `{name}` for path `{path}`")]
+    #[error("two glob-form `[release_unit]` blocks (#{glob_a} and #{glob_b}) both produce a unit named `{name}` for path `{path}`")]
     TwoGlobsSameName {
         glob_a: usize,
         glob_b: usize,

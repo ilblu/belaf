@@ -921,7 +921,7 @@ pub fn generate_changelog_entry(
 }
 
 /// Resolve the per-release tag name using the precedence chain:
-/// `[[release_unit]].tag_format` > `[group.<id>.tag_format]` > the
+/// `[release_unit.<name>].tag_format` > `[group.<id>].tag_format` > the
 /// ecosystem trait's `tag_format_default()`. The ecosystem registry
 /// is instantiated fresh here
 /// (the Loader instances are stateless once `finalize` has run).
@@ -939,7 +939,7 @@ fn build_tag_name(
         )
     })?;
 
-    // tag-format precedence: explicit [[release_unit]] > [group.<id>]
+    // tag-format precedence: explicit [release_unit.<name>] > [group.<id>]
     // > ecosystem default.
     let unit_override = sess
         .resolved_release_units()

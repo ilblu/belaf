@@ -1,8 +1,8 @@
 //! `belaf explain` — print attribution per ReleaseUnit.
 //!
-//! Reads the config file, resolves all `[[release_unit]]` /
-//! `[[release_unit_glob]]` entries, and prints provenance for each
-//! one (detector / TOML line / glob expansion).
+//! Reads the config file, resolves all `[release_unit.<name>]`
+//! entries (explicit + glob-form), and prints provenance for each
+//! one (detector / TOML key / glob expansion).
 //!
 //! `--format=json` emits a structured payload consumed by the
 //! github-app dashboard. The JSON shape is a stable contract —
@@ -99,7 +99,7 @@ pub fn run(format: Option<ExplainOutputFormat>) -> Result<i32> {
     if resolved.is_empty() {
         println!(
             "{}",
-            "No [[release_unit]] / [[release_unit_glob]] entries in this repo.".yellow()
+            "No [release_unit.<name>] entries in this repo.".yellow()
         );
         println!(
             "  (Auto-detected ecosystem-loader projects don't appear here — \
@@ -118,7 +118,7 @@ pub fn run(format: Option<ExplainOutputFormat>) -> Result<i32> {
     for r in &resolved {
         let origin_label = match &r.origin {
             ResolveOrigin::Explicit { config_index } => {
-                format!("explicit [[release_unit]] #{}", config_index)
+                format!("explicit [release_unit] #{}", config_index)
                     .cyan()
                     .to_string()
             }
@@ -126,7 +126,7 @@ pub fn run(format: Option<ExplainOutputFormat>) -> Result<i32> {
                 glob_index,
                 matched_path,
             } => format!(
-                "glob [[release_unit_glob]] #{} matched {}",
+                "glob [release_unit] #{} matched {}",
                 glob_index,
                 matched_path.escaped()
             )

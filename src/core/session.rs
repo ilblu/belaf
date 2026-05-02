@@ -151,13 +151,11 @@ impl AppBuilder {
             // scan so the resulting skip-list silences ecosystem-level
             // scanning of paths the units already cover (manifests +
             // satellites). Plus [ignore_paths] entries.
-            resolved_units = crate::core::release_unit::resolver::resolve(
-                &self.repo,
-                &config.release_units,
-            )
-            .map_err(|e| {
-                crate::core::errors::Error::msg(format!("release_unit resolution: {e}"))
-            })?;
+            resolved_units =
+                crate::core::release_unit::resolver::resolve(&self.repo, &config.release_units)
+                    .map_err(|e| {
+                        crate::core::errors::Error::msg(format!("release_unit resolution: {e}"))
+                    })?;
             let mut skip_list: Vec<crate::core::git::repository::RepoPathBuf> = Vec::new();
             for r in &resolved_units {
                 if let crate::core::release_unit::VersionSource::Manifests(ms) = &r.unit.source {
@@ -255,7 +253,7 @@ pub struct AppSession {
     /// `[[bump_source]]` entries from `belaf/config.toml`. Resolved at
     /// CI/wizard entry by [`crate::cmd::prepare`].
     bump_sources: Vec<super::config::syntax::BumpSourceConfig>,
-    /// Resolved `[[release_unit]]` / `[[release_unit_glob]]` entries.
+    /// Resolved `[release_unit.<name>]` / glob-form `[release_unit.<name>]` entries.
     /// Held so [`Self::pre_prepare_drift_check`] can compare detected
     /// bundles against the configured coverage set without re-running
     /// the resolver.
@@ -328,7 +326,7 @@ impl AppSession {
         &self.bump_sources
     }
 
-    /// Resolved `[[release_unit]]` / `[[release_unit_glob]]` entries.
+    /// Resolved `[release_unit.<name>]` / glob-form `[release_unit.<name>]` entries.
     pub fn resolved_release_units(&self) -> &[crate::core::release_unit::ResolvedReleaseUnit] {
         &self.resolved_release_units
     }
@@ -337,7 +335,7 @@ impl AppSession {
     /// return an `Err(message)` when an uncovered detector hit exists.
     /// Wired into [`crate::cmd::prepare::run`] so every prepare run
     /// (CI or interactive) catches new bundles that aren't claimed by
-    /// any `[[release_unit]]` / `[ignore_paths]` / `[allow_uncovered]`.
+    /// any `[release_unit.<name>]` / `[ignore_paths]` / `[allow_uncovered]`.
     /// Reuses [`Self::detection_report`] to avoid walking the
     /// filesystem twice within one process.
     pub fn pre_prepare_drift_check(&self) -> std::result::Result<(), String> {

@@ -470,10 +470,7 @@ impl ReleaseUnitView {
                         Style::default().fg(cursor_color(u.selected, false)),
                     ),
                     Span::styled(
-                        u.ecosystem
-                            .as_deref()
-                            .map(glyphs::ecosystem)
-                            .unwrap_or(""),
+                        u.ecosystem.as_deref().map(glyphs::ecosystem).unwrap_or(""),
                         Style::default().fg(Color::DarkGray),
                     ),
                     Span::styled(padded, label_style(u.selected, false)),
@@ -593,11 +590,7 @@ pub fn render_summary(view: &ReleaseUnitView) -> String {
     let bundles = view.bundles.len();
     let units = view.units.len();
     let ext = view.externally_managed.len();
-    let hints: usize = view
-        .units
-        .iter()
-        .map(|u| u.annotations.len())
-        .sum();
+    let hints: usize = view.units.iter().map(|u| u.annotations.len()).sum();
     let togglable = bundles + units;
     let mut out = format!("{togglable} togglable");
     if hints > 0 {
@@ -616,9 +609,7 @@ pub fn render_summary(view: &ReleaseUnitView) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::release_unit::detector::{
-        DetectionReport, DetectorMatch,
-    };
+    use crate::core::release_unit::detector::{DetectionReport, DetectorMatch};
 
     fn standalone(name: &str, prefix: &str, eco: &str, selected: bool) -> StandaloneEntry {
         StandaloneEntry {
@@ -654,11 +645,8 @@ mod tests {
             standalone("@org/sdk-ts", "sdks/typescript", "npm", true),
             standalone("my-lib", "crates/my-lib", "cargo", true),
         ];
-        let view = ReleaseUnitView::from_detection(
-            &r,
-            &standalones,
-            &std::collections::HashSet::new(),
-        );
+        let view =
+            ReleaseUnitView::from_detection(&r, &standalones, &std::collections::HashSet::new());
 
         assert_eq!(view.bundles.len(), 1);
         assert_eq!(view.bundles[0].label, "apps/desktop");
@@ -688,11 +676,8 @@ mod tests {
             standalone("cargo:desktop", "apps/desktop/src-tauri", "cargo", true),
             standalone("elsewhere", "crates/elsewhere", "cargo", true),
         ];
-        let view = ReleaseUnitView::from_detection(
-            &r,
-            &standalones,
-            &std::collections::HashSet::new(),
-        );
+        let view =
+            ReleaseUnitView::from_detection(&r, &standalones, &std::collections::HashSet::new());
 
         assert_eq!(view.bundles.len(), 1);
         // Only `elsewhere` survives; the two desktop standalones are
@@ -729,11 +714,8 @@ mod tests {
             note: None,
         });
         let standalones = vec![standalone("a", "crates/a", "cargo", true)];
-        let mut view = ReleaseUnitView::from_detection(
-            &r,
-            &standalones,
-            &std::collections::HashSet::new(),
-        );
+        let mut view =
+            ReleaseUnitView::from_detection(&r, &standalones, &std::collections::HashSet::new());
         assert_eq!(view.selected_togglable_count(), 2);
         assert!(view.toggle(RowIdx::Unit(0)));
         assert_eq!(view.selected_togglable_count(), 1);
@@ -767,11 +749,8 @@ mod tests {
             note: None,
         });
         let standalones = vec![standalone("a", "crates/a", "cargo", true)];
-        let view = ReleaseUnitView::from_detection(
-            &r,
-            &standalones,
-            &std::collections::HashSet::new(),
-        );
+        let view =
+            ReleaseUnitView::from_detection(&r, &standalones, &std::collections::HashSet::new());
         let flat = view.flat_indices();
         assert_eq!(flat.len(), 3);
         assert!(matches!(flat[0], RowIdx::Bundle(0)));

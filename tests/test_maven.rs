@@ -404,9 +404,7 @@ fn maven_tag_format_uses_slash_not_colon() {
 fn release_unit_tag_format_lookup_by_name() {
     use belaf::core::config::NamedReleaseUnitConfig;
     use belaf::core::release_unit::resolver::resolve;
-    use belaf::core::release_unit::syntax::{
-        ManifestFileConfig, ManifestList, ReleaseUnitConfig,
-    };
+    use belaf::core::release_unit::syntax::{ManifestFileConfig, ManifestList, ReleaseUnitConfig};
 
     let repo_path =
         std::env::temp_dir().join(format!("belaf-tag-format-lookup-{}", std::process::id()));

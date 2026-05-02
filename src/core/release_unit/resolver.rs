@@ -16,9 +16,7 @@ use crate::core::config::NamedReleaseUnitConfig;
 use crate::core::git::repository::{RepoPathBuf, Repository};
 use crate::core::wire::known::Ecosystem;
 
-use super::syntax::{
-    CascadeRuleConfig, ManifestFileConfig, ManifestList, ReleaseUnitConfig,
-};
+use super::syntax::{CascadeRuleConfig, ManifestFileConfig, ManifestList, ReleaseUnitConfig};
 use super::validator::ResolverError;
 use super::{
     CascadeBumpStrategy, CascadeRule, ExternalVersioner, ManifestFile, ReleaseUnit, ResolveOrigin,
@@ -67,7 +65,11 @@ pub fn resolve(
         if !named.config.is_glob() {
             continue;
         }
-        let glob_pattern = named.config.glob.as_ref().expect("is_glob() implies glob set");
+        let glob_pattern = named
+            .config
+            .glob
+            .as_ref()
+            .expect("is_glob() implies glob set");
         for resolved_glob in expand_glob(repo, glob_idx, &named.name, &named.config)? {
             let unit_path = match &resolved_glob.origin {
                 ResolveOrigin::Glob { matched_path, .. } => matched_path.escaped(),
@@ -134,7 +136,10 @@ fn convert_explicit(
     cfg: &ReleaseUnitConfig,
     repo: &Repository,
 ) -> Result<ReleaseUnit, ResolverError> {
-    debug_assert!(!cfg.is_glob(), "convert_explicit only handles non-glob entries");
+    debug_assert!(
+        !cfg.is_glob(),
+        "convert_explicit only handles non-glob entries"
+    );
 
     // `name` field forbidden on non-glob entries — TOML key drives the
     // name. Validator surfaces a clear error.
@@ -153,7 +158,8 @@ fn convert_explicit(
     let ecosystem = parse_ecosystem(&cfg.ecosystem);
 
     // Source: exactly one of manifests / external must be set.
-    let manifests_set = matches!(cfg.manifests, Some(ManifestList::Explicit(ref m)) if !m.is_empty());
+    let manifests_set =
+        matches!(cfg.manifests, Some(ManifestList::Explicit(ref m)) if !m.is_empty());
     let templates_set = matches!(cfg.manifests, Some(ManifestList::Templates(_)));
     let external_set = cfg.external.is_some();
 
@@ -264,11 +270,12 @@ fn expand_glob(
             });
         }
     };
-    let name_template = cfg.name.as_deref().ok_or_else(|| {
-        ResolverError::GlobUnitMissingNameTemplate {
-            config_key: config_key.to_string(),
-        }
-    })?;
+    let name_template =
+        cfg.name
+            .as_deref()
+            .ok_or_else(|| ResolverError::GlobUnitMissingNameTemplate {
+                config_key: config_key.to_string(),
+            })?;
 
     // Pre-validate template syntax on the glob pattern (the pattern
     // itself is not template-substituted, but typos in template-style

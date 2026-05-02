@@ -22,7 +22,7 @@ use crate::core::{
 
 /// Returns `true` if `path` equals or is inside (strict child of) any
 /// path in `skip_list`. Used to silence ecosystem-level scanning for
-/// paths already covered by a `[[release_unit]]` (its manifests +
+/// paths already covered by a `[release_unit.<name>]` (its manifests +
 /// satellites). Phase C.
 pub fn is_path_inside_any(path: &RepoPath, skip_list: &[RepoPathBuf]) -> bool {
     let path_bytes = path.as_ref();
@@ -111,7 +111,7 @@ pub trait Ecosystem: Send + Sync + std::fmt::Debug {
 #[derive(Debug, Default)]
 pub struct EcosystemRegistry {
     ecosystems: Vec<Box<dyn Ecosystem>>,
-    /// Paths already covered by resolved `[[release_unit]]`s.
+    /// Paths already covered by resolved `[release_unit.<name>]`s.
     ///
     /// Set via [`Self::set_skip_list`] before
     /// [`Self::process_index_item`] runs. Loaders ignore index entries

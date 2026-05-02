@@ -121,14 +121,18 @@ fn tauri_app_wire_compat() {
     // Tauri ships under a single tag — bundle_manifests carries the
     // 3-file lockstep state.
     let m = build_manifest_for("tauri", "desktop", "apps/desktop");
-    let m_with_bundle =
-        ReleaseManifest::new("main".to_string(), "ci-bot".to_string());
+    let m_with_bundle = ReleaseManifest::new("main".to_string(), "ci-bot".to_string());
     let mut m_with_bundle = m_with_bundle;
-    let r = m.releases.into_iter().next().unwrap().with_bundle_manifests(vec![
-        "apps/desktop/package.json".to_string(),
-        "apps/desktop/src-tauri/Cargo.toml".to_string(),
-        "apps/desktop/src-tauri/tauri.conf.json".to_string(),
-    ]);
+    let r = m
+        .releases
+        .into_iter()
+        .next()
+        .unwrap()
+        .with_bundle_manifests(vec![
+            "apps/desktop/package.json".to_string(),
+            "apps/desktop/src-tauri/Cargo.toml".to_string(),
+            "apps/desktop/src-tauri/tauri.conf.json".to_string(),
+        ]);
     m_with_bundle.add_release(r);
     let m2 = round_trip(&m_with_bundle);
     assert_eq!(m2.releases[0].bundle_manifests.len(), 3);
@@ -196,9 +200,7 @@ fn polyglot_wire_compat() {
             String::new(),
             "apps/services/aura".to_string(),
         )
-        .with_bundle_manifests(vec![
-            "apps/services/aura/crates/bin/Cargo.toml".to_string(),
-        ]),
+        .with_bundle_manifests(vec!["apps/services/aura/crates/bin/Cargo.toml".to_string()]),
     );
     m.add_release(ReleaseEntry::new(
         "kotlin-sdk".to_string(),

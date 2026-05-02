@@ -58,8 +58,7 @@ fn generate_api_client() {
 /// types live in the `types` module of the produced file and are re-exported
 /// through `src/core/wire/`.
 fn generate_manifest_types() {
-    let schema_path =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/manifest.v1.schema.json");
+    let schema_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/manifest.v1.schema.json");
     println!("cargo:rerun-if-changed={}", schema_path.display());
 
     let text = std::fs::read_to_string(&schema_path)

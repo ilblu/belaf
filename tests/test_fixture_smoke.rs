@@ -105,9 +105,9 @@ fn cargo_monorepo_independent_no_hexagonal_match() {
     let any_hex = report.matches.iter().any(|m| {
         matches!(
             m.shape,
-            DetectedShape::Bundle(belaf::core::release_unit::detector::BundleKind::HexagonalCargo {
-                ..
-            })
+            DetectedShape::Bundle(
+                belaf::core::release_unit::detector::BundleKind::HexagonalCargo { .. }
+            )
         )
     });
     assert!(
@@ -159,9 +159,9 @@ fn kotlin_library_only_hits_jvm_library_detector() {
         .filter(|m| {
             matches!(
                 m.shape,
-                DetectedShape::Bundle(belaf::core::release_unit::detector::BundleKind::JvmLibrary {
-                    ..
-                })
+                DetectedShape::Bundle(
+                    belaf::core::release_unit::detector::BundleKind::JvmLibrary { .. }
+                )
             )
         })
         .collect();
@@ -198,9 +198,11 @@ fn ios_only_triggers_single_mobile_repo() {
         report.matches
     );
 
-    let any_ios = report
-        .matches
-        .iter()
-        .any(|m| matches!(m.shape, DetectedShape::ExternallyManaged(ExtKind::MobileIos)));
+    let any_ios = report.matches.iter().any(|m| {
+        matches!(
+            m.shape,
+            DetectedShape::ExternallyManaged(ExtKind::MobileIos)
+        )
+    });
     assert!(any_ios, "ios-only must hit the iOS detector");
 }

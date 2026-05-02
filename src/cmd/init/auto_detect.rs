@@ -5,9 +5,9 @@
 //! Three classes of dispatch correspond directly to the
 //! [`DetectedShape`] taxonomy in [`crate::core::release_unit::shape`]:
 //!
-//! - `Bundle(_)`  → [`emit_bundle_block`]: writes a `[[release_unit]]`
-//!   or, for hexagonal-cargo siblings, a single
-//!   `[[release_unit_glob]]`.
+//! - `Bundle(_)`  → `bundle::emit_all`: writes a `[release_unit.<name>]`
+//!   block (or, for hexagonal-cargo siblings sharing a parent, one
+//!   block with a `glob` field).
 //! - `Hint(_)`    → [`emit_hint_comment`]: drops a comment-only hint
 //!   into the snippet (no toggleable config — hints decorate
 //!   Standalone rows in the wizard).
@@ -25,9 +25,7 @@ use std::path::Path;
 use super::toml_util::toml_quote;
 use crate::core::git::repository::{RepoPathBuf, Repository};
 use crate::core::release_unit::bundle;
-use crate::core::release_unit::detector::{
-    self, DetectedShape, DetectorMatch, ExtKind, HintKind,
-};
+use crate::core::release_unit::detector::{self, DetectedShape, DetectorMatch, ExtKind, HintKind};
 
 /// Result of an auto-detect pass: TOML snippet to append, plus
 /// counters per detector kind for the wizard summary.
@@ -88,14 +86,14 @@ pub fn run(repo: &Repository) -> AutoDetectResult {
 }
 
 /// Auto-detect with per-match exclusions. Each excluded match path:
-///   - gets **no** `[[release_unit]]` block emitted
+///   - gets **no** `[release_unit.<name>]` block emitted
 ///   - lands in the `[ignore_paths]` block of the snippet so the
 ///     resolver skips it AND the drift detector stays silent on it
 ///
 /// Glob behaviour: a glob group with at least 2 non-excluded members
-/// still becomes one `[[release_unit_glob]]` block; a group reduced
-/// to a single non-excluded member by exclusions falls through to
-/// the singleton-explicit-block path automatically.
+/// still becomes one `[release_unit.<name>]` block with `glob = ...`;
+/// a group reduced to a single non-excluded member by exclusions falls
+/// through to the singleton-explicit-block path automatically.
 pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> AutoDetectResult {
     let mut report = detector::detect_all(repo);
     if !exclusions.is_empty() {
@@ -165,7 +163,7 @@ pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> Aut
     }
 }
 
-/// Pure metadata; never togglable, never produces a `[[release_unit]]`.
+/// Pure metadata; never togglable, never produces a `[release_unit.<name>]`.
 /// Hint comments help the user understand what the wizard saw without
 /// committing config they'd have to maintain.
 fn emit_hint_comment(
@@ -183,7 +181,7 @@ fn emit_hint_comment(
             counters.nested_npm_workspace += 1;
             let path = m.path.escaped();
             snippet.push_str(&format!(
-                "\n# Nested npm workspace detected at {path} — its members will\n# be auto-detected by the npm loader. Add an explicit [[release_unit]]\n# here if you want a non-default tag-format / cascade / visibility.\n",
+                "\n# Nested npm workspace detected at {path} — its members will\n# be auto-detected by the npm loader. Add an explicit [release_unit.<name>]\n# here if you want a non-default tag-format / cascade / visibility.\n",
             ));
         }
         HintKind::SingleProject { ecosystem } => {
@@ -324,11 +322,12 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let cfg = dir.path().join("config.toml");
         std::fs::write(&cfg, format!("# existing line\n{AUTO_DETECT_MARKER}\n")).unwrap();
-        let snippet = format!("{AUTO_DETECT_MARKER}\n[[release_unit]]\nname = \"alpha\"\n");
+        let snippet =
+            format!("{AUTO_DETECT_MARKER}\n[release_unit.alpha]\necosystem = \"cargo\"\n");
         append_to_config(&cfg, &snippet).unwrap();
         let after = std::fs::read_to_string(&cfg).unwrap();
         assert!(
-            !after.contains("[[release_unit]]"),
+            !after.contains("[release_unit.alpha]"),
             "marker present → snippet must NOT be re-appended; got:\n{after}"
         );
     }
@@ -338,11 +337,12 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let cfg = dir.path().join("config.toml");
         std::fs::write(&cfg, "# user removed the marker\n").unwrap();
-        let snippet = format!("{AUTO_DETECT_MARKER}\n[[release_unit]]\nname = \"alpha\"\n");
+        let snippet =
+            format!("{AUTO_DETECT_MARKER}\n[release_unit.alpha]\necosystem = \"cargo\"\n");
         append_to_config(&cfg, &snippet).unwrap();
         let after = std::fs::read_to_string(&cfg).unwrap();
         assert!(
-            after.contains("[[release_unit]]") && after.contains(AUTO_DETECT_MARKER),
+            after.contains("[release_unit.alpha]") && after.contains(AUTO_DETECT_MARKER),
             "missing marker → snippet must be appended; got:\n{after}"
         );
     }

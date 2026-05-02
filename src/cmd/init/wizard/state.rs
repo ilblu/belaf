@@ -56,7 +56,7 @@ pub struct WizardState {
     /// Each entry is a detector-match path the user toggled OFF;
     /// the orchestrator passes this to
     /// [`auto_detect::run_filtered`](crate::cmd::init::auto_detect::run_filtered)
-    /// so excluded paths get no `[[release_unit]]` block AND land in
+    /// so excluded paths get no `[release_unit.<name>]` block AND land in
     /// `[ignore_paths]` (silences drift on subsequent prepares).
     pub detector_excluded: HashSet<RepoPathBuf>,
 

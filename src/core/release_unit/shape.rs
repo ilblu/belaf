@@ -8,13 +8,13 @@
 //! detector requires picking a class, which determines its wiring.
 //!
 //! - **Bundle**: a multi-manifest ReleaseUnit. Tauri triplet, hexagonal
-//!   cargo service, JVM library. Bundles emit `[[release_unit]]` blocks
+//!   cargo service, JVM library. Bundles emit `[release_unit.<name>]` blocks
 //!   and hide their inner manifests in the wizard.
 //! - **Hint**: pure metadata that decorates a Standalone row. SDK
 //!   cascade members, npm workspace members, single-project root,
 //!   nested submodule. Hints are never togglable; they are annotations.
 //! - **ExternallyManaged**: read-only paths that need
-//!   `[allow_uncovered]` instead of a `[[release_unit]]`. Mobile apps
+//!   `[allow_uncovered]` instead of a `[release_unit.<name>]`. Mobile apps
 //!   primarily.
 
 use crate::core::git::repository::RepoPathBuf;
@@ -34,7 +34,7 @@ pub struct DetectorMatch {
 /// into the type makes that bug class unrepresentable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DetectedShape {
-    /// Multi-manifest ReleaseUnit — emits a `[[release_unit]]` block
+    /// Multi-manifest ReleaseUnit — emits a `[release_unit.<name>]` block
     /// and hides its inner manifests.
     Bundle(BundleKind),
     /// Pure metadata that decorates a Standalone row. Never togglable.
@@ -120,7 +120,7 @@ pub enum JvmVersionSource {
 }
 
 impl DetectedShape {
-    /// Bundles emit `[[release_unit]]` blocks and hide inner manifests.
+    /// Bundles emit `[release_unit.<name>]` blocks and hide inner manifests.
     pub fn is_bundle(&self) -> bool {
         matches!(self, Self::Bundle(_))
     }

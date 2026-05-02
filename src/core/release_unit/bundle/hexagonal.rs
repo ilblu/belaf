@@ -4,7 +4,7 @@
 //! Cargo packages and one of `bin` / `lib` / `workers` (or the
 //! service basename) carries the primary `[package]` block. Multiple
 //! sibling services under the same parent are emitted as a single
-//! `[[release_unit_glob]]` so adding a new service to
+//! glob-form `[release_unit.<name>]` so adding a new service to
 //! `apps/services/*` doesn't require a config edit.
 
 use std::collections::HashMap;
@@ -71,7 +71,7 @@ pub fn detect(workdir: &Path) -> Vec<DetectorMatch> {
 
 /// Emit blocks for every hexagonal-cargo match at once. Cross-match
 /// aggregation: siblings under the same parent collapse into one
-/// `[[release_unit_glob]]`. We use a sorted Vec instead of HashMap
+/// glob-form `[release_unit.<name>]`. We use a sorted Vec instead of HashMap
 /// iteration to keep the snippet output byte-deterministic across
 /// runs.
 pub fn emit_all(

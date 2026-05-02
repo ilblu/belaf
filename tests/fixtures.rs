@@ -529,10 +529,7 @@ tauri = { version = "1" }
 /// annotation.
 pub fn seed_ts_sdk_cascade<R: Seedable>(repo: &R) {
     // Schema source the SDK regenerates from.
-    repo.write_file(
-        "schema/schema.graphql",
-        "type Query { hello: String }\n",
-    );
+    repo.write_file("schema/schema.graphql", "type Query { hello: String }\n");
     repo.write_file(
         "sdks/typescript/graphql-codegen.yml",
         "schema: ../../schema/schema.graphql\ngenerates:\n  src/generated.ts: {}\n",

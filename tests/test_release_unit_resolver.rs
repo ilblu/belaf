@@ -236,10 +236,7 @@ fn explicit_wins_over_glob_for_overlapping_path() {
     let r = open_repo(&repo);
 
     let aura_custom = explicit("aura-custom", "cargo")
-        .with_manifest(
-            "apps/services/aura/crates/bin/Cargo.toml",
-            "cargo_toml",
-        )
+        .with_manifest("apps/services/aura/crates/bin/Cargo.toml", "cargo_toml")
         .with_satellite("apps/services/aura/crates")
         .build("aura-custom");
 

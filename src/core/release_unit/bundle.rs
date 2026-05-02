@@ -1,9 +1,9 @@
 //! Bundle detection + emission, one module per bundle kind.
 //!
 //! A "Bundle" in the [`super::shape::DetectedShape`] taxonomy is a
-//! multi-manifest ReleaseUnit that emits a `[[release_unit]]` config
+//! multi-manifest ReleaseUnit that emits a `[release_unit.<name>]` config
 //! block (or, for hexagonal-cargo siblings, a single
-//! `[[release_unit_glob]]`) and hides its inner manifests from the
+//! glob-form `[release_unit.<name>]`) and hides its inner manifests from the
 //! Standalone list in the wizard.
 //!
 //! Each bundle module owns both the detection and the snippet emission
@@ -38,19 +38,12 @@ pub fn detect_all(workdir: &Path) -> Vec<DetectorMatch> {
     out
 }
 
-/// Emit `[[release_unit]]` / `[[release_unit_glob]]` blocks for every
-/// Bundle match. Auto-detect calls this once and never has to know
-/// which Bundle kinds exist — adding a new Bundle is a new module +
-/// one `mod` line + one call here.
-pub fn emit_all(
-    matches: &[DetectorMatch],
-    snippet: &mut String,
-    counters: &mut DetectionCounters,
-) {
-    let bundles: Vec<&DetectorMatch> = matches
-        .iter()
-        .filter(|m| m.shape.is_bundle())
-        .collect();
+/// Emit `[release_unit.<name>]` blocks (with optional `glob` field
+/// for siblings sharing a parent) for every Bundle match. Auto-detect
+/// calls this once and never has to know which Bundle kinds exist —
+/// adding a new Bundle is a new module + one `mod` line + one call here.
+pub fn emit_all(matches: &[DetectorMatch], snippet: &mut String, counters: &mut DetectionCounters) {
+    let bundles: Vec<&DetectorMatch> = matches.iter().filter(|m| m.shape.is_bundle()).collect();
     hexagonal::emit_all(&bundles, snippet, counters);
     tauri::emit_all(&bundles, snippet, counters);
     jvm_library::emit_all(&bundles, snippet, counters);

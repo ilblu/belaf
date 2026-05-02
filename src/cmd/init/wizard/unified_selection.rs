@@ -59,8 +59,11 @@ impl UnifiedSelectionStep {
                 ecosystem: u.ecosystem.clone(),
             })
             .collect();
-        self.view =
-            ReleaseUnitView::from_detection(&state.detection, &standalones, &state.detector_excluded);
+        self.view = ReleaseUnitView::from_detection(
+            &state.detection,
+            &standalones,
+            &state.detector_excluded,
+        );
         if self.cursor >= self.view.flat_indices().len() {
             self.cursor = 0;
         }
@@ -120,7 +123,11 @@ impl Step for UnifiedSelectionStep {
             }
             (KeyCode::Up | KeyCode::Char('k'), _) => {
                 if n > 0 {
-                    self.cursor = if self.cursor == 0 { n - 1 } else { self.cursor - 1 };
+                    self.cursor = if self.cursor == 0 {
+                        n - 1
+                    } else {
+                        self.cursor - 1
+                    };
                 }
                 StepResult::Continue
             }

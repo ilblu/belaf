@@ -81,7 +81,7 @@ pub enum Commands {
 
     #[command(
         about = "Explain why each ReleaseUnit was created",
-        long_about = "Print provenance for every resolved ReleaseUnit:\n  • Which detector matched (auto-detected)\n  • Which TOML line it came from (explicit [[release_unit]])\n  • Which glob expansion produced it ([[release_unit_glob]])\n\nUseful when a unit appears in your config and you don't remember\nwhy, or to debug unexpected glob expansions / name collisions.\n\nUse --format=json for machine-readable output (consumed by the\ngithub-app dashboard's /api/cli/explain endpoint in 3.0)."
+        long_about = "Print provenance for every resolved ReleaseUnit:\n  • Which detector matched (auto-detected)\n  • Which TOML key it came from (explicit `[release_unit.<name>]`)\n  • Which glob expansion produced it (`[release_unit.<name>]` with `glob` field)\n\nUseful when a unit appears in your config and you don't remember\nwhy, or to debug unexpected glob expansions / name collisions.\n\nUse --format=json for machine-readable output (consumed by the\ngithub-app dashboard's /api/cli/explain endpoint)."
     )]
     Explain(ExplainArgs),
 }

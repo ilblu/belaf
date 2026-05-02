@@ -16,7 +16,10 @@ pub(in crate::core::release_unit) fn workdir(repo: &Repository) -> Option<PathBu
     }
 }
 
-pub(in crate::core::release_unit) fn relative_repopath(workdir: &Path, abs: &Path) -> Option<RepoPathBuf> {
+pub(in crate::core::release_unit) fn relative_repopath(
+    workdir: &Path,
+    abs: &Path,
+) -> Option<RepoPathBuf> {
     let rel = abs.strip_prefix(workdir).ok()?;
     let s = rel.to_string_lossy().to_string();
     if s.is_empty() {
@@ -25,7 +28,11 @@ pub(in crate::core::release_unit) fn relative_repopath(workdir: &Path, abs: &Pat
     Some(RepoPathBuf::new(s.as_bytes()))
 }
 
-pub(in crate::core::release_unit) fn walk_capped<F: FnMut(&Path)>(workdir: &Path, max_depth: usize, mut f: F) {
+pub(in crate::core::release_unit) fn walk_capped<F: FnMut(&Path)>(
+    workdir: &Path,
+    max_depth: usize,
+    mut f: F,
+) {
     fn skip_dir(name: &str) -> bool {
         matches!(
             name,
@@ -70,7 +77,10 @@ pub(in crate::core::release_unit) fn walk_capped<F: FnMut(&Path)>(workdir: &Path
     rec(workdir, max_depth, &mut f);
 }
 
-pub(in crate::core::release_unit) fn find_dirs_with_subdir_pattern(workdir: &Path, name: &str) -> Vec<PathBuf> {
+pub(in crate::core::release_unit) fn find_dirs_with_subdir_pattern(
+    workdir: &Path,
+    name: &str,
+) -> Vec<PathBuf> {
     let mut out = Vec::new();
     walk_capped(workdir, 5, |p| {
         let candidate = p.join(name);
@@ -81,7 +91,10 @@ pub(in crate::core::release_unit) fn find_dirs_with_subdir_pattern(workdir: &Pat
     out
 }
 
-pub(in crate::core::release_unit) fn find_dirs_with_files_set(workdir: &Path, files: &[&str]) -> Vec<PathBuf> {
+pub(in crate::core::release_unit) fn find_dirs_with_files_set(
+    workdir: &Path,
+    files: &[&str],
+) -> Vec<PathBuf> {
     let mut out = Vec::new();
     walk_capped(workdir, 5, |p| {
         if files.iter().all(|f| p.join(f).exists()) {
@@ -91,7 +104,10 @@ pub(in crate::core::release_unit) fn find_dirs_with_files_set(workdir: &Path, fi
     out
 }
 
-pub(in crate::core::release_unit) fn list_subdirs_with_file(dir: &Path, file_name: &str) -> Vec<PathBuf> {
+pub(in crate::core::release_unit) fn list_subdirs_with_file(
+    dir: &Path,
+    file_name: &str,
+) -> Vec<PathBuf> {
     let mut out = Vec::new();
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
