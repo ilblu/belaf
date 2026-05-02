@@ -1,3 +1,42 @@
+## 3.0.2 (2026-05-02)
+
+Bugfix: the `belaf init` ReleaseUnit selection screen rendered
+duplicate entries when a Bundle covers manifests the loaders also
+pick up independently. The user-visible symptom was a Tauri triplet
+appearing three times — once as the Bundle, twice as inner/outer
+manifests — and `sdks/kotlin` showing as two separate Bundle rows.
+
+### What changed
+
+- **Standalone units covered by a Bundle path are now hidden.** The
+  Tauri detector hits at `apps/clients/desktop/`; the npm loader
+  finds the outer `package.json` and the cargo loader finds
+  `src-tauri/Cargo.toml`. Pre-fix, all three rendered. Post-fix,
+  only the Bundle row shows — its `[[release_unit]]` block on
+  config emit covers both inner manifests so the loaders skip them
+  at release time anyway.
+- **Same-path Bundle dedup.** When two detectors fire on the same
+  path (e.g. `sdks/kotlin` matching both `jvm_library` and
+  `sdk_cascade_member`), the wizard now keeps only the first hit.
+  `detect_all` runs higher-specificity scanners first, so
+  `jvm-library/build.gradle.kts` wins over `sdk-cascade-member` —
+  the more useful label.
+- `SingleProject` and `NestedMonorepo` hits don't shadow standalone
+  units. They describe the repo shape rather than a multi-manifest
+  bundle, so a `single-project` repo still surfaces its Cargo crate
+  as a Standalone row.
+
+### Tests
+
+- New regression test `tauri_bundle_hides_inner_and_outer_standalones`
+  pins the Tauri-triplet behaviour against `apps/clients/desktop/`
+  with an unrelated standalone that *must not* be hidden.
+- New regression test `same_path_bundles_dedup_keeping_first_emission`
+  pins the `sdks/kotlin` jvm-library + sdk-cascade-member case.
+- 398 tests total green; clikd smoke run all 5 phases pass.
+
+---
+
 ## 3.0.1 (2026-05-02)
 
 Wizard polish — visual cleanup of the `belaf init` ReleaseUnit

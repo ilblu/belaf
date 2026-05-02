@@ -94,9 +94,27 @@ impl UnifiedSelectionStep {
     fn rebuild_rows(&mut self, state: &WizardState) {
         self.rows.clear();
 
-        // Bundles: every detector match except mobile.
+        // Bundles: every detector match except mobile.  Per path we
+        // keep only the first hit — the detector emission order in
+        // `detect_all` runs higher-specificity scanners (hexagonal /
+        // tauri / jvm-library) before the broader `sdk_cascade_member`,
+        // so the first hit per path is automatically the most useful
+        // label for the user.  Without this dedup `sdks/kotlin`
+        // appears twice (jvm-library + sdk-cascade-member) for the
+        // same physical bundle.
+        let mut bundle_seen: std::collections::HashSet<crate::core::git::repository::RepoPathBuf> =
+            std::collections::HashSet::new();
+        // Paths covered by an actual bundle — used below to filter the
+        // standalone list so we don't render the inner manifests of a
+        // bundle as separate units.  `SingleProject` / `NestedMonorepo`
+        // hits are informational only (they describe the repo shape,
+        // not a multi-manifest bundle) so we don't add them here.
+        let mut bundle_paths: Vec<String> = Vec::new();
         for (idx, m) in state.detection.matches.iter().enumerate() {
             if matches!(m.kind, DetectorKind::MobileApp { .. }) {
+                continue;
+            }
+            if !bundle_seen.insert(m.path.clone()) {
                 continue;
             }
             let kind_label = detector_kind_label(&m.kind);
@@ -109,10 +127,27 @@ impl UnifiedSelectionStep {
                 backref: BackRef::Detection(idx),
                 ecosystem,
             });
+            if !matches!(
+                m.kind,
+                DetectorKind::SingleProject { .. } | DetectorKind::NestedMonorepo
+            ) {
+                bundle_paths.push(m.path.escaped().to_string());
+            }
         }
 
-        // Standalone: manual project list.
+        // Standalone: manual project list.  Skip units whose path is
+        // already covered by a Bundle — e.g. for a Tauri triplet at
+        // `apps/clients/desktop/` the loader picks up both the outer
+        // `package.json` (npm:desktop) and inner `src-tauri/Cargo.toml`
+        // (cargo:desktop), which would otherwise show up as duplicates
+        // of the Tauri Bundle row.
         for (idx, p) in state.standalone_units.iter().enumerate() {
+            let covered_by_bundle = bundle_paths
+                .iter()
+                .any(|bp| p.prefix == *bp || p.prefix.starts_with(&format!("{bp}/")));
+            if covered_by_bundle {
+                continue;
+            }
             self.rows.push(Row {
                 category: RowCategory::Standalone,
                 label: p.name.clone(),
@@ -649,6 +684,110 @@ mod tests {
         assert!(!step.rows[1].selected);
         step.flush_to_state(&mut state);
         assert!(!state.standalone_units[0].selected);
+    }
+
+    /// Regression for the "Tauri triplet shows up three times" bug
+    /// reported against 3.0.1: the bundle hit at `apps/clients/desktop`
+    /// covers both the outer `package.json` (npm:desktop) and the
+    /// inner `src-tauri/Cargo.toml` (cargo:desktop), so neither
+    /// should appear in the Standalone section.
+    #[test]
+    fn tauri_bundle_hides_inner_and_outer_standalones() {
+        let mut state = WizardState::new(false, None);
+        // Standalone units the loaders would normally pick up:
+        //   * npm:desktop  → outer package.json at apps/clients/desktop
+        //   * cargo:desktop → src-tauri/Cargo.toml at apps/clients/desktop/src-tauri
+        // Plus an unrelated standalone that must NOT be hidden.
+        state.standalone_units = vec![
+            DetectedUnit {
+                name: "npm:desktop".into(),
+                version: "0.1.0".into(),
+                prefix: "apps/clients/desktop".into(),
+                selected: true,
+                ecosystem: Some("npm".into()),
+            },
+            DetectedUnit {
+                name: "cargo:desktop".into(),
+                version: "0.0.0".into(),
+                prefix: "apps/clients/desktop/src-tauri".into(),
+                selected: true,
+                ecosystem: Some("cargo".into()),
+            },
+            DetectedUnit {
+                name: "elsewhere".into(),
+                version: "1.0.0".into(),
+                prefix: "crates/elsewhere".into(),
+                selected: true,
+                ecosystem: Some("cargo".into()),
+            },
+        ];
+        let mut report = DetectionReport::default();
+        report.matches.push(DetectorMatch {
+            kind: DetectorKind::Tauri {
+                single_source: true,
+            },
+            path: crate::core::git::repository::RepoPathBuf::new(b"apps/clients/desktop"),
+            note: None,
+        });
+        state.detection = report;
+
+        let mut step = UnifiedSelectionStep::new();
+        step.ensure_initialised(&state);
+
+        // Expect: 1 Tauri Bundle + 1 Standalone (`elsewhere`) = 2 rows.
+        // The two desktop standalones should be filtered out.
+        assert_eq!(step.rows.len(), 2);
+        assert!(matches!(step.rows[0].category, RowCategory::Bundle));
+        assert_eq!(step.rows[0].label, "apps/clients/desktop");
+        assert!(matches!(step.rows[1].category, RowCategory::Standalone));
+        assert_eq!(step.rows[1].label, "elsewhere");
+    }
+
+    /// Regression for the "sdks/kotlin appears twice in Bundles" bug:
+    /// jvm_library + sdk_cascade_member both hit the same path. The
+    /// wizard should only show one row per path; emission order in
+    /// `detect_all` puts jvm_library first, so that's the label kept.
+    #[test]
+    fn same_path_bundles_dedup_keeping_first_emission() {
+        use crate::core::release_unit::detector::JvmVersionSource;
+
+        let mut state = WizardState::new(false, None);
+        let mut report = DetectionReport::default();
+        let kotlin_path = crate::core::git::repository::RepoPathBuf::new(b"sdks/kotlin");
+        // jvm_library emits first in detect_all.
+        report.matches.push(DetectorMatch {
+            kind: DetectorKind::JvmLibrary {
+                version_source: JvmVersionSource::GradleProperties,
+            },
+            path: kotlin_path.clone(),
+            note: None,
+        });
+        // sdk_cascade_member emits later for the same path.
+        report.matches.push(DetectorMatch {
+            kind: DetectorKind::SdkCascadeMember,
+            path: kotlin_path.clone(),
+            note: None,
+        });
+        state.detection = report;
+
+        let mut step = UnifiedSelectionStep::new();
+        step.ensure_initialised(&state);
+
+        let bundle_rows: Vec<&Row> = step
+            .rows
+            .iter()
+            .filter(|r| matches!(r.category, RowCategory::Bundle))
+            .collect();
+        assert_eq!(
+            bundle_rows.len(),
+            1,
+            "expected exactly one bundle row for sdks/kotlin"
+        );
+        assert!(
+            bundle_rows[0].secondary.contains("jvm-library"),
+            "expected the jvm-library label to win; got: {}",
+            bundle_rows[0].secondary
+        );
     }
 
     #[test]
