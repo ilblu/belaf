@@ -32,7 +32,7 @@ Verify:
 
 ```bash
 belaf --version
-# belaf 3.0.0
+# belaf 1.0.0
 ```
 
 ## 2. Authenticate + install the GitHub App
@@ -122,9 +122,9 @@ visibility) per unit.
 | Re-detect after adding a new package | `belaf init --auto-detect --force` |
 | Skip a directory entirely | Add to `[ignore_paths]` in `belaf/config.toml` |
 | Acknowledge an externally-released path (mobile, etc.) | Add to `[allow_uncovered]` |
-| Bundle several manifests into one unit | Edit the unit's `source.manifests` array |
+| Bundle several manifests into one unit | Edit the unit's `manifests = [...]` array |
 | Cascade a downstream SDK on schema bump | Set `cascade_from` on the SDK unit |
-| Group atomic releases across ecosystems | Add a `[[group]]` block |
+| Group atomic releases across ecosystems | Add a `[group.<id>]` block |
 
 ## Trouble?
 

@@ -134,7 +134,7 @@ schema bump.
 
 ### Groups and tag formats
 
-`[[group]]` in `belaf/config.toml` bundles projects that release
+`[group.<id>]` in `belaf/config.toml` bundles projects that release
 together (e.g. one schema published as both an npm and a Maven
 artifact). The graph carries a `GroupSet` alongside `petgraph`'s
 project graph. Manifest emission stamps every group member's release
@@ -151,8 +151,9 @@ Tag templating per ecosystem (`tag_format_default()` on the trait):
 - pypa: `{name}-{version}`
 - go: `{module}/v{version}`
 
-Override per-unit with `[release_unit.tag_format]` on a `[[release_unit]]`
-block, or per-group with `[group.<id>].tag_format`. Precedence (high
+Override per-unit with `tag_format = "..."` inside a
+`[release_unit.<name>]` block, or per-group with
+`[group.<id>].tag_format`. Precedence (high
 → low): unit > group > ecosystem default. Two layers of validation:
 ecosystem variable whitelist + `git check-ref-format --allow-onelevel`.
 

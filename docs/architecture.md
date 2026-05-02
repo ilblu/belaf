@@ -8,23 +8,21 @@ belaf is two cooperating processes:
 | **GitHub App** ([github-app](https://github.com/ilblu/belaf-github-app)) | hosted (api.belaf.dev) | parse manifest on PR merge, tag + release |
 
 The contract between them is a JSON manifest written to
-`belaf/releases/<uuid>.json` in the user's PR. Schema 3.0
-([ADR 0003](adr/0003-schema-3-0-promotion.md)) is the wire format.
+`belaf/releases/<uuid>.json` in the user's PR. Schema v1
+(`schemas/manifest.v1.schema.json`) is the wire format.
 
 ## The two primitives
 
-belaf 3.0 has exactly two declarative primitives:
+belaf has exactly two declarative primitives:
 
 | Primitive | Section in `config.toml` | What it represents |
 |-----------|--------------------------|--------------------|
-| **`ReleaseUnit`** | `[[release_unit]]` | One thing with one version. Carries one or more manifests, optional satellites, optional cascade. |
-| **`Group`** | `[[group]]` | Two or more Release Units that release together as a single atomic group (one tag, one GitHub Release). |
+| **`ReleaseUnit`** | `[release_unit.<name>]` | One thing with one version. Carries one or more manifests (or an `external` versioner), optional satellites, optional cascade. Setting `glob = "..."` switches into glob-form, expanding into N units per matching directory. |
+| **`Group`** | `[group.<id>]` | Two or more Release Units that release together as a single atomic group (one tag, one GitHub Release). |
 
 That's it. Everything else (`bundle_manifests`, `external_versioner`,
 `cascade_from`, `visibility`, `satellites`) lives **on** a
-`ReleaseUnit`. There is no "project tier" above units —
-[ADR 0001](adr/0001-release-unit-as-sole-primitive.md) records the
-decision to retire the old `Project` distinction.
+`ReleaseUnit`. There is no "project tier" above units.
 
 ## Pipeline (`belaf prepare`)
 
@@ -82,16 +80,16 @@ Source files (in this repo):
 | Pipeline orchestrator | `src/core/workflow.rs` |
 | Wire types | `src/core/wire/{codegen,domain,known}.rs` |
 
-## Where Schema 3.0 fields live
+## Where Schema fields live
 
-The six promoted fields are typed both on the config side
-(`[[release_unit]]`) and on the wire side (`releases[]` in the
-manifest). Wire-side definitions:
+Six fields are typed both on the config side (`[release_unit.<name>]`)
+and on the wire side (`releases[]` in the manifest). Wire-side
+definitions:
 
 | Field | Source | Where it shows on the dashboard |
 |-------|--------|---------------------------------|
-| `bundle_manifests: string[]` | unit's `source.manifests` when ≥2 | `<BundleBadge>` + `<ManifestFileList>` |
-| `external_versioner` | unit's `source.external_versioner` | `<ExternalVersionerBadge>` |
+| `bundle_manifests: string[]` | unit's `manifests` when ≥2 | `<BundleBadge>` + `<ManifestFileList>` |
+| `external_versioner` | unit's `external` block | `<ExternalVersionerBadge>` |
 | `version_field_spec` | rewriter pick — `cargo_toml`, `npm_package_json`, … | inline label on `<ManifestFileList>` |
 | `cascade_from` | unit's `cascade_from` | `<CascadeArrow>` + Cascade Graph tab |
 | `visibility` | unit's `visibility` (`public` / `internal`) | inline badge on `<ReleaseUnitCard>` |
@@ -143,12 +141,10 @@ schema is intentionally strict (`additionalProperties: false`) so
 unknown keys don't get silently dropped — there is an explicit `x`
 field for forward-compatible vendor extensions.
 
-## ADRs
+## Pre-1.0 ADRs
 
-The architectural decisions live in [`adr/`](adr/):
-
-- [`0001`](adr/0001-release-unit-as-sole-primitive.md) — `ReleaseUnit` as the only primitive.
-- [`0002`](adr/0002-bootstrap-toml-retirement.md) — `bootstrap.toml` retirement.
-- [`0003`](adr/0003-schema-3-0-promotion.md) — Schema 3.0 promotion.
-- [`0004`](adr/0004-mobile-apps-out-of-scope.md) — Mobile apps out of scope.
-- [`0005`](adr/0005-drop-project-tenancy-tier.md) — Dropping the projects tenancy tier in github-app.
+The pre-1.0 architectural decisions live archived in
+[`.archive/adr-pre-1.0/`](../.archive/adr-pre-1.0/) — they document
+the path that led to the current 1.0 surface. The 1.0 design is
+captured in this file plus `docs/configuration.md`; new ADRs go
+back into `docs/adr/` if/when needed.

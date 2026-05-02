@@ -131,7 +131,7 @@ See `CLAUDE.md` for the canonical module map. High-level:
 
 ## Adding Language Support
 
-belaf 2.0 makes this **two lines of editing** plus the loader file
+belaf makes this **two lines of editing** plus the loader file
 itself. There is no central enum to widen.
 
 1. Create `src/core/ecosystem/<lang>.rs` with a `FooLoader` struct.

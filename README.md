@@ -208,14 +208,12 @@ initial_tag = "0.1.0"
 strategy = "scope_first"
 scope_matching = "smart"
 
-# Per-unit overrides go on `[[release_unit]]` blocks. The wizard
+# Per-unit overrides go on `[release_unit.<name>]` blocks. The wizard
 # emits these automatically — you rarely write them by hand.
-[[release_unit]]
-name = "my-package"
-source = { manifests = ["packages/my-package/Cargo.toml"] }
-
-[release_unit.tag_format]
-template = "{name}-v{version}"
+[release_unit.my-package]
+ecosystem = "cargo"
+manifests = [{ path = "packages/my-package/Cargo.toml", version_field = "cargo_toml" }]
+tag_format = "{name}-v{version}"
 ```
 
 See [`docs/configuration.md`](docs/configuration.md) for every
