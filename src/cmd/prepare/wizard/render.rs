@@ -19,7 +19,10 @@ use crate::core::{
     changelog::Commit,
     ui::{
         markdown,
-        release_unit_view::{build_unit_row_line, BumpHint, RenderMode, UnitRow},
+        release_unit_view::{
+            build_group_row_lines, build_unit_row_line, BumpHint, GroupMemberDisplay,
+            GroupRowDisplay, RenderMode, UnitRow,
+        },
         utils::centered_rect,
     },
     wire::known::Ecosystem,
@@ -234,18 +237,6 @@ fn solo_to_unit_row(project: &ReleaseUnitItem) -> UnitRow {
     }
 }
 
-/// Render one group as a header row + a tree of read-only member rows
-/// below. Plan §5 reference layout:
-///
-/// ```text
-/// [✅] schema (group, 2 members)            minor
-///      ├─ @org/schema           (npm)
-///      └─ com.org:schema        (maven)
-/// ```
-///
-/// Member ecosystems are pulled off the underlying `ReleaseUnitItem` via
-/// `project_type().as_str()` so the dashboard's display name matches
-/// the wire format.
 fn render_group_row(
     group_id: &str,
     member_indices: &[usize],
@@ -257,79 +248,28 @@ fn render_group_row(
         return ListItem::new(Line::from(""));
     }
 
-    // Group selection-state: all/some/none of the members selected.
-    let all_selected = members.iter().all(|m| m.selected);
-    let any_selected = members.iter().any(|m| m.selected);
-    let checkbox = if all_selected {
-        "✅"
-    } else if any_selected {
-        "🟨" // partial
-    } else {
-        "⬜"
+    let suggested_bump = match members[0].suggested_bump() {
+        BumpRecommendation::Major => Some(BumpHint::Major),
+        BumpRecommendation::Minor => Some(BumpHint::Minor),
+        BumpRecommendation::Patch => Some(BumpHint::Patch),
+        BumpRecommendation::None => None,
     };
 
-    // Members of one group share a bump (validated CLI-side); pick the
-    // first one's suggestion as the row's overall hint.
-    let (suggestion_text, suggestion_color) = match members[0].suggested_bump() {
-        BumpRecommendation::Major => ("MAJOR", Color::Red),
-        BumpRecommendation::Minor => ("MINOR", Color::Yellow),
-        BumpRecommendation::Patch => ("PATCH", Color::Green),
-        BumpRecommendation::None => ("", Color::Gray),
+    let row = GroupRowDisplay {
+        id: group_id.to_string(),
+        members: members
+            .iter()
+            .map(|m| GroupMemberDisplay {
+                name: m.name().to_string(),
+                ecosystem_label: m.ecosystem().display_name().to_string(),
+            })
+            .collect(),
+        all_selected: members.iter().all(|m| m.selected),
+        any_selected: members.iter().any(|m| m.selected),
+        suggested_bump,
     };
 
-    let header_label_color = if is_current {
-        Color::Cyan
-    } else if all_selected {
-        Color::Green
-    } else if any_selected {
-        Color::Yellow
-    } else {
-        Color::White
-    };
-
-    let header = Line::from(vec![
-        Span::styled(format!(" {} ", checkbox), Style::default()),
-        Span::styled(
-            group_id.to_string(),
-            Style::default()
-                .fg(header_label_color)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            format!(" (group, {} members)", members.len()),
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::ITALIC),
-        ),
-        Span::styled(
-            if !suggestion_text.is_empty() {
-                format!("  → {}", suggestion_text)
-            } else {
-                String::new()
-            },
-            Style::default().fg(suggestion_color),
-        ),
-    ]);
-
-    let mut lines = vec![header];
-    for (i, m) in members.iter().enumerate() {
-        let is_last = i == members.len() - 1;
-        let connector = if is_last {
-            "    └─ "
-        } else {
-            "    ├─ "
-        };
-        let eco_label = m.ecosystem().display_name();
-        lines.push(Line::from(vec![
-            Span::styled(connector, Style::default().fg(Color::DarkGray)),
-            Span::styled(m.name().to_string(), Style::default().fg(Color::Gray)),
-            Span::styled(
-                format!("  ({})", eco_label),
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]));
-    }
-
+    let lines = build_group_row_lines(&row, is_current);
     let style = if is_current {
         Style::default().bg(Color::Rgb(40, 40, 50))
     } else {

@@ -459,6 +459,99 @@ pub fn build_unit_row_line(
 }
 
 // ---------------------------------------------------------------------------
+// GroupRowDisplay — shared helper for prepare's group-row tree.
+// ---------------------------------------------------------------------------
+
+/// One member entry in a group row's tree.
+pub struct GroupMemberDisplay {
+    pub name: String,
+    pub ecosystem_label: String,
+}
+
+/// Aggregate state of a `[group.<id>]` block as a list row: the
+/// header summarises the group's selection-state and shared bump,
+/// the tree below it lists each member by ecosystem.
+pub struct GroupRowDisplay {
+    pub id: String,
+    pub members: Vec<GroupMemberDisplay>,
+    pub all_selected: bool,
+    pub any_selected: bool,
+    pub suggested_bump: Option<BumpHint>,
+}
+
+/// Render a [`GroupRowDisplay`] into the multi-line row prepare uses
+/// in its selection table. Returns the header line followed by one
+/// indented connector-line per member.
+pub fn build_group_row_lines(row: &GroupRowDisplay, is_current: bool) -> Vec<Line<'static>> {
+    let checkbox = if row.all_selected {
+        "✅"
+    } else if row.any_selected {
+        "🟨"
+    } else {
+        "⬜"
+    };
+
+    let header_label_color = if is_current {
+        Color::Cyan
+    } else if row.all_selected {
+        Color::Green
+    } else if row.any_selected {
+        Color::Yellow
+    } else {
+        Color::White
+    };
+
+    let (suggestion_text, suggestion_color) = match row.suggested_bump {
+        Some(BumpHint::Major) => ("MAJOR", Color::Red),
+        Some(BumpHint::Minor) => ("MINOR", Color::Yellow),
+        Some(BumpHint::Patch) => ("PATCH", Color::Green),
+        _ => ("", Color::Gray),
+    };
+
+    let header = Line::from(vec![
+        Span::styled(format!(" {} ", checkbox), Style::default()),
+        Span::styled(
+            row.id.clone(),
+            Style::default()
+                .fg(header_label_color)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!(" (group, {} members)", row.members.len()),
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::ITALIC),
+        ),
+        Span::styled(
+            if !suggestion_text.is_empty() {
+                format!("  → {}", suggestion_text)
+            } else {
+                String::new()
+            },
+            Style::default().fg(suggestion_color),
+        ),
+    ]);
+
+    let mut lines = vec![header];
+    for (i, m) in row.members.iter().enumerate() {
+        let connector = if i == row.members.len() - 1 {
+            "    └─ "
+        } else {
+            "    ├─ "
+        };
+        lines.push(Line::from(vec![
+            Span::styled(connector, Style::default().fg(Color::DarkGray)),
+            Span::styled(m.name.clone(), Style::default().fg(Color::Gray)),
+            Span::styled(
+                format!("  ({})", m.ecosystem_label),
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]));
+    }
+    lines
+}
+
+// ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 
