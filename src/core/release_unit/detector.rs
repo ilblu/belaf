@@ -317,7 +317,7 @@ pub fn detect_drift(
 ///     definitely claimed the parent service even if no explicit
 ///     entry names it.
 fn is_covered(path: &RepoPathBuf, coverage: &[RepoPathBuf]) -> bool {
-    if crate::core::ecosystem::registry::is_path_inside_any(path, coverage) {
+    if crate::core::ecosystem::format_handler::is_path_inside_any(path, coverage) {
         return true;
     }
     let path_str = path.escaped();

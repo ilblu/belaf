@@ -12,40 +12,74 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
     core::{
-        ecosystem::registry::Ecosystem,
+        ecosystem::format_handler::{scan_index_for_filename, DiscoveredUnit, FormatHandler},
         errors::Result,
-        git::repository::{RepoPath, RepoPathBuf, Repository},
-        graph::ReleaseUnitGraphBuilder,
-        session::AppBuilder,
+        git::repository::{ChangeList, RepoPathBuf, Repository},
+        release_unit::VersionFieldSpec,
+        resolved_release_unit::ReleaseUnitId,
+        rewriters::Rewriter,
+        session::AppSession,
         version::Version,
     },
 };
 
 #[derive(Debug, Default)]
-pub struct SwiftLoader {
-    package_swift_paths: Vec<RepoPathBuf>,
+pub struct SwiftLoader;
+
+/// Swift Package Manager doesn't store project versions in
+/// `Package.swift`; releases are tag-driven (similar to Go modules).
+/// `make_rewriter` returns a no-op rewriter that the bump pipeline
+/// will run; the actual release artefact is the git tag.
+#[derive(Debug)]
+pub struct SwiftNoOpRewriter;
+
+impl Rewriter for SwiftNoOpRewriter {
+    fn rewrite(&self, _app: &AppSession, _changes: &mut ChangeList) -> Result<()> {
+        Ok(())
+    }
 }
 
-impl SwiftLoader {
-    /// Inherent helper used by both the [`Ecosystem`] trait impl and the
-    /// loader's unit tests (which can call this without constructing a real
-    /// `Repository`/`ReleaseUnitGraphBuilder`).
-    pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
-        if basename.as_ref() != b"Package.swift" {
-            return;
-        }
-
-        let mut path = dirname.to_owned();
-        path.push(basename);
-        self.package_swift_paths.push(path);
+impl FormatHandler for SwiftLoader {
+    fn name(&self) -> &'static str {
+        "swift"
     }
 
-    /// Drains the loader into the [`AppBuilder`]. The trait's `finalize`
-    /// shim calls this after consuming the `Box<Self>`.
-    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
-        for package_swift_path in self.package_swift_paths {
+    fn display_name(&self) -> &'static str {
+        "Swift"
+    }
+
+    fn manifest_filename(&self) -> &'static str {
+        "Package.swift"
+    }
+
+    fn default_version_field(&self) -> VersionFieldSpec {
+        // Swift releases are git-tag-driven; no in-file version. The
+        // placeholder spec is never normally read.
+        VersionFieldSpec::GenericRegex {
+            pattern: r"//\s*belaf-version\s*=\s*(.+)".to_string(),
+            replace: "// belaf-version = {version}".to_string(),
+        }
+    }
+
+    fn make_rewriter(
+        &self,
+        _unit_id: ReleaseUnitId,
+        _manifest_path: RepoPathBuf,
+    ) -> Box<dyn Rewriter> {
+        Box::new(SwiftNoOpRewriter)
+    }
+
+    fn discover_units(
+        &self,
+        repo: &Repository,
+        configured_skip_paths: &[RepoPathBuf],
+    ) -> Result<Vec<DiscoveredUnit>> {
+        let paths = scan_index_for_filename(repo, "Package.swift", configured_skip_paths)?;
+        let mut units = Vec::new();
+
+        for package_swift_path in paths {
             let (prefix, _) = package_swift_path.split_basename();
-            let fs_path = app.repo.resolve_workdir(&package_swift_path);
+            let fs_path = repo.resolve_workdir(&package_swift_path);
 
             let f = atry!(
                 File::open(&fs_path);
@@ -71,46 +105,17 @@ impl SwiftLoader {
                 ["failed to parse package name from `{}`", fs_path.display()]
             );
 
-            let qnames = vec![package_name, "swift".to_owned()];
-
-            let ident = app.graph.add_project(qnames);
-            let unit = app.graph.lookup_mut(ident);
-            unit.version = Some(Version::Semver(semver::Version::new(0, 0, 0)));
-            unit.prefix = Some(prefix.to_owned());
+            units.push(DiscoveredUnit {
+                qnames: vec![package_name, "swift".to_owned()],
+                version: Version::Semver(semver::Version::new(0, 0, 0)),
+                prefix: prefix.to_owned(),
+                anchor_manifest: package_swift_path,
+                rewriter_factories: vec![Box::new(|_id| Box::new(SwiftNoOpRewriter))],
+                internal_deps: Vec::new(),
+            });
         }
 
-        Ok(())
-    }
-}
-
-impl Ecosystem for SwiftLoader {
-    fn name(&self) -> &'static str {
-        "swift"
-    }
-    fn display_name(&self) -> &'static str {
-        "Swift"
-    }
-    fn version_file(&self) -> &'static str {
-        "Package.swift"
-    }
-    fn tag_format_default(&self) -> &'static str {
-        "{name}-v{version}"
-    }
-
-    fn process_index_item(
-        &mut self,
-        _repo: &Repository,
-        _graph: &mut ReleaseUnitGraphBuilder,
-        _repopath: &RepoPath,
-        dirname: &RepoPath,
-        basename: &RepoPath,
-    ) -> Result<()> {
-        self.record_path(dirname, basename);
-        Ok(())
-    }
-
-    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
-        (*self).into_projects(app)
+        Ok(units)
     }
 }
 
@@ -151,48 +156,6 @@ fn extract_package_name(line: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_process_index_item_detects_package_swift() {
-        let mut loader = SwiftLoader::default();
-        let dirname_buf = RepoPathBuf::new(b"MyLibrary");
-        let basename_buf = RepoPathBuf::new(b"Package.swift");
-
-        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
-
-        assert_eq!(loader.package_swift_paths.len(), 1);
-        assert_eq!(
-            <RepoPathBuf as AsRef<[u8]>>::as_ref(&loader.package_swift_paths[0]),
-            b"MyLibrary/Package.swift"
-        );
-    }
-
-    #[test]
-    fn test_process_index_item_ignores_other_files() {
-        let mut loader = SwiftLoader::default();
-        let dirname_buf = RepoPathBuf::new(b"Sources");
-        let basename_buf = RepoPathBuf::new(b"main.swift");
-
-        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
-
-        assert_eq!(loader.package_swift_paths.len(), 0);
-    }
-
-    #[test]
-    fn test_process_index_item_multiple_packages() {
-        let mut loader = SwiftLoader::default();
-
-        let lib1_dir = RepoPathBuf::new(b"LibraryA");
-        let lib2_dir = RepoPathBuf::new(b"LibraryB");
-        let lib3_dir = RepoPathBuf::new(b"packages/LibraryC");
-        let package_swift = RepoPathBuf::new(b"Package.swift");
-
-        loader.record_path(lib1_dir.as_ref(), package_swift.as_ref());
-        loader.record_path(lib2_dir.as_ref(), package_swift.as_ref());
-        loader.record_path(lib3_dir.as_ref(), package_swift.as_ref());
-
-        assert_eq!(loader.package_swift_paths.len(), 3);
-    }
 
     #[test]
     fn test_extract_package_name_simple() {

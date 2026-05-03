@@ -22,7 +22,7 @@ use crate::core::{
     bump::{self, BumpConfig, BumpRecommendation},
     changelog::{Changelog, ChangelogConfig, Commit, GitConfig, Release},
     config::syntax::{BumpConfiguration, ChangelogConfiguration},
-    ecosystem::registry::EcosystemRegistry,
+    ecosystem::format_handler::FormatHandlerRegistry,
     git::repository::{ChangeList, RepoPathBuf, Repository},
     github::{client::GitHubInformation, pr},
     graph::GraphQueryBuilder,
@@ -930,7 +930,7 @@ fn build_tag_name(
     project: &SelectedReleaseUnit,
     groups: &GroupSet,
 ) -> Result<String> {
-    let registry = EcosystemRegistry::with_defaults();
+    let registry = FormatHandlerRegistry::with_defaults();
     let eco_name = project.ecosystem.as_str();
     let eco = registry.lookup(eco_name).ok_or_else(|| {
         anyhow::anyhow!(

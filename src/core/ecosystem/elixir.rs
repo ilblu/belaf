@@ -9,92 +9,21 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
     core::{
-        ecosystem::registry::Ecosystem,
+        ecosystem::format_handler::{scan_index_for_filename, DiscoveredUnit, FormatHandler},
         errors::Result,
-        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::ReleaseUnitGraphBuilder,
+        git::repository::{ChangeList, RepoPathBuf, Repository},
+        release_unit::VersionFieldSpec,
         resolved_release_unit::ReleaseUnitId,
         rewriters::Rewriter,
-        session::{AppBuilder, AppSession},
+        session::AppSession,
         version::Version,
     },
 };
 
 #[derive(Debug, Default)]
-pub struct ElixirLoader {
-    mix_exs_paths: Vec<RepoPathBuf>,
-}
+pub struct ElixirLoader;
 
 impl ElixirLoader {
-    pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
-        if basename.as_ref() != b"mix.exs" {
-            return;
-        }
-
-        let mut path = dirname.to_owned();
-        path.push(basename);
-        self.mix_exs_paths.push(path);
-    }
-
-    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
-        for mix_exs_path in self.mix_exs_paths {
-            let (prefix, _) = mix_exs_path.split_basename();
-            let fs_path = app.repo.resolve_workdir(&mix_exs_path);
-
-            let mut contents = String::new();
-            let mut f = atry!(
-                File::open(&fs_path);
-                ["failed to open mix.exs file `{}`", fs_path.display()]
-            );
-            atry!(
-                check_file_size(&f, &fs_path);
-                ["file size check failed for `{}`", fs_path.display()]
-            );
-            atry!(
-                f.read_to_string(&mut contents);
-                ["failed to read mix.exs file `{}`", fs_path.display()]
-            );
-
-            let app_name = atry!(
-                Self::extract_app_name(&contents)
-                    .ok_or_else(|| anyhow!("failed to extract app name from mix.exs"));
-                ["failed to parse app name from `{}`", fs_path.display()]
-            );
-
-            let version_str = Self::extract_version(&contents).unwrap_or_else(|| {
-                warn!(
-                    "failed to extract version from mix.exs `{}`, defaulting to 0.1.0",
-                    fs_path.display()
-                );
-                String::from("0.1.0")
-            });
-
-            let qnames = vec![app_name, "elixir".to_owned()];
-
-            let ident = app.graph.add_project(qnames);
-            let unit = app.graph.lookup_mut(ident);
-
-            let version = match semver::Version::parse(&version_str) {
-                Ok(v) => Version::Semver(v),
-                Err(_) => {
-                    warn!(
-                        "failed to parse version `{}` from mix.exs, using default",
-                        version_str
-                    );
-                    Version::Semver(semver::Version::new(0, 1, 0))
-                }
-            };
-
-            unit.version = Some(version);
-            unit.prefix = Some(prefix.to_owned());
-
-            let elixir_rewrite = MixExsRewriter::new(ident, mix_exs_path);
-            unit.rewriters.push(Box::new(elixir_rewrite));
-        }
-
-        Ok(())
-    }
-
     fn extract_app_name(contents: &str) -> Option<String> {
         for line in contents.lines() {
             let trimmed = line.trim();
@@ -129,31 +58,101 @@ impl ElixirLoader {
     }
 }
 
-impl Ecosystem for ElixirLoader {
+impl FormatHandler for ElixirLoader {
     fn name(&self) -> &'static str {
         "elixir"
     }
+
     fn display_name(&self) -> &'static str {
         "Elixir"
     }
-    fn version_file(&self) -> &'static str {
+
+    fn manifest_filename(&self) -> &'static str {
         "mix.exs"
     }
 
-    fn process_index_item(
-        &mut self,
-        _repo: &Repository,
-        _graph: &mut ReleaseUnitGraphBuilder,
-        _repopath: &RepoPath,
-        dirname: &RepoPath,
-        basename: &RepoPath,
-    ) -> Result<()> {
-        self.record_path(dirname, basename);
-        Ok(())
+    fn default_version_field(&self) -> VersionFieldSpec {
+        // mix.exs version is bracketed by quotes after `version:` —
+        // the regex captures the quoted string and replaces it.
+        VersionFieldSpec::GenericRegex {
+            pattern: r#"version:\s*"([^"]+)""#.to_string(),
+            replace: r#"version: "{version}""#.to_string(),
+        }
     }
 
-    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
-        (*self).into_projects(app)
+    fn make_rewriter(
+        &self,
+        unit_id: ReleaseUnitId,
+        manifest_path: RepoPathBuf,
+    ) -> Box<dyn Rewriter> {
+        Box::new(MixExsRewriter::new(unit_id, manifest_path))
+    }
+
+    fn discover_units(
+        &self,
+        repo: &Repository,
+        configured_skip_paths: &[RepoPathBuf],
+    ) -> Result<Vec<DiscoveredUnit>> {
+        let paths = scan_index_for_filename(repo, "mix.exs", configured_skip_paths)?;
+        let mut units = Vec::new();
+
+        for mix_exs_path in paths {
+            let (prefix, _) = mix_exs_path.split_basename();
+            let fs_path = repo.resolve_workdir(&mix_exs_path);
+
+            let mut contents = String::new();
+            let mut f = atry!(
+                File::open(&fs_path);
+                ["failed to open mix.exs file `{}`", fs_path.display()]
+            );
+            atry!(
+                check_file_size(&f, &fs_path);
+                ["file size check failed for `{}`", fs_path.display()]
+            );
+            atry!(
+                f.read_to_string(&mut contents);
+                ["failed to read mix.exs file `{}`", fs_path.display()]
+            );
+
+            let app_name = atry!(
+                Self::extract_app_name(&contents)
+                    .ok_or_else(|| anyhow!("failed to extract app name from mix.exs"));
+                ["failed to parse app name from `{}`", fs_path.display()]
+            );
+
+            let version_str = Self::extract_version(&contents).unwrap_or_else(|| {
+                warn!(
+                    "failed to extract version from mix.exs `{}`, defaulting to 0.1.0",
+                    fs_path.display()
+                );
+                String::from("0.1.0")
+            });
+
+            let version = match semver::Version::parse(&version_str) {
+                Ok(v) => Version::Semver(v),
+                Err(_) => {
+                    warn!(
+                        "failed to parse version `{}` from mix.exs, using default",
+                        version_str
+                    );
+                    Version::Semver(semver::Version::new(0, 1, 0))
+                }
+            };
+
+            let manifest = mix_exs_path.clone();
+            units.push(DiscoveredUnit {
+                qnames: vec![app_name, "elixir".to_owned()],
+                version,
+                prefix: prefix.to_owned(),
+                anchor_manifest: mix_exs_path,
+                rewriter_factories: vec![Box::new(move |id| {
+                    Box::new(MixExsRewriter::new(id, manifest))
+                })],
+                internal_deps: Vec::new(),
+            });
+        }
+
+        Ok(units)
     }
 }
 
@@ -226,48 +225,6 @@ impl Rewriter for MixExsRewriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_process_index_item_detects_mix_exs() {
-        let mut loader = ElixirLoader::default();
-        let dirname_buf = RepoPathBuf::new(b"backend");
-        let basename_buf = RepoPathBuf::new(b"mix.exs");
-
-        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
-
-        assert_eq!(loader.mix_exs_paths.len(), 1);
-        assert_eq!(
-            <RepoPathBuf as AsRef<[u8]>>::as_ref(&loader.mix_exs_paths[0]),
-            b"backend/mix.exs"
-        );
-    }
-
-    #[test]
-    fn test_process_index_item_ignores_other_files() {
-        let mut loader = ElixirLoader::default();
-        let dirname_buf = RepoPathBuf::new(b"lib");
-        let basename_buf = RepoPathBuf::new(b"app.ex");
-
-        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
-
-        assert_eq!(loader.mix_exs_paths.len(), 0);
-    }
-
-    #[test]
-    fn test_process_index_item_multiple_projects() {
-        let mut loader = ElixirLoader::default();
-
-        let dirname_web = RepoPathBuf::new(b"apps/web");
-        let dirname_api = RepoPathBuf::new(b"apps/api");
-        let dirname_worker = RepoPathBuf::new(b"apps/worker");
-        let basename = RepoPathBuf::new(b"mix.exs");
-
-        loader.record_path(dirname_web.as_ref(), basename.as_ref());
-        loader.record_path(dirname_api.as_ref(), basename.as_ref());
-        loader.record_path(dirname_worker.as_ref(), basename.as_ref());
-
-        assert_eq!(loader.mix_exs_paths.len(), 3);
-    }
 
     #[test]
     fn test_extract_app_name_simple() {

@@ -17,24 +17,21 @@ use tracing::{info, warn};
 use crate::{
     a_ok_or, atry,
     core::{
-        ecosystem::registry::Ecosystem,
+        ecosystem::format_handler::{
+            is_path_inside_any, DiscoveredUnit, FormatHandler, RawInternalDep,
+        },
         errors::Result,
-        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::ReleaseUnitGraphBuilder,
-        resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
+        git::repository::{ChangeList, RepoPathBuf, Repository},
+        release_unit::VersionFieldSpec,
+        resolved_release_unit::{DepRequirement, ReleaseUnitId},
         rewriters::Rewriter,
-        session::{AppBuilder, AppSession},
+        session::AppSession,
         version::Version,
     },
 };
 
-/// Framework for auto-loading Visual Studio C# projects from the repository
-/// contents.
 #[derive(Debug, Default)]
-pub struct CsProjLoader {
-    dirs_of_interest: HashMap<RepoPathBuf, DirData>,
-    vdproj_files: Vec<RepoPathBuf>,
-}
+pub struct CsProjLoader;
 
 #[derive(Debug, Default)]
 struct DirData {
@@ -43,38 +40,49 @@ struct DirData {
 }
 
 impl CsProjLoader {
-    pub fn record_path(
-        &mut self,
-        _repo: &Repository,
-        repopath: &RepoPath,
-        dirname: &RepoPath,
-        basename: &RepoPath,
-    ) -> Result<()> {
-        if basename.ends_with(b".csproj") {
-            let dir = dirname.to_owned();
-            let e = self.dirs_of_interest.entry(dir).or_default();
-            e.csproj = Some(repopath.to_owned());
-        } else if basename.as_ref() == b"AssemblyInfo.cs" {
-            // Hardcode the assumption that we should walk up one directory:
-            let (dir, _base) = dirname.pop_sep().split_basename();
-            let dir = dir.to_owned();
-            let e = self.dirs_of_interest.entry(dir).or_default();
-            e.assembly_info = Some(repopath.to_owned());
-        } else if basename.ends_with(b".vdproj") {
-            self.vdproj_files.push(repopath.to_owned());
-        }
+    /// Walk the git index and build the per-directory map of
+    /// `.csproj` + `AssemblyInfo.cs`, plus a flat `.vdproj` list.
+    fn collect_paths(
+        &self,
+        repo: &Repository,
+        configured_skip_paths: &[RepoPathBuf],
+    ) -> Result<(HashMap<RepoPathBuf, DirData>, Vec<RepoPathBuf>)> {
+        let mut dirs_of_interest: HashMap<RepoPathBuf, DirData> = HashMap::new();
+        let mut vdproj_files: Vec<RepoPathBuf> = Vec::new();
 
-        Ok(())
+        repo.scan_paths(|p| {
+            if is_path_inside_any(p, configured_skip_paths) {
+                return Ok(());
+            }
+            let (dirname, basename) = p.split_basename();
+            if basename.ends_with(b".csproj") {
+                let e = dirs_of_interest.entry(dirname.to_owned()).or_default();
+                e.csproj = Some(p.to_owned());
+            } else if basename.as_ref() == b"AssemblyInfo.cs" {
+                let (parent_dir, _) = dirname.pop_sep().split_basename();
+                let e = dirs_of_interest.entry(parent_dir.to_owned()).or_default();
+                e.assembly_info = Some(p.to_owned());
+            } else if basename.ends_with(b".vdproj") {
+                vdproj_files.push(p.to_owned());
+            }
+            Ok(())
+        })?;
+
+        Ok((dirs_of_interest, vdproj_files))
     }
 
-    /// Drains the loader into the [`AppBuilder`].
-    pub fn into_projects(mut self, app: &mut AppBuilder) -> Result<()> {
+    fn build_units(
+        &self,
+        repo: &Repository,
+        dirs_of_interest: HashMap<RepoPathBuf, DirData>,
+        mut vdproj_files: Vec<RepoPathBuf>,
+    ) -> Result<Vec<DiscoveredUnit>> {
         // Scan any vdproj files that might be associated with projects.
 
         let mut guid_to_vdproj: HashMap<String, Vec<RepoPathBuf>> = HashMap::new();
 
-        for vdproj in self.vdproj_files.drain(..) {
-            let p = app.repo.resolve_workdir(&vdproj);
+        for vdproj in vdproj_files.drain(..) {
+            let p = repo.resolve_workdir(&vdproj);
             let f = atry!(
                 File::open(&p);
                 ["failed to open file `{}`", p.display()]
@@ -123,17 +131,17 @@ impl CsProjLoader {
         // Build up the table of projects and their deps.
 
         struct Info {
-            ident: ReleaseUnitId,
+            unit_index: usize,
             name: String,
-
             /// (guid, literal-req, resolved-req)
             deps: Vec<(String, String, DepRequirement)>,
         }
 
-        let mut guid_to_info = HashMap::new();
+        let mut guid_to_info: HashMap<String, Info> = HashMap::new();
+        let mut units: Vec<DiscoveredUnit> = Vec::new();
         let mut gave_dep_warning_help = false;
 
-        for (repodir, data) in &self.dirs_of_interest {
+        for (repodir, data) in &dirs_of_interest {
             // Basic checking that we got both a csproj and an assemblyinfo.
 
             let csproj = match data.csproj {
@@ -162,7 +170,7 @@ impl CsProjLoader {
 
             // Parse the .csproj XML
 
-            let p = app.repo.resolve_workdir(csproj);
+            let p = repo.resolve_workdir(csproj);
             let mut xml = atry!(
                 Reader::from_file(&p);
                 ["unable to open `{}` for reading", p.display()]
@@ -291,10 +299,9 @@ impl CsProjLoader {
 
             for guid in dep_guids.drain(..) {
                 let (req, text) = if let Some(text) = dep_reqs.get(&guid) {
-                    match app
-                        .repo
+                    match repo
                         .parse_history_ref(text)
-                        .and_then(|cref| app.repo.resolve_history_ref(&cref, csproj))
+                        .and_then(|cref| repo.resolve_history_ref(&cref, csproj))
                     {
                         Ok(r) => (r, text.clone()),
 
@@ -328,7 +335,7 @@ impl CsProjLoader {
             // Now parse the assembly info ...
 
             let mut version = None;
-            let p = app.repo.resolve_workdir(assembly_info);
+            let p = repo.resolve_workdir(assembly_info);
 
             {
                 let f = atry!(
@@ -375,92 +382,118 @@ impl CsProjLoader {
 
             // Finally we can (try to) register this project.
 
-            let qnames = vec![name.to_owned(), "csproj".to_owned()];
+            let unit_index = units.len();
+            let assembly_info_path = assembly_info.to_owned();
+            let mut rewriter_factories: Vec<
+                crate::core::ecosystem::format_handler::RewriterFactory,
+            > = vec![Box::new(move |id| {
+                Box::new(AssemblyInfoCsRewriter::new(id, assembly_info_path))
+            })];
 
-            let ident = app.graph.add_project(qnames);
-            {
-                let unit = app.graph.lookup_mut(ident);
-                unit.prefix = Some(repodir.to_owned());
-                unit.version = Some(version);
-
-                // Auto-register a rewriter to update this package's `AssemblyInfo.cs`.
-                let rewrite = AssemblyInfoCsRewriter::new(ident, assembly_info.to_owned());
-                unit.rewriters.push(Box::new(rewrite));
-
-                // Any vdproj rewriters?
-                if let Some(mut vdprojs) = guid_to_vdproj.remove(&guid) {
-                    for vdproj in vdprojs.drain(..) {
-                        let rewrite = VdprojRewriter::new(ident, vdproj);
-                        unit.rewriters.push(Box::new(rewrite));
-                    }
+            if let Some(mut vdprojs) = guid_to_vdproj.remove(&guid) {
+                for vdproj in vdprojs.drain(..) {
+                    rewriter_factories.push(Box::new(move |id| {
+                        Box::new(VdprojRewriter::new(id, vdproj))
+                    }));
                 }
-
-                // Save the info for dep-linking.
-
-                guid_to_info.insert(
-                    guid,
-                    Info {
-                        ident,
-                        name: name.to_owned(),
-                        deps: resolved_reqs,
-                    },
-                );
             }
+
+            let csproj_path = csproj.clone();
+            units.push(DiscoveredUnit {
+                qnames: vec![name.to_owned(), "csproj".to_owned()],
+                version,
+                prefix: repodir.to_owned(),
+                anchor_manifest: csproj_path,
+                rewriter_factories,
+                internal_deps: Vec::new(),
+            });
+
+            guid_to_info.insert(
+                guid,
+                Info {
+                    unit_index,
+                    name: name.to_owned(),
+                    deps: resolved_reqs,
+                },
+            );
         }
 
-        // Now that we've registered them all, we can populate the interdependencies.
-
+        // Translate guid-keyed deps into target_package_name now that
+        // every unit has its index + name.
+        let guid_to_name: HashMap<String, String> = guid_to_info
+            .iter()
+            .map(|(g, info)| (g.clone(), info.name.clone()))
+            .collect();
         for info in guid_to_info.values() {
-            for (guid, literal, req) in &info.deps {
-                let dep_ident = match guid_to_info.get(guid) {
-                    Some(dep_info) => dep_info.ident,
+            for (dep_guid, literal, req) in &info.deps {
+                let target_name = match guid_to_name.get(dep_guid) {
+                    Some(n) => n.clone(),
                     None => bail!(
                         "C# project `{}` depends on a project with GUID {} but I cannot locate it",
                         info.name,
-                        guid
+                        dep_guid
                     ),
                 };
-
-                app.graph.add_dependency(
-                    info.ident,
-                    DependencyTarget::Ident(dep_ident),
-                    literal.to_owned(),
-                    req.clone(),
-                );
+                units[info.unit_index].internal_deps.push(RawInternalDep {
+                    target_package_name: target_name,
+                    literal: literal.clone(),
+                    requirement: req.clone(),
+                });
             }
         }
 
-        Ok(())
+        Ok(units)
     }
 }
 
-impl Ecosystem for CsProjLoader {
+impl FormatHandler for CsProjLoader {
     fn name(&self) -> &'static str {
         "csproj"
     }
+
     fn display_name(&self) -> &'static str {
         "C# (.NET)"
     }
-    fn version_file(&self) -> &'static str {
+
+    fn manifest_filename(&self) -> &'static str {
         "*.csproj"
     }
+
+    fn default_version_field(&self) -> VersionFieldSpec {
+        // C# version actually lives in AssemblyInfo.cs; the manifest
+        // path returned for a discovered unit is the .csproj. Rewriting
+        // is handled by the AssemblyInfoCsRewriter, not via the
+        // version_field dispatcher — this placeholder is unused.
+        VersionFieldSpec::GenericRegex {
+            pattern: r#"\[assembly:\s*AssemblyVersion\("([^"]+)"\)\]"#.to_string(),
+            replace: r#"[assembly: AssemblyVersion("{version}")]"#.to_string(),
+        }
+    }
+
     fn tag_format_default(&self) -> &'static str {
         "{name}@v{version}"
     }
 
-    fn process_index_item(
-        &mut self,
-        repo: &Repository,
-        _graph: &mut ReleaseUnitGraphBuilder,
-        repopath: &RepoPath,
-        dirname: &RepoPath,
-        basename: &RepoPath,
-    ) -> Result<()> {
-        self.record_path(repo, repopath, dirname, basename)
+    fn make_rewriter(
+        &self,
+        unit_id: ReleaseUnitId,
+        manifest_path: RepoPathBuf,
+    ) -> Box<dyn Rewriter> {
+        // Configured-RU path: caller passes the AssemblyInfo.cs as the
+        // manifest_path (the csproj+AssemblyInfo coupling is auto-only).
+        Box::new(AssemblyInfoCsRewriter::new(unit_id, manifest_path))
     }
 
-    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
-        (*self).into_projects(app)
+    fn discover_units(
+        &self,
+        repo: &Repository,
+        configured_skip_paths: &[RepoPathBuf],
+    ) -> Result<Vec<DiscoveredUnit>> {
+        let (dirs_of_interest, vdproj_files) = self.collect_paths(repo, configured_skip_paths)?;
+        if dirs_of_interest.is_empty() && vdproj_files.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.build_units(repo, dirs_of_interest, vdproj_files)
     }
 }
 

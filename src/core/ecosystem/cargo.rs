@@ -18,147 +18,56 @@ use toml_edit::{DocumentMut, Item, Table};
 use tracing::info;
 
 use crate::core::{
-    ecosystem::registry::Ecosystem,
+    ecosystem::format_handler::{
+        is_path_inside_any, scan_index_for_filename, DiscoveredUnit, FormatHandler, RawInternalDep,
+    },
     errors::Result,
-    git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-    graph::ReleaseUnitGraphBuilder,
-    resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
+    git::repository::{ChangeList, RepoPathBuf, Repository},
+    release_unit::VersionFieldSpec,
+    resolved_release_unit::{DepRequirement, ReleaseUnitId},
     rewriters::Rewriter,
-    session::{AppBuilder, AppSession},
+    session::AppSession,
     version::Version,
 };
 use crate::utils::file_io::read_config_file;
 use crate::utils::theme::PhaseSpinner;
 
-/// Framework for auto-loading Cargo projects from the repository contents.
+/// Stateless cargo `FormatHandler`. The struct exists only as a
+/// trait-object handle for the registry; all per-scan state lives in
+/// local variables inside `discover_units`.
 #[derive(Debug, Default)]
-pub struct CargoLoader {
-    cargo_toml_paths: Vec<RepoPathBuf>,
-    /// Set by [`super::registry::EcosystemRegistry::set_skip_list`].
-    /// Cargo metadata enumerates `workspace_members` regardless of
-    /// which Cargo.toml triggered discovery, so filtering at the
-    /// registration loop is the right place — not at index-scan time.
-    /// Phase C.
-    skip_list: Vec<RepoPathBuf>,
-}
+pub struct CargoLoader;
 
 impl CargoLoader {
-    /// Stash a `Cargo.toml` path. Collected during the index scan; consumed
-    /// by [`CargoLoader::into_projects`] which resolves workspaces via
-    /// `cargo metadata`.
-    pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
-        if basename.as_ref() != b"Cargo.toml" {
-            return;
-        }
-
-        let mut full_path = dirname.to_owned();
-        full_path.push(basename);
-        self.cargo_toml_paths.push(full_path);
-    }
-
-    /// Finalize autoloading any Cargo projects. Consumes this object.
-    ///
-    /// Discovers ALL workspace roots and loads each one separately.
-    /// Uses two-phase loading: first register all projects, then resolve dependencies.
-    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
-        if self.cargo_toml_paths.is_empty() {
-            return Ok(());
-        }
-
-        let workspace_data = self.discover_workspaces_with_metadata(app)?;
-
-        if workspace_data.is_empty() {
-            info!("no Cargo workspace roots found in repository");
-            return Ok(());
-        }
-
-        info!("found {} Cargo workspace root(s)", workspace_data.len());
-
-        let mut all_cargo_to_graph = HashMap::new();
-        let mut name_to_project: HashMap<String, ReleaseUnitId> = HashMap::new();
-
-        for (workspace_root, cargo_meta) in &workspace_data {
-            info!("loading Cargo workspace: {}", workspace_root.display());
-
-            self.register_workspace_projects(
-                app,
-                cargo_meta,
-                workspace_root,
-                &mut all_cargo_to_graph,
-                &mut name_to_project,
-            )?;
-        }
-
-        for (_, cargo_meta) in &workspace_data {
-            self.resolve_workspace_dependencies(
-                app,
-                cargo_meta,
-                &all_cargo_to_graph,
-                &name_to_project,
-            )?;
-        }
-
-        // Phase C.4 — Bazel fallback. Any Cargo.toml that wasn't
-        // covered by `cargo metadata` (typically because the
-        // workspace declares deps Bazel resolves but cargo can't —
-        // e.g. hermetic C deps in Bazel-managed `third_party/`) is
-        // registered via direct parse without dependency resolution.
-        // Same skip-list filter applies.
-        let metadata_covered_manifests: std::collections::HashSet<PathBuf> = workspace_data
-            .iter()
-            .flat_map(|(_, meta)| {
-                meta.workspace_packages()
-                    .into_iter()
-                    .map(|p| p.manifest_path.clone().into_std_path_buf())
-            })
-            .collect();
-
-        for toml_repopath in &self.cargo_toml_paths {
-            if super::registry::is_path_inside_any(toml_repopath, &self.skip_list) {
-                continue;
-            }
-            let toml_abs = app.repo.resolve_workdir(toml_repopath);
-            if metadata_covered_manifests.contains(&toml_abs) {
-                continue;
-            }
-            self.register_via_direct_parse(toml_repopath, app)?;
-        }
-
-        Ok(())
-    }
-
-    /// Phase C.4 — direct-parse fallback. Reads `[package].name` +
-    /// `[package].version` from the Cargo.toml without invoking
-    /// `cargo metadata`. Used for Bazel-managed workspaces where
-    /// metadata fails on hermetic C deps.
+    /// Direct-parse fallback (Bazel-friendly). Reads `[package].name`
+    /// and `[package].version` from a Cargo.toml without invoking
+    /// `cargo metadata`. Used when metadata fails on hermetic C deps
+    /// or non-cargo-managed workspaces.
     ///
     /// Skips: virtual workspace roots (no `[package]` section),
     /// non-semver versions, manifests with `version.workspace = true`
     /// where the workspace root has no `[workspace.package].version`.
     /// No inter-project dependency resolution — that's the trade-off
     /// callers accept for Bazel-coexistence.
-    fn register_via_direct_parse(
+    fn direct_parse_unit(
         &self,
+        repo: &Repository,
         toml_repopath: &RepoPathBuf,
-        app: &mut AppBuilder,
-    ) -> Result<()> {
-        let toml_abs = app.repo.resolve_workdir(toml_repopath);
+    ) -> Result<Option<DiscoveredUnit>> {
+        let toml_abs = repo.resolve_workdir(toml_repopath);
         if !toml_abs.exists() {
-            return Ok(());
+            return Ok(None);
         }
 
-        let content = match read_config_file(&toml_abs) {
-            Ok(c) => c,
-            Err(_) => return Ok(()),
+        let Ok(content) = read_config_file(&toml_abs) else {
+            return Ok(None);
         };
-        let doc: DocumentMut = match content.parse() {
-            Ok(d) => d,
-            Err(_) => return Ok(()),
+        let Ok(doc) = content.parse::<DocumentMut>() else {
+            return Ok(None);
         };
 
-        let pkg = match doc.get("package").and_then(|v| v.as_table()) {
-            Some(p) => p,
-            None => return Ok(()), // virtual workspace root or fragment
+        let Some(pkg) = doc.get("package").and_then(|v| v.as_table()) else {
+            return Ok(None);
         };
 
         let name = pkg
@@ -167,42 +76,38 @@ impl CargoLoader {
             .unwrap_or("")
             .to_string();
         if name.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
-        // version: explicit literal only — `version.workspace = true`
-        // would need workspace metadata to resolve and we're in the
-        // fallback path because metadata failed. Caller's choice.
         let version_str = pkg.get("version").and_then(|v| v.as_str());
-        let version = match version_str.and_then(|s| s.parse::<semver::Version>().ok()) {
-            Some(v) => v,
-            None => return Ok(()),
+        let Some(version) = version_str.and_then(|s| s.parse::<semver::Version>().ok()) else {
+            return Ok(None);
         };
 
         let (prefix, _) = toml_repopath.split_basename();
-        let qnames = vec![name.clone(), "cargo".to_owned()];
-
-        let ident = app.graph.add_project(qnames);
-        {
-            let unit = app.graph.lookup_mut(ident);
-            unit.version = Some(Version::Semver(version));
-            unit.prefix = Some(prefix.to_owned());
-
-            let cargo_rewrite = CargoRewriter::new(ident, toml_repopath.clone());
-            unit.rewriters.push(Box::new(cargo_rewrite));
-        }
-        Ok(())
+        let manifest = toml_repopath.clone();
+        Ok(Some(DiscoveredUnit {
+            qnames: vec![name, "cargo".to_owned()],
+            version: Version::Semver(version),
+            prefix: prefix.to_owned(),
+            anchor_manifest: manifest.clone(),
+            rewriter_factories: vec![Box::new(move |id| {
+                Box::new(CargoRewriter::new(id, manifest))
+            })],
+            internal_deps: Vec::new(),
+        }))
     }
 
     fn discover_workspaces_with_metadata(
         &self,
-        app: &AppBuilder,
+        repo: &Repository,
+        cargo_toml_paths: &[RepoPathBuf],
     ) -> Result<Vec<(PathBuf, cargo_metadata::Metadata)>> {
         let mut workspace_data = Vec::new();
         let mut seen_packages = std::collections::HashSet::new();
 
-        for toml_repopath in &self.cargo_toml_paths {
-            let toml_path = app.repo.resolve_workdir(toml_repopath);
+        for toml_repopath in cargo_toml_paths {
+            let toml_path = repo.resolve_workdir(toml_repopath);
 
             if !toml_path.exists() {
                 continue;
@@ -257,8 +162,8 @@ impl CargoLoader {
             }
         }
 
-        if workspace_data.is_empty() && !self.cargo_toml_paths.is_empty() {
-            let first_toml = app.repo.resolve_workdir(&self.cargo_toml_paths[0]);
+        if workspace_data.is_empty() && !cargo_toml_paths.is_empty() {
+            let first_toml = repo.resolve_workdir(&cargo_toml_paths[0]);
             let mut cmd = MetadataCommand::new();
             cmd.manifest_path(&first_toml);
             cmd.features(cargo_metadata::CargoOpt::AllFeatures);
@@ -297,17 +202,27 @@ impl CargoLoader {
             .is_some()
     }
 
-    fn register_workspace_projects(
+    /// Build `DiscoveredUnit`s for one cargo workspace.
+    ///
+    /// Returns a map (cargo PackageId → index in the returned Vec) so
+    /// the caller's dependency-resolution pass can wire `internal_deps`
+    /// without re-walking metadata.
+    fn units_from_workspace(
         &self,
-        app: &mut AppBuilder,
+        repo: &Repository,
         cargo_meta: &cargo_metadata::Metadata,
         workspace_root: &Path,
-        cargo_to_graph: &mut HashMap<cargo_metadata::PackageId, ReleaseUnitId>,
-        name_to_project: &mut HashMap<String, ReleaseUnitId>,
-    ) -> Result<()> {
+        skip_list: &[RepoPathBuf],
+    ) -> Result<(
+        Vec<DiscoveredUnit>,
+        HashMap<cargo_metadata::PackageId, usize>,
+    )> {
         let content = read_config_file(workspace_root)?;
         let doc: DocumentMut = content.parse()?;
         let is_ws_project = self.is_workspace_project(&doc);
+
+        let mut units: Vec<DiscoveredUnit> = Vec::new();
+        let mut pkgid_to_index: HashMap<cargo_metadata::PackageId, usize> = HashMap::new();
 
         if is_ws_project {
             info!(
@@ -341,31 +256,29 @@ impl CargoLoader {
                 .and_then(|v| v.parse::<semver::Version>().ok());
 
             if let (Some(name), Some(version)) = (ws_name, ws_version) {
-                let manifest_repopath = app.repo.convert_path(workspace_root)?;
+                let manifest_repopath = repo.convert_path(workspace_root)?;
                 let (prefix, _) = manifest_repopath.split_basename();
 
-                let qnames = vec![name.clone(), "cargo".to_owned()];
-
-                let ident = app.graph.add_project(qnames);
-                {
-                    let unit = app.graph.lookup_mut(ident);
-
-                    unit.version = Some(Version::Semver(version));
-                    unit.prefix = Some(prefix.to_owned());
-
-                    let workspace_member_ids: std::collections::HashSet<_> =
-                        cargo_meta.workspace_members.iter().collect();
-
-                    for pkg in &cargo_meta.packages {
-                        if pkg.source.is_none() && workspace_member_ids.contains(&pkg.id) {
-                            cargo_to_graph.insert(pkg.id.clone(), ident);
-                            name_to_project.insert(pkg.name.to_string(), ident);
-                        }
+                let unit_index = units.len();
+                let workspace_member_ids: std::collections::HashSet<_> =
+                    cargo_meta.workspace_members.iter().collect();
+                for pkg in &cargo_meta.packages {
+                    if pkg.source.is_none() && workspace_member_ids.contains(&pkg.id) {
+                        pkgid_to_index.insert(pkg.id.clone(), unit_index);
                     }
-
-                    let cargo_rewrite = CargoRewriter::new(ident, manifest_repopath);
-                    unit.rewriters.push(Box::new(cargo_rewrite));
                 }
+
+                let manifest = manifest_repopath.clone();
+                units.push(DiscoveredUnit {
+                    qnames: vec![name, "cargo".to_owned()],
+                    version: Version::Semver(version),
+                    prefix: prefix.to_owned(),
+                    anchor_manifest: manifest_repopath,
+                    rewriter_factories: vec![Box::new(move |id| {
+                        Box::new(CargoRewriter::new(id, manifest))
+                    })],
+                    internal_deps: Vec::new(),
+                });
             }
         } else {
             info!(
@@ -385,54 +298,55 @@ impl CargoLoader {
                     continue;
                 }
 
-                if cargo_to_graph.contains_key(&pkg.id) {
+                if pkgid_to_index.contains_key(&pkg.id) {
                     continue;
                 }
 
-                let manifest_repopath = app.repo.convert_path(&pkg.manifest_path)?;
+                let manifest_repopath = repo.convert_path(&pkg.manifest_path)?;
 
-                // Phase C — if this member's manifest is inside any
-                // ReleaseUnit's skip-list path, the ReleaseUnit owns it
-                // (as a satellite or its primary manifest). Skip
-                // standalone-project registration so the unit's atomic
-                // claim on the directory is respected.
-                if super::registry::is_path_inside_any(&manifest_repopath, &self.skip_list) {
+                // If this member's manifest is inside any ReleaseUnit's
+                // skip-list path, the ReleaseUnit owns it (as satellite
+                // or primary manifest). Skip standalone registration so
+                // the unit's atomic claim on the directory is respected.
+                if is_path_inside_any(&manifest_repopath, skip_list) {
                     continue;
                 }
 
                 let (prefix, _) = manifest_repopath.split_basename();
 
-                let qnames = vec![pkg.name.to_string(), "cargo".to_owned()];
+                let unit_index = units.len();
+                pkgid_to_index.insert(pkg.id.clone(), unit_index);
 
-                let ident = app.graph.add_project(qnames);
-                {
-                    let unit = app.graph.lookup_mut(ident);
-
-                    unit.version = Some(Version::Semver(pkg.version.clone()));
-                    unit.prefix = Some(prefix.to_owned());
-                    cargo_to_graph.insert(pkg.id.clone(), ident);
-                    name_to_project.insert(pkg.name.to_string(), ident);
-
-                    let cargo_rewrite = CargoRewriter::new(ident, manifest_repopath);
-                    unit.rewriters.push(Box::new(cargo_rewrite));
-                }
+                let manifest = manifest_repopath.clone();
+                units.push(DiscoveredUnit {
+                    qnames: vec![pkg.name.to_string(), "cargo".to_owned()],
+                    version: Version::Semver(pkg.version.clone()),
+                    prefix: prefix.to_owned(),
+                    anchor_manifest: manifest_repopath,
+                    rewriter_factories: vec![Box::new(move |id| {
+                        Box::new(CargoRewriter::new(id, manifest))
+                    })],
+                    internal_deps: Vec::new(),
+                });
             }
         }
 
-        Ok(())
+        Ok((units, pkgid_to_index))
     }
 
-    fn resolve_workspace_dependencies(
+    /// Wire `internal_deps` on every workspace member from cargo's
+    /// resolve graph. Mutates `units` in place using `pkgid_to_index`
+    /// to find the right unit per package.
+    fn fill_internal_deps(
         &self,
-        app: &mut AppBuilder,
+        repo: &Repository,
         cargo_meta: &cargo_metadata::Metadata,
-        cargo_to_graph: &HashMap<cargo_metadata::PackageId, ReleaseUnitId>,
-        name_to_project: &HashMap<String, ReleaseUnitId>,
+        units: &mut [DiscoveredUnit],
+        pkgid_to_index: &HashMap<cargo_metadata::PackageId, usize>,
     ) -> Result<()> {
-        let mut cargoid_to_index = HashMap::new();
-
+        let mut cargoid_to_pkgindex = HashMap::new();
         for (index, pkg) in cargo_meta.packages[..].iter().enumerate() {
-            cargoid_to_index.insert(pkg.id.clone(), index);
+            cargoid_to_pkgindex.insert(pkg.id.clone(), index);
         }
 
         let resolve = cargo_meta
@@ -440,65 +354,60 @@ impl CargoLoader {
             .as_ref()
             .ok_or_else(|| anyhow!("cargo metadata did not include dependency resolution"))?;
 
-        let mut added_deps: std::collections::HashSet<(ReleaseUnitId, ReleaseUnitId)> =
+        let mut added_pairs: std::collections::HashSet<(usize, String)> =
             std::collections::HashSet::new();
 
         for node in &resolve.nodes {
-            let pkg = &cargo_meta.packages[cargoid_to_index[&node.id]];
+            let pkg = &cargo_meta.packages[cargoid_to_pkgindex[&node.id]];
 
-            if let Some(depender_id) = cargo_to_graph.get(&node.id) {
-                let maybe_versions = pkg.metadata.get("internal_dep_versions");
-                let manifest_repopath = app.repo.convert_path(&pkg.manifest_path)?;
+            let Some(depender_idx) = pkgid_to_index.get(&node.id).copied() else {
+                continue;
+            };
+            let maybe_versions = pkg.metadata.get("internal_dep_versions");
+            let manifest_repopath = repo.convert_path(&pkg.manifest_path)?;
 
-                let dep_map: HashMap<_, _> = pkg
-                    .dependencies
-                    .iter()
-                    .map(|cargo_dep| {
-                        let name = cargo_dep.rename.as_ref().unwrap_or(&cargo_dep.name);
-                        (name.clone(), cargo_dep.req.to_string())
-                    })
-                    .collect();
+            let dep_map: HashMap<_, _> = pkg
+                .dependencies
+                .iter()
+                .map(|cargo_dep| {
+                    let name = cargo_dep.rename.as_ref().unwrap_or(&cargo_dep.name);
+                    (name.clone(), cargo_dep.req.to_string())
+                })
+                .collect();
 
-                for dep in &node.deps {
-                    let normalized_name = dep.name.replace('_', "-");
-                    let dependee_id = cargo_to_graph
-                        .get(&dep.pkg)
-                        .or_else(|| name_to_project.get(&dep.name))
-                        .or_else(|| name_to_project.get(&normalized_name));
-
-                    if let Some(dependee_id) = dependee_id {
-                        if *dependee_id == *depender_id {
-                            continue;
-                        }
-
-                        let dep_pair = (*depender_id, *dependee_id);
-                        if !added_deps.insert(dep_pair) {
-                            continue;
-                        }
-
-                        let literal = dep_map
-                            .get(&dep.name)
-                            .cloned()
-                            .unwrap_or_else(|| "*".to_owned());
-
-                        let req = maybe_versions
-                            .and_then(|table| table.get(&dep.name))
-                            .and_then(|nameval| nameval.as_str())
-                            .map(|text| app.repo.parse_history_ref(text))
-                            .transpose()?
-                            .map(|cref| app.repo.resolve_history_ref(&cref, &manifest_repopath))
-                            .transpose()?;
-
-                        let req = req.unwrap_or(DepRequirement::Unavailable);
-
-                        app.graph.add_dependency(
-                            *depender_id,
-                            DependencyTarget::Ident(*dependee_id),
-                            literal,
-                            req,
-                        );
-                    }
+            for dep in &node.deps {
+                let Some(dependee_idx) = pkgid_to_index.get(&dep.pkg).copied() else {
+                    continue;
+                };
+                if dependee_idx == depender_idx {
+                    continue;
                 }
+
+                let target_name = units[dependee_idx].qnames[0].clone();
+                if !added_pairs.insert((depender_idx, target_name.clone())) {
+                    continue;
+                }
+
+                let literal = dep_map
+                    .get(&dep.name)
+                    .cloned()
+                    .unwrap_or_else(|| "*".to_owned());
+
+                let req = maybe_versions
+                    .and_then(|table| table.get(&dep.name))
+                    .and_then(|nameval| nameval.as_str())
+                    .map(|text| repo.parse_history_ref(text))
+                    .transpose()?
+                    .map(|cref| repo.resolve_history_ref(&cref, &manifest_repopath))
+                    .transpose()?;
+
+                let req = req.unwrap_or(DepRequirement::Unavailable);
+
+                units[depender_idx].internal_deps.push(RawInternalDep {
+                    target_package_name: target_name,
+                    literal,
+                    requirement: req,
+                });
             }
         }
 
@@ -506,42 +415,115 @@ impl CargoLoader {
     }
 }
 
-impl Ecosystem for CargoLoader {
+impl FormatHandler for CargoLoader {
     fn name(&self) -> &'static str {
         "cargo"
     }
+
     fn display_name(&self) -> &'static str {
         "Rust (Cargo)"
     }
-    fn version_file(&self) -> &'static str {
+
+    fn manifest_filename(&self) -> &'static str {
         "Cargo.toml"
     }
-    fn tag_format_default(&self) -> &'static str {
-        "{name}-v{version}"
+
+    fn default_version_field(&self) -> VersionFieldSpec {
+        VersionFieldSpec::CargoToml
     }
 
-    fn process_index_item(
-        &mut self,
-        _repo: &Repository,
-        _graph: &mut ReleaseUnitGraphBuilder,
-        _repopath: &RepoPath,
-        dirname: &RepoPath,
-        basename: &RepoPath,
-    ) -> Result<()> {
-        self.record_path(dirname, basename);
-        Ok(())
+    fn make_rewriter(
+        &self,
+        unit_id: ReleaseUnitId,
+        manifest_path: RepoPathBuf,
+    ) -> Box<dyn Rewriter> {
+        Box::new(CargoRewriter::new(unit_id, manifest_path))
     }
 
-    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
-        (*self).into_projects(app)
-    }
+    fn discover_units(
+        &self,
+        repo: &Repository,
+        configured_skip_paths: &[RepoPathBuf],
+    ) -> Result<Vec<DiscoveredUnit>> {
+        let cargo_toml_paths = scan_index_for_filename(repo, "Cargo.toml", configured_skip_paths)?;
+        if cargo_toml_paths.is_empty() {
+            return Ok(Vec::new());
+        }
 
-    /// Phase C — receive the resolved release-unit skip-list.
-    /// Cargo enumerates workspace_members independent of the per-file
-    /// index scan, so it needs to filter against this list during
-    /// `finalize` (see [`Self::register_workspace_projects`]).
-    fn set_skip_list(&mut self, skip_list: &[RepoPathBuf]) {
-        self.skip_list = skip_list.to_vec();
+        let workspace_data = self.discover_workspaces_with_metadata(repo, &cargo_toml_paths)?;
+
+        if workspace_data.is_empty() {
+            info!("no Cargo workspace roots found in repository");
+            // Bazel fallback: walk every Cargo.toml that wasn't covered.
+            return self.bazel_fallback_units(repo, &cargo_toml_paths, configured_skip_paths, &[]);
+        }
+
+        info!("found {} Cargo workspace root(s)", workspace_data.len());
+
+        let mut all_units: Vec<DiscoveredUnit> = Vec::new();
+        let mut all_pkgid_to_index: HashMap<cargo_metadata::PackageId, usize> = HashMap::new();
+
+        for (workspace_root, cargo_meta) in &workspace_data {
+            info!("loading Cargo workspace: {}", workspace_root.display());
+            let (units, pkgid_to_index) =
+                self.units_from_workspace(repo, cargo_meta, workspace_root, configured_skip_paths)?;
+            let offset = all_units.len();
+            all_units.extend(units);
+            for (pkg_id, idx) in pkgid_to_index {
+                all_pkgid_to_index.insert(pkg_id, offset + idx);
+            }
+        }
+
+        for (_, cargo_meta) in &workspace_data {
+            self.fill_internal_deps(repo, cargo_meta, &mut all_units, &all_pkgid_to_index)?;
+        }
+
+        // Bazel fallback for any Cargo.toml not covered by metadata.
+        let metadata_covered_manifests: std::collections::HashSet<PathBuf> = workspace_data
+            .iter()
+            .flat_map(|(_, meta)| {
+                meta.workspace_packages()
+                    .into_iter()
+                    .map(|p| p.manifest_path.clone().into_std_path_buf())
+            })
+            .collect();
+        let fallback_units = self.bazel_fallback_units(
+            repo,
+            &cargo_toml_paths,
+            configured_skip_paths,
+            &metadata_covered_manifests.into_iter().collect::<Vec<_>>(),
+        )?;
+        all_units.extend(fallback_units);
+
+        Ok(all_units)
+    }
+}
+
+impl CargoLoader {
+    /// Direct-parse every Cargo.toml not covered by `cargo metadata`.
+    /// Inputs are pre-filtered against the skip-list.
+    fn bazel_fallback_units(
+        &self,
+        repo: &Repository,
+        cargo_toml_paths: &[RepoPathBuf],
+        skip_list: &[RepoPathBuf],
+        metadata_covered: &[PathBuf],
+    ) -> Result<Vec<DiscoveredUnit>> {
+        let covered_set: std::collections::HashSet<&PathBuf> = metadata_covered.iter().collect();
+        let mut out = Vec::new();
+        for toml_repopath in cargo_toml_paths {
+            if is_path_inside_any(toml_repopath, skip_list) {
+                continue;
+            }
+            let toml_abs = repo.resolve_workdir(toml_repopath);
+            if covered_set.contains(&toml_abs) {
+                continue;
+            }
+            if let Some(unit) = self.direct_parse_unit(repo, toml_repopath)? {
+                out.push(unit);
+            }
+        }
+        Ok(out)
     }
 }
 

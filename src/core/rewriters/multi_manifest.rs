@@ -100,3 +100,41 @@ fn read_or_warn(m: &ManifestFile, abs: &Path) -> Result<Option<String>, MultiMan
         }),
     }
 }
+
+// ---------------------------------------------------------------------------
+// Rewriter trait integration.
+// ---------------------------------------------------------------------------
+
+use crate::core::errors::Result as BelafResult;
+use crate::core::git::repository::ChangeList;
+use crate::core::resolved_release_unit::ReleaseUnitId;
+use crate::core::rewriters::Rewriter;
+use crate::core::session::AppSession;
+
+/// `Rewriter` that drives [`write_all`] for configured
+/// `[release_unit.X]` entries with `manifests = [...]`. The list of
+/// `ManifestFile`s is captured at session-build time and frozen.
+#[derive(Debug)]
+pub struct MultiManifestRewriter {
+    unit_id: ReleaseUnitId,
+    manifests: Vec<ManifestFile>,
+}
+
+impl MultiManifestRewriter {
+    pub fn new(unit_id: ReleaseUnitId, manifests: Vec<ManifestFile>) -> Self {
+        Self { unit_id, manifests }
+    }
+}
+
+impl Rewriter for MultiManifestRewriter {
+    fn rewrite(&self, app: &AppSession, changes: &mut ChangeList) -> BelafResult<()> {
+        let unit = app.graph().lookup(self.unit_id);
+        let new_version = unit.version.to_string();
+        let report = write_all(&self.manifests, &new_version, &app.repo)
+            .map_err(|e| anyhow::anyhow!("multi-manifest rewrite failed: {e}"))?;
+        for path in report.wrote {
+            changes.add_path(&path);
+        }
+        Ok(())
+    }
+}

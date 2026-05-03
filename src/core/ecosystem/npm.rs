@@ -22,46 +22,44 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
     core::{
-        ecosystem::registry::Ecosystem,
+        ecosystem::format_handler::{
+            scan_index_for_filename, DiscoveredUnit, FormatHandler, RawInternalDep,
+        },
         errors::Result,
-        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::{GraphQueryBuilder, ReleaseUnitGraphBuilder},
-        resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
+        git::repository::{ChangeList, RepoPathBuf, Repository},
+        graph::GraphQueryBuilder,
+        release_unit::VersionFieldSpec,
+        resolved_release_unit::{DepRequirement, ReleaseUnitId},
         rewriters::Rewriter,
-        session::{AppBuilder, AppSession},
+        session::AppSession,
         version::Version,
     },
 };
 
 const DEPENDENCY_KEYS: &[&str] = &["dependencies", "devDependencies", "optionalDependencies"];
 
-/// Framework for auto-loading NPM projects from the repository contents.
+/// Stateless npm `FormatHandler`. The struct is only a trait-object
+/// handle; per-scan state lives in local variables in `discover_units`.
 #[derive(Debug, Default)]
-pub struct NpmLoader {
-    npm_to_graph: HashMap<String, PackageLoadData>,
-}
+pub struct NpmLoader;
 
 #[derive(Debug)]
 struct PackageLoadData {
-    ident: ReleaseUnitId,
+    package_name: String,
     json_path: RepoPathBuf,
     pkg_data: serde_json::Map<String, serde_json::Value>,
 }
 
 impl NpmLoader {
-    pub fn record_path(
-        &mut self,
+    /// Parse one `package.json`, returning a `(DiscoveredUnit,
+    /// PackageLoadData)` pair if the file describes a real package.
+    /// Returns `None` for Lerna-style root manifests that only carry
+    /// `dependencies` (no `bin`/`main`/`version`/etc.).
+    fn parse_one(
+        &self,
         repo: &Repository,
-        graph: &mut crate::core::graph::ReleaseUnitGraphBuilder,
-        repopath: &RepoPath,
-        dirname: &RepoPath,
-        basename: &RepoPath,
-    ) -> Result<()> {
-        if basename.as_ref() != b"package.json" {
-            return Ok(());
-        }
-
-        // Parse the JSON.
+        repopath: &RepoPathBuf,
+    ) -> Result<Option<(DiscoveredUnit, PackageLoadData)>> {
         let path = repo.resolve_workdir(repopath);
         let f = atry!(
             File::open(&path);
@@ -76,17 +74,11 @@ impl NpmLoader {
             ["failed to parse file `{}` as JSON", path.display()]
         );
 
-        // Does this package.json seem to describe an actual package with
-        // content? When using Lerna, there may be a toplevel package.json that
-        // specifies deps but doesn't actually contain any code itself.
-
         const CONTENT_KEYS: &[&str] = &["bin", "browser", "files", "main", "types", "version"];
         let has_content = CONTENT_KEYS.iter().any(|k| pkg_data.contains_key(*k));
         if !has_content {
-            return Ok(());
+            return Ok(None);
         }
-
-        // Load up the basic info.
 
         let name = pkg_data
             .get("name")
@@ -99,7 +91,7 @@ impl NpmLoader {
             })?
             .to_owned();
 
-        let version = pkg_data
+        let version_str = pkg_data
             .get("version")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
@@ -109,121 +101,135 @@ impl NpmLoader {
                 )
             })?;
         let version = atry!(
-            semver::Version::parse(version);
+            semver::Version::parse(version_str);
             ["cannot parse `version` field \"{}\" in `{}` as a semver version",
-             version, path.display()]
+             version_str, path.display()]
         );
 
-        let qnames = vec![name.to_owned(), "npm".to_owned()];
+        let (dirname, _) = repopath.split_basename();
+        let json_path = repopath.clone();
+        let unit = DiscoveredUnit {
+            qnames: vec![name.clone(), "npm".to_owned()],
+            version: Version::Semver(version),
+            prefix: dirname.to_owned(),
+            anchor_manifest: repopath.clone(),
+            rewriter_factories: vec![Box::new(move |id| {
+                Box::new(PackageJsonRewriter::new(id, json_path))
+            })],
+            internal_deps: Vec::new(),
+        };
+        let load = PackageLoadData {
+            package_name: name,
+            json_path: repopath.clone(),
+            pkg_data,
+        };
+        Ok(Some((unit, load)))
+    }
+}
 
-        let ident = graph.add_project(qnames);
-        {
-            let unit = graph.lookup_mut(ident);
-            unit.prefix = Some(dirname.to_owned());
-            unit.version = Some(Version::Semver(version));
-
-            // Auto-register a rewriter to update this package's package.json.
-            let rewrite = PackageJsonRewriter::new(ident, repopath.to_owned());
-            unit.rewriters.push(Box::new(rewrite));
-
-            // Save the info for dep-linking later.
-            self.npm_to_graph.insert(
-                name,
-                PackageLoadData {
-                    ident,
-                    pkg_data,
-                    json_path: repopath.to_owned(),
-                },
-            );
-        }
-
-        Ok(())
+impl FormatHandler for NpmLoader {
+    fn name(&self) -> &'static str {
+        "npm"
     }
 
-    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
-        for (name, load_data) in &self.npm_to_graph {
-            let _ = name;
-            let strict_validation = false;
+    fn display_name(&self) -> &'static str {
+        "Node.js (npm)"
+    }
 
-            let maybe_internal_specs = load_data
+    fn manifest_filename(&self) -> &'static str {
+        "package.json"
+    }
+
+    fn default_version_field(&self) -> VersionFieldSpec {
+        VersionFieldSpec::NpmPackageJson
+    }
+
+    fn tag_format_default(&self) -> &'static str {
+        "{name}@v{version}"
+    }
+
+    fn make_rewriter(
+        &self,
+        unit_id: ReleaseUnitId,
+        manifest_path: RepoPathBuf,
+    ) -> Box<dyn Rewriter> {
+        Box::new(PackageJsonRewriter::new(unit_id, manifest_path))
+    }
+
+    fn discover_units(
+        &self,
+        repo: &Repository,
+        configured_skip_paths: &[RepoPathBuf],
+    ) -> Result<Vec<DiscoveredUnit>> {
+        let manifest_paths = scan_index_for_filename(repo, "package.json", configured_skip_paths)?;
+
+        let mut units: Vec<DiscoveredUnit> = Vec::new();
+        let mut loads: Vec<PackageLoadData> = Vec::new();
+        let mut name_to_index: HashMap<String, usize> = HashMap::new();
+
+        for repopath in &manifest_paths {
+            if let Some((unit, load)) = self.parse_one(repo, repopath)? {
+                let idx = units.len();
+                name_to_index.insert(load.package_name.clone(), idx);
+                units.push(unit);
+                loads.push(load);
+            }
+        }
+
+        // Wire internal deps from each package's dependencies/devDependencies/
+        // optionalDependencies maps. Cross-package matches by package name.
+        let strict_validation = false;
+        for (idx, load) in loads.iter().enumerate() {
+            let maybe_internal_specs = load
                 .pkg_data
                 .get("internalDepVersions")
                 .and_then(|v| v.as_object());
 
             for dep_key in DEPENDENCY_KEYS {
-                if let Some(dep_map) = load_data.pkg_data.get(*dep_key).and_then(|v| v.as_object())
-                {
-                    for (dep_name, dep_spec) in dep_map {
-                        if let Some(dep_data) = &self.npm_to_graph.get(dep_name) {
-                            let req = if let Some(belaf_spec) = maybe_internal_specs
-                                .and_then(|d| d.get(dep_name))
-                                .and_then(|v| v.as_str())
-                            {
-                                match app.repo.parse_history_ref(belaf_spec).and_then(|cref| {
-                                    app.repo.resolve_history_ref(&cref, &load_data.json_path)
-                                }) {
-                                    Ok(r) => r,
-                                    Err(e) => {
-                                        if strict_validation {
-                                            return Err(anyhow!(
-                                                "invalid `package.json` key `internalDepVersions.{}` for {}: {}",
-                                                dep_name, name, e
-                                            ));
-                                        }
-                                        warn!(
-                                            "invalid `package.json` key `internalDepVersions.{}` for {}: {}",
-                                            dep_name, name, e
-                                        );
-                                        DepRequirement::Unavailable
-                                    }
-                                }
-                            } else {
-                                DepRequirement::Unavailable
-                            };
-
-                            app.graph.add_dependency(
-                                load_data.ident,
-                                DependencyTarget::Ident(dep_data.ident),
-                                dep_spec.as_str().unwrap_or("UNDEFINED").to_owned(),
-                                req,
-                            );
-                        }
+                let Some(dep_map) = load.pkg_data.get(*dep_key).and_then(|v| v.as_object()) else {
+                    continue;
+                };
+                for (dep_name, dep_spec) in dep_map {
+                    if !name_to_index.contains_key(dep_name) {
+                        continue;
                     }
+                    let req = if let Some(belaf_spec) = maybe_internal_specs
+                        .and_then(|d| d.get(dep_name))
+                        .and_then(|v| v.as_str())
+                    {
+                        match repo
+                            .parse_history_ref(belaf_spec)
+                            .and_then(|cref| repo.resolve_history_ref(&cref, &load.json_path))
+                        {
+                            Ok(r) => r,
+                            Err(e) => {
+                                if strict_validation {
+                                    return Err(anyhow!(
+                                        "invalid `package.json` key `internalDepVersions.{}` for {}: {}",
+                                        dep_name, load.package_name, e
+                                    ));
+                                }
+                                warn!(
+                                    "invalid `package.json` key `internalDepVersions.{}` for {}: {}",
+                                    dep_name, load.package_name, e
+                                );
+                                DepRequirement::Unavailable
+                            }
+                        }
+                    } else {
+                        DepRequirement::Unavailable
+                    };
+
+                    units[idx].internal_deps.push(RawInternalDep {
+                        target_package_name: dep_name.clone(),
+                        literal: dep_spec.as_str().unwrap_or("UNDEFINED").to_owned(),
+                        requirement: req,
+                    });
                 }
             }
         }
 
-        Ok(())
-    }
-}
-
-impl Ecosystem for NpmLoader {
-    fn name(&self) -> &'static str {
-        "npm"
-    }
-    fn display_name(&self) -> &'static str {
-        "Node.js (npm)"
-    }
-    fn version_file(&self) -> &'static str {
-        "package.json"
-    }
-    fn tag_format_default(&self) -> &'static str {
-        "{name}@v{version}"
-    }
-
-    fn process_index_item(
-        &mut self,
-        repo: &Repository,
-        graph: &mut ReleaseUnitGraphBuilder,
-        repopath: &RepoPath,
-        dirname: &RepoPath,
-        basename: &RepoPath,
-    ) -> Result<()> {
-        self.record_path(repo, graph, repopath, dirname, basename)
-    }
-
-    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
-        (*self).into_projects(app)
+        Ok(units)
     }
 }
 

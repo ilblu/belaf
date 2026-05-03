@@ -55,11 +55,11 @@ pub mod core {
         #[cfg(feature = "csharp")]
         pub mod csproj;
         pub mod elixir;
+        pub mod format_handler;
         pub mod go;
         pub mod maven;
         pub mod npm;
         pub mod pypa;
-        pub mod registry;
         pub mod swift;
     }
 

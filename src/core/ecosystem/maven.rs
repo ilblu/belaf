@@ -43,12 +43,14 @@ use tracing::info;
 use crate::{
     atry,
     core::{
-        ecosystem::registry::Ecosystem,
+        ecosystem::format_handler::{
+            scan_index_for_filename, DiscoveredUnit, FormatHandler, RawInternalDep,
+        },
         errors::Result,
-        git::repository::{RepoPath, RepoPathBuf, Repository},
-        graph::ReleaseUnitGraphBuilder,
-        resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
-        session::AppBuilder,
+        git::repository::{RepoPathBuf, Repository},
+        release_unit::VersionFieldSpec,
+        resolved_release_unit::{DepRequirement, ReleaseUnitId},
+        rewriters::Rewriter,
         version::Version,
     },
 };
@@ -62,45 +64,67 @@ pub use pom_rewriter::MavenRewriter;
 use pom_parser::{detect_parent_cycles, ParsedPom};
 use property_resolver::resolve_pom;
 
-/// Loader collecting POM files during the index scan. Resolution
-/// (parent inheritance, property resolution, multi-module discovery)
-/// happens in `into_projects` where we have the full set.
 #[derive(Debug, Default)]
-pub struct MavenLoader {
-    pom_paths: Vec<RepoPathBuf>,
-}
+pub struct MavenLoader;
 
-impl MavenLoader {
-    /// Collect a `pom.xml` path. Resolution happens in [`into_projects`].
-    pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
-        if basename.as_ref() != b"pom.xml" {
-            return;
-        }
-        let mut p = dirname.to_owned();
-        p.push(basename);
-        self.pom_paths.push(p);
+impl FormatHandler for MavenLoader {
+    fn name(&self) -> &'static str {
+        "maven"
     }
 
-    /// Drain into the [`AppBuilder`]. Order of operations:
-    ///
-    /// 1. Parse every collected `pom.xml` (no resolution yet).
-    /// 2. Build the parent-graph and run Tarjan-SCC for cycle detection.
-    /// 3. Resolve coordinates: walk parent chain for missing groupId /
-    ///    version inheritance, then run property substitution against
-    ///    the accumulated `<properties>` map.
-    /// 4. Register one project per POM under user-facing name
-    ///    `groupId:artifactId`.
-    /// 5. Wire inter-project dependencies into the graph.
-    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
-        if self.pom_paths.is_empty() {
-            return Ok(());
+    fn display_name(&self) -> &'static str {
+        "Maven"
+    }
+
+    fn manifest_filename(&self) -> &'static str {
+        "pom.xml"
+    }
+
+    fn default_version_field(&self) -> VersionFieldSpec {
+        // Maven `<version>...</version>` between the project root tags.
+        // The MavenRewriter handles full XML-aware rewriting; this
+        // regex is a fallback the version_field dispatcher uses.
+        VersionFieldSpec::GenericRegex {
+            pattern: r"<version>([^<]+)</version>".to_string(),
+            replace: "<version>{version}</version>".to_string(),
+        }
+    }
+
+    fn tag_format_default(&self) -> &'static str {
+        "{groupId}/{artifactId}@v{version}"
+    }
+
+    fn tag_template_vars(&self) -> &'static [&'static str] {
+        &["name", "version", "ecosystem", "groupId", "artifactId"]
+    }
+
+    fn make_rewriter(
+        &self,
+        unit_id: ReleaseUnitId,
+        manifest_path: RepoPathBuf,
+    ) -> Box<dyn Rewriter> {
+        Box::new(MavenRewriter::new(unit_id, manifest_path))
+    }
+
+    /// Walk every pom.xml, resolve parent-chains + property substitution
+    /// (Tarjan-SCC cycle detection on the parent graph), and emit one
+    /// DiscoveredUnit per. Internal-deps come from `<dependencies>` +
+    /// `<parent>`; targets are matched by `groupId:artifactId`.
+    fn discover_units(
+        &self,
+        repo: &Repository,
+        configured_skip_paths: &[RepoPathBuf],
+    ) -> Result<Vec<DiscoveredUnit>> {
+        let pom_paths = scan_index_for_filename(repo, "pom.xml", configured_skip_paths)?;
+        if pom_paths.is_empty() {
+            return Ok(Vec::new());
         }
 
-        info!("loading {} pom.xml file(s)", self.pom_paths.len());
+        info!("loading {} pom.xml file(s)", pom_paths.len());
 
-        let mut parsed: Vec<ParsedPom> = Vec::with_capacity(self.pom_paths.len());
-        for repo_path in &self.pom_paths {
-            let fs_path = app.repo.resolve_workdir(repo_path);
+        let mut parsed: Vec<ParsedPom> = Vec::with_capacity(pom_paths.len());
+        for repo_path in &pom_paths {
+            let fs_path = repo.resolve_workdir(repo_path);
             let pom = atry!(
                 ParsedPom::from_file(repo_path, &fs_path);
                 ["failed to parse Maven POM `{}`", repo_path.escaped()]
@@ -126,19 +150,17 @@ impl MavenLoader {
             resolved.push(r);
         }
 
-        let mut resolved_coord_to_idx: HashMap<(String, String), usize> = HashMap::new();
-        for (idx, r) in resolved.iter().enumerate() {
-            resolved_coord_to_idx.insert((r.group_id.clone(), r.artifact_id.clone()), idx);
+        let mut resolved_coord_to_name: HashMap<(String, String), String> = HashMap::new();
+        for r in &resolved {
+            resolved_coord_to_name.insert(
+                (r.group_id.clone(), r.artifact_id.clone()),
+                format!("{}:{}", r.group_id, r.artifact_id),
+            );
         }
 
-        let mut idx_to_pid: HashMap<usize, ReleaseUnitId> = HashMap::new();
+        let mut units: Vec<DiscoveredUnit> = Vec::with_capacity(resolved.len());
         for (idx, r) in resolved.iter().enumerate() {
             let user_name = format!("{}:{}", r.group_id, r.artifact_id);
-            let qnames = vec![user_name.clone(), "maven".to_owned()];
-
-            let pid = app.graph.add_project(qnames);
-            let unit = app.graph.lookup_mut(pid);
-
             let version = atry!(
                 semver::Version::parse(&r.version)
                     .map_err(|e| anyhow!("not semver: {e}"));
@@ -147,100 +169,56 @@ impl MavenLoader {
                 (note "belaf supports semver-shaped Maven versions only (e.g. 1.2.3, 1.0.0-SNAPSHOT). \
                  Pure-numeric chains like `1.0` need a third component (`1.0.0`).")
             );
-            unit.version = Some(Version::Semver(version));
-
             let (prefix, _) = parsed[idx].repo_path.split_basename();
-            unit.prefix = Some(prefix.to_owned());
+            let manifest = parsed[idx].repo_path.clone();
 
-            unit.rewriters.push(Box::new(MavenRewriter::new(
-                pid,
-                parsed[idx].repo_path.clone(),
-            )));
-
-            idx_to_pid.insert(idx, pid);
-        }
-
-        for (idx, _) in resolved.iter().enumerate() {
-            let Some(&depender_pid) = idx_to_pid.get(&idx) else {
-                continue;
-            };
+            let mut internal_deps = Vec::new();
             let pom = &parsed[idx];
-
             if let Some(p) = &pom.parent {
-                if let Some(&parent_idx) =
-                    resolved_coord_to_idx.get(&(p.group_id.clone(), p.artifact_id.clone()))
+                if let Some(target_name) =
+                    resolved_coord_to_name.get(&(p.group_id.clone(), p.artifact_id.clone()))
                 {
-                    if let Some(&parent_pid) = idx_to_pid.get(&parent_idx) {
-                        if parent_pid != depender_pid {
-                            app.graph.add_dependency(
-                                depender_pid,
-                                DependencyTarget::Ident(parent_pid),
-                                p.version.clone(),
-                                DepRequirement::Manual(p.version.clone()),
-                            );
-                        }
+                    if target_name != &user_name {
+                        internal_deps.push(RawInternalDep {
+                            target_package_name: target_name.clone(),
+                            literal: p.version.clone(),
+                            requirement: DepRequirement::Manual(p.version.clone()),
+                        });
                     }
                 }
             }
-
             for dep in &pom.dependencies {
                 let Some(dep_version) = &dep.version else {
                     continue;
                 };
-                let key = (dep.group_id.clone(), dep.artifact_id.clone());
-                let Some(&dep_idx) = resolved_coord_to_idx.get(&key) else {
+                let Some(target_name) =
+                    resolved_coord_to_name.get(&(dep.group_id.clone(), dep.artifact_id.clone()))
+                else {
                     continue;
                 };
-                let Some(&dep_pid) = idx_to_pid.get(&dep_idx) else {
-                    continue;
-                };
-                if dep_pid == depender_pid {
+                if target_name == &user_name {
                     continue;
                 }
-                app.graph.add_dependency(
-                    depender_pid,
-                    DependencyTarget::Ident(dep_pid),
-                    dep_version.clone(),
-                    DepRequirement::Manual(dep_version.clone()),
-                );
+                internal_deps.push(RawInternalDep {
+                    target_package_name: target_name.clone(),
+                    literal: dep_version.clone(),
+                    requirement: DepRequirement::Manual(dep_version.clone()),
+                });
             }
+
+            units.push(DiscoveredUnit {
+                qnames: vec![user_name, "maven".to_owned()],
+                version: Version::Semver(version),
+                prefix: prefix.to_owned(),
+                anchor_manifest: manifest.clone(),
+                rewriter_factories: vec![Box::new(move |id| {
+                    Box::new(MavenRewriter::new(id, manifest))
+                })],
+                internal_deps,
+            });
         }
 
-        Ok(())
-    }
-}
-
-impl Ecosystem for MavenLoader {
-    fn name(&self) -> &'static str {
-        "maven"
-    }
-    fn display_name(&self) -> &'static str {
-        "Maven"
-    }
-    fn version_file(&self) -> &'static str {
-        "pom.xml"
-    }
-    fn tag_format_default(&self) -> &'static str {
-        "{groupId}/{artifactId}@v{version}"
-    }
-    fn tag_template_vars(&self) -> &'static [&'static str] {
-        &["name", "version", "ecosystem", "groupId", "artifactId"]
-    }
-
-    fn process_index_item(
-        &mut self,
-        _repo: &Repository,
-        _graph: &mut ReleaseUnitGraphBuilder,
-        _repopath: &RepoPath,
-        dirname: &RepoPath,
-        basename: &RepoPath,
-    ) -> Result<()> {
-        self.record_path(dirname, basename);
-        Ok(())
-    }
-
-    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
-        (*self).into_projects(app)
+        Ok(units)
     }
 }
 

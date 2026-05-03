@@ -144,76 +144,79 @@ impl AppBuilder {
         // Now auto-detect everything in the repo index.
 
         if self.populate_graph {
-            let mut registry = crate::core::ecosystem::registry::EcosystemRegistry::with_defaults();
+            use crate::core::ecosystem::format_handler::{
+                discover_implicit_release_units, FormatHandlerRegistry,
+            };
+            use crate::core::release_unit::VersionSource;
 
-            // Resolve `[release_unit.<name>]` entries (both explicit
-            // and glob-form via the unified type) BEFORE the index
-            // scan so the resulting skip-list silences ecosystem-level
-            // scanning of paths the units already cover (manifests +
-            // satellites). Plus [ignore_paths] entries.
+            let registry = FormatHandlerRegistry::with_defaults();
+
+            // Resolve `[release_unit.<name>]` entries first so we can
+            // (a) add them to the graph as primary nodes and (b) feed
+            // their manifest+satellite paths to discovery as a
+            // skip-list, ensuring auto-discovery doesn't also claim
+            // those files.
             resolved_units =
                 crate::core::release_unit::resolver::resolve(&self.repo, &config.release_units)
                     .map_err(|e| {
                         crate::core::errors::Error::msg(format!("release_unit resolution: {e}"))
                     })?;
-            let mut skip_list: Vec<crate::core::git::repository::RepoPathBuf> = Vec::new();
+
+            let mut configured_skip_paths: Vec<crate::core::git::repository::RepoPathBuf> =
+                Vec::new();
             for r in &resolved_units {
-                if let crate::core::release_unit::VersionSource::Manifests(ms) = &r.unit.source {
+                if let VersionSource::Manifests(ms) = &r.unit.source {
                     for m in ms {
-                        // Skip the parent directory of the manifest
-                        // (the unit's "anchor"), so the loader silences
-                        // every sibling/child file under it.
                         let escaped = m.path.escaped().to_string();
                         if let Some(parent) = std::path::Path::new(&escaped).parent() {
                             let parent_str = parent.to_string_lossy().to_string();
                             if !parent_str.is_empty() {
-                                skip_list.push(crate::core::git::repository::RepoPathBuf::new(
-                                    parent_str.as_bytes(),
-                                ));
+                                configured_skip_paths.push(
+                                    crate::core::git::repository::RepoPathBuf::new(
+                                        parent_str.as_bytes(),
+                                    ),
+                                );
                             }
                         }
                     }
                 }
                 for sat in &r.unit.satellites {
-                    skip_list.push(sat.clone());
+                    configured_skip_paths.push(sat.clone());
                 }
             }
             for p in &config.ignore_paths.paths {
-                skip_list.push(crate::core::git::repository::RepoPathBuf::new(
+                configured_skip_paths.push(crate::core::git::repository::RepoPathBuf::new(
                     p.trim_end_matches('/').as_bytes(),
                 ));
             }
-            registry.set_skip_list(skip_list);
 
-            // Dumb hack around the borrowchecker to allow mutable reference to
-            // the graph while iterating over the repo:
-            let repo = self.repo;
-            let mut graph = self.graph;
-            let show_progress = self.show_progress;
-
-            if show_progress {
-                let total = repo.index_entry_count().unwrap_or(0);
-                let mut progress = ReleaseProgressBar::new(total, "Scanning repository");
-
-                repo.scan_paths_with_progress(|p, current, _total| {
-                    progress.update(current);
-                    let (dirname, basename) = p.split_basename();
-                    registry.process_index_item(&repo, &mut graph, p, dirname, basename)
-                })?;
-
-                progress.finish();
-            } else {
-                repo.scan_paths(|p| {
-                    let (dirname, basename) = p.split_basename();
-                    registry.process_index_item(&repo, &mut graph, p, dirname, basename)
-                })?;
+            // Step 1 — register every configured `[release_unit.X]` as
+            // a graph node. Read the version from the canonical
+            // manifest (or run the external read_command), build
+            // rewriters per manifest using the matching FormatHandler.
+            for resolved in &resolved_units {
+                self.add_configured_unit_to_graph(&registry, resolved)?;
             }
 
-            self.repo = repo;
-            self.graph = graph;
-            // End dumb hack.
+            // Step 2 — discover everything else (unconfigured
+            // single-package + workspace-shaped manifests). Skip-list
+            // ensures discovery doesn't double-claim configured paths.
+            let discovered =
+                discover_implicit_release_units(&self.repo, &registry, &configured_skip_paths)?;
 
-            registry.finalize_all(&mut self)?;
+            if self.show_progress {
+                let total = discovered.len();
+                let mut progress = ReleaseProgressBar::new(total, "Loading release units");
+                for (idx, du) in discovered.into_iter().enumerate() {
+                    progress.update(idx);
+                    Self::register_discovered_unit(&mut self.graph, du);
+                }
+                progress.finish();
+            } else {
+                for du in discovered {
+                    Self::register_discovered_unit(&mut self.graph, du);
+                }
+            }
 
             self.resolve_versions_from_tags()?;
         }
@@ -235,6 +238,128 @@ impl AppBuilder {
             detection_cache: std::sync::OnceLock::new(),
             is_ci: self.is_ci,
         })
+    }
+
+    /// Add a configured `[release_unit.X]` block to the graph as a
+    /// primary node. Reads the version from the canonical manifest
+    /// (or runs the external `read_command`), constructs rewriters
+    /// for every manifest in the unit's `manifests = [...]`, and
+    /// registers them on the graph builder.
+    fn add_configured_unit_to_graph(
+        &mut self,
+        registry: &crate::core::ecosystem::format_handler::FormatHandlerRegistry,
+        resolved: &crate::core::release_unit::ResolvedReleaseUnit,
+    ) -> Result<()> {
+        use crate::core::release_unit::VersionSource;
+
+        let unit = &resolved.unit;
+        let qnames = vec![unit.name.clone(), unit.ecosystem.as_str().to_string()];
+
+        let (version, prefix, manifests_for_rewriter): (Version, _, _) = match &unit.source {
+            VersionSource::Manifests(ms) => {
+                let first = ms.first().ok_or_else(|| {
+                    anyhow!("release_unit `{}` has empty manifests = []", unit.name)
+                })?;
+                let abs = self.repo.resolve_workdir(&first.path);
+                let version_str = crate::core::version_field::read(&first.version_field, &abs)
+                    .with_context(|| {
+                        format!(
+                            "reading version for release_unit `{}` from `{}`",
+                            unit.name,
+                            first.path.escaped()
+                        )
+                    })?;
+                let version = parse_version_for_ecosystem(&version_str, unit.ecosystem.as_str())
+                    .with_context(|| {
+                        format!(
+                            "parsing version `{}` for release_unit `{}`",
+                            version_str, unit.name
+                        )
+                    })?;
+                let (prefix_path, _) = first.path.split_basename();
+                (version, prefix_path.to_owned(), ms.clone())
+            }
+            VersionSource::External(ext) => {
+                let version_str = crate::core::rewriters::external::read_current(ext, &self.repo)
+                    .map_err(|e| {
+                    anyhow!(
+                        "reading external versioner for release_unit `{}`: {}",
+                        unit.name,
+                        e
+                    )
+                })?;
+                let version = parse_version_for_ecosystem(&version_str, unit.ecosystem.as_str())
+                    .with_context(|| {
+                        format!(
+                            "parsing version `{}` from external read_command for `{}`",
+                            version_str, unit.name
+                        )
+                    })?;
+                let prefix = unit
+                    .satellites
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| crate::core::git::repository::RepoPathBuf::new(b""));
+                (version, prefix, Vec::new())
+            }
+        };
+
+        let id = self.graph.add_project(qnames);
+        let unit_node = self.graph.lookup_mut(id);
+        unit_node.version = Some(version);
+        unit_node.prefix = Some(prefix);
+
+        if !manifests_for_rewriter.is_empty() {
+            unit_node.rewriters.push(Box::new(
+                crate::core::rewriters::multi_manifest::MultiManifestRewriter::new(
+                    id,
+                    manifests_for_rewriter,
+                ),
+            ));
+        }
+        let _ = registry; // FormatHandler-specific rewriters are deferred
+                          // to the auto-discovered units.
+
+        Ok(())
+    }
+
+    /// Register a `DiscoveredUnit` (from auto-discovery) as a graph
+    /// node. Closures capturing rewriter logic run here once the
+    /// unit's `ReleaseUnitId` is assigned.
+    fn register_discovered_unit(
+        graph: &mut ReleaseUnitGraphBuilder,
+        du: crate::core::ecosystem::format_handler::DiscoveredUnit,
+    ) {
+        use crate::core::resolved_release_unit::DependencyTarget;
+
+        let id = graph.add_project(du.qnames);
+        let node = graph.lookup_mut(id);
+        node.version = Some(du.version);
+        node.prefix = Some(du.prefix);
+        for factory in du.rewriter_factories {
+            node.rewriters.push(factory(id));
+        }
+        for dep in du.internal_deps {
+            graph.add_dependency(
+                id,
+                DependencyTarget::Text(dep.target_package_name),
+                dep.literal,
+                dep.requirement,
+            );
+        }
+    }
+}
+
+fn parse_version_for_ecosystem(version_str: &str, ecosystem: &str) -> Result<Version> {
+    let trimmed = version_str.trim();
+    if ecosystem == "pypa" {
+        Ok(Version::Pep440(
+            trimmed.parse().map_err(|e| anyhow!("not PEP 440: {e}"))?,
+        ))
+    } else {
+        Ok(Version::Semver(
+            semver::Version::parse(trimmed).map_err(|e| anyhow!("not semver: {e}"))?,
+        ))
     }
 }
 

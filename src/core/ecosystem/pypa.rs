@@ -20,44 +20,60 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     a_ok_or, atry,
     core::{
-        ecosystem::registry::Ecosystem,
+        ecosystem::format_handler::{
+            is_path_inside_any, DiscoveredUnit, FormatHandler, RawInternalDep,
+        },
         errors::{Error, Result},
-        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::ReleaseUnitGraphBuilder,
-        resolved_release_unit::{DepRequirement, DependencyTarget, ReleaseUnitId},
+        git::repository::{ChangeList, RepoPathBuf, Repository},
+        release_unit::VersionFieldSpec,
+        resolved_release_unit::{DepRequirement, ReleaseUnitId},
         rewriters::Rewriter,
-        session::{AppBuilder, AppSession},
+        session::AppSession,
         version::Version,
     },
 };
 
-struct PypaProjectData {
-    ident: ReleaseUnitId,
-    internal_reqs: HashSet<String>,
-}
-
-/// Framework for auto-loading PyPA projects from the repository contents.
 #[derive(Debug, Default)]
-pub struct PypaLoader {
-    dirs_of_interest: HashSet<RepoPathBuf>,
+pub struct PypaLoader;
+
+struct PypaProjectInfo {
+    unit_index: usize,
+    name: String,
+    internal_reqs: HashSet<String>,
+    config: Option<PyProjectBelaf>,
+    toml_repopath: RepoPathBuf,
 }
 
 impl PypaLoader {
-    pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
-        let b = basename.as_ref();
-
-        if b == b"setup.py" || b == b"setup.cfg" || b == b"pyproject.toml" {
-            self.dirs_of_interest.insert(dirname.to_owned());
-        }
+    fn collect_dirs(
+        &self,
+        repo: &Repository,
+        configured_skip_paths: &[RepoPathBuf],
+    ) -> Result<HashSet<RepoPathBuf>> {
+        let mut dirs: HashSet<RepoPathBuf> = HashSet::new();
+        repo.scan_paths(|p| {
+            if is_path_inside_any(p, configured_skip_paths) {
+                return Ok(());
+            }
+            let (dirname, basename) = p.split_basename();
+            let b = basename.as_ref();
+            if b == b"setup.py" || b == b"setup.cfg" || b == b"pyproject.toml" {
+                dirs.insert(dirname.to_owned());
+            }
+            Ok(())
+        })?;
+        Ok(dirs)
     }
 
-    /// Drains the loader into the [`AppBuilder`].
-    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
-        let mut pypa_projects: HashMap<String, PypaProjectData> = HashMap::new();
-        let mut project_configs: HashMap<String, (Option<PyProjectBelaf>, RepoPathBuf)> =
-            HashMap::new();
+    fn build_units(
+        &self,
+        repo: &Repository,
+        dirs_of_interest: HashSet<RepoPathBuf>,
+    ) -> Result<Vec<DiscoveredUnit>> {
+        let mut units: Vec<DiscoveredUnit> = Vec::new();
+        let mut pypa_projects: HashMap<String, PypaProjectInfo> = HashMap::new();
 
-        for dirname in &self.dirs_of_interest {
+        for dirname in &dirs_of_interest {
             let mut name = None;
             let mut version = None;
             let mut main_version_file: Option<String> = None;
@@ -76,7 +92,7 @@ impl PypaLoader {
             toml_repopath.push("pyproject.toml");
 
             let config = {
-                let toml_path = app.repo.resolve_workdir(&toml_repopath);
+                let toml_path = repo.resolve_workdir(&toml_repopath);
                 let f = match File::open(&toml_path) {
                     Ok(f) => Some(f),
                     Err(e) => {
@@ -130,7 +146,7 @@ impl PypaLoader {
             {
                 let mut cfg_path = dirname.clone();
                 cfg_path.push("setup.cfg");
-                let cfg_path = app.repo.resolve_workdir(&cfg_path);
+                let cfg_path = repo.resolve_workdir(&cfg_path);
 
                 let f = match File::open(&cfg_path) {
                     Ok(f) => Some(f),
@@ -205,7 +221,7 @@ impl PypaLoader {
             {
                 let mut setup_path = dirname.clone();
                 setup_path.push("setup.py");
-                let setup_path = app.repo.resolve_workdir(&setup_path);
+                let setup_path = repo.resolve_workdir(&setup_path);
 
                 let f = match File::open(&setup_path) {
                     Ok(f) => Some(f),
@@ -269,7 +285,7 @@ impl PypaLoader {
                 let main_version_file = py_version_file.as_deref().unwrap();
                 let mut version_path = dirname.clone();
                 version_path.push(main_version_file);
-                let version_path = app.repo.resolve_workdir(&version_path);
+                let version_path = repo.resolve_workdir(&version_path);
 
                 let f = atry!(
                     File::open(&version_path);
@@ -311,159 +327,187 @@ impl PypaLoader {
                       for other supported approaches")
             );
 
-            // OMG, we actually have the core info.
+            // Build rewriter factories for the primary version-bearing
+            // file plus any extra `annotated_files` entries.
+            let mut rewriter_factories: Vec<
+                crate::core::ecosystem::format_handler::RewriterFactory,
+            > = Vec::new();
 
-            let qnames = vec![name.clone(), "pypa".to_owned()];
-
-            let ident = app.graph.add_project(qnames);
-            {
-                {
-                    let unit = app.graph.lookup_mut(ident);
-
-                    unit.version = Some(Version::Pep440(version));
-                    unit.prefix = Some(dirname.to_owned());
-
-                    let rw: Box<dyn Rewriter> = match &version_loc {
-                        PypaVersionLocation::PyFile(p) => {
-                            let mut rw_path = dirname.clone();
-                            rw_path.push(p.as_bytes());
-                            Box::new(PythonRewriter::new(ident, rw_path))
-                        }
-                        PypaVersionLocation::PyProjectToml => {
-                            let mut rw_path = dirname.clone();
-                            rw_path.push(b"pyproject.toml");
-                            Box::new(PyProjectVersionRewriter::new(ident, rw_path))
-                        }
-                    };
-                    unit.rewriters.push(rw);
-                }
-
-                // Handle the other annotated files. Besides registering them for
-                // rewrites, we also scan them now to detect additional metadata. In
-                // particular, dependencies on non-Python projects.
-
-                let mut internal_reqs = HashSet::new();
-
-                for path in config
-                    .as_ref()
-                    .map(|c| &c.annotated_files[..])
-                    .unwrap_or(&[])
-                {
+            let primary_rw_path: RepoPathBuf = match &version_loc {
+                PypaVersionLocation::PyFile(p) => {
                     let mut rw_path = dirname.clone();
-                    rw_path.push(path.as_bytes());
-
-                    atry!(
-                        scan_rewritten_file(app, &rw_path, &mut internal_reqs);
-                        ["in Python project {}, could not scan the `annotated_files` entry {}",
-                        dir_desc, rw_path.escaped()]
-                    );
-
-                    let rw = PythonRewriter::new(ident, rw_path);
-                    {
-                        let unit = app.graph.lookup_mut(ident);
-                        unit.rewriters.push(Box::new(rw));
-                    }
+                    rw_path.push(p.as_bytes());
+                    let rw_path_clone = rw_path.clone();
+                    rewriter_factories.push(Box::new(move |id| {
+                        Box::new(PythonRewriter::new(id, rw_path_clone))
+                    }));
+                    rw_path
                 }
+                PypaVersionLocation::PyProjectToml => {
+                    let mut rw_path = dirname.clone();
+                    rw_path.push(b"pyproject.toml");
+                    let rw_path_clone = rw_path.clone();
+                    rewriter_factories.push(Box::new(move |id| {
+                        Box::new(PyProjectVersionRewriter::new(id, rw_path_clone))
+                    }));
+                    rw_path
+                }
+            };
 
-                pypa_projects.insert(
-                    name.clone(),
-                    PypaProjectData {
-                        ident,
-                        internal_reqs: internal_reqs.clone(),
-                    },
+            // Annotated files: extra `# belaf project-version` markers
+            // we scan now to discover non-Python deps and rewrite at
+            // release time.
+            let mut internal_reqs = HashSet::new();
+            for path in config
+                .as_ref()
+                .map(|c| &c.annotated_files[..])
+                .unwrap_or(&[])
+            {
+                let mut rw_path = dirname.clone();
+                rw_path.push(path.as_bytes());
+
+                atry!(
+                    scan_rewritten_file(repo, &rw_path, &mut internal_reqs);
+                    ["in Python project {}, could not scan the `annotated_files` entry {}",
+                    dir_desc, rw_path.escaped()]
                 );
 
-                project_configs.insert(name, (config, toml_repopath));
+                let rw_path_clone = rw_path.clone();
+                rewriter_factories.push(Box::new(move |id| {
+                    Box::new(PythonRewriter::new(id, rw_path_clone))
+                }));
             }
+
+            let unit_index = units.len();
+            units.push(DiscoveredUnit {
+                qnames: vec![name.clone(), "pypa".to_owned()],
+                version: Version::Pep440(version),
+                prefix: dirname.to_owned(),
+                anchor_manifest: primary_rw_path,
+                rewriter_factories,
+                internal_deps: Vec::new(),
+            });
+
+            pypa_projects.insert(
+                name.clone(),
+                PypaProjectInfo {
+                    unit_index,
+                    name,
+                    internal_reqs,
+                    config,
+                    toml_repopath,
+                },
+            );
         }
 
-        for (project_name, unit_data) in &pypa_projects {
-            let (config, toml_repopath) = project_configs
-                .get(project_name)
-                .expect("BUG: project_configs should contain all pypa_projects");
+        // Resolve internal-deps now that every project is in `units`.
+        let project_names: HashSet<String> = pypa_projects.keys().cloned().collect();
+        for info in pypa_projects.values() {
+            for req_name in &info.internal_reqs {
+                let is_internal = project_names.contains(req_name);
 
-            for req_name in &unit_data.internal_reqs {
-                let is_internal = pypa_projects.contains_key(req_name);
-
-                let req = config
+                let req = info
+                    .config
                     .as_ref()
                     .and_then(|c| c.internal_dep_versions.get(req_name))
-                    .map(|text| app.repo.parse_history_ref(text))
+                    .map(|text| repo.parse_history_ref(text))
                     .transpose()?
-                    .map(|cref| app.repo.resolve_history_ref(&cref, toml_repopath))
+                    .map(|cref| repo.resolve_history_ref(&cref, &info.toml_repopath))
                     .transpose()?;
 
                 if is_internal && req.is_none() {
                     warn!(
                         "missing or invalid key `tool.belaf.internal_dep_versions.{}` in `{}`",
                         &req_name,
-                        toml_repopath.escaped()
+                        info.toml_repopath.escaped()
                     );
-                    warn!("... this is needed to specify the oldest version of `{}` compatible with `{}`",
-                        &req_name, &project_name);
+                    warn!(
+                        "... this is needed to specify the oldest version of `{}` compatible with `{}`",
+                        &req_name, &info.name
+                    );
                 }
 
                 let req = req.unwrap_or(DepRequirement::Unavailable);
 
-                if let Some(dep_project) = pypa_projects.get(req_name) {
-                    app.graph.add_dependency(
-                        unit_data.ident,
-                        DependencyTarget::Ident(dep_project.ident),
-                        "(internal)".to_owned(),
-                        req,
-                    );
+                let (literal, target_name) = if is_internal {
+                    ("(internal)".to_owned(), req_name.clone())
                 } else {
-                    app.graph.add_dependency(
-                        unit_data.ident,
-                        DependencyTarget::Text(req_name.clone()),
-                        "(unavailable)".to_owned(),
-                        req,
-                    );
-                }
+                    ("(unavailable)".to_owned(), req_name.clone())
+                };
+
+                units[info.unit_index].internal_deps.push(RawInternalDep {
+                    target_package_name: target_name,
+                    literal,
+                    requirement: req,
+                });
             }
         }
 
-        Ok(())
+        Ok(units)
     }
 }
 
-impl Ecosystem for PypaLoader {
+impl FormatHandler for PypaLoader {
     fn name(&self) -> &'static str {
         "pypa"
     }
+
     fn display_name(&self) -> &'static str {
         "Python (PyPA)"
     }
-    fn version_file(&self) -> &'static str {
+
+    fn manifest_filename(&self) -> &'static str {
         "pyproject.toml"
     }
+
     fn tag_format_default(&self) -> &'static str {
         "{name}-{version}"
     }
 
-    fn process_index_item(
-        &mut self,
-        _repo: &Repository,
-        _graph: &mut ReleaseUnitGraphBuilder,
-        _repopath: &RepoPath,
-        dirname: &RepoPath,
-        basename: &RepoPath,
-    ) -> Result<()> {
-        self.record_path(dirname, basename);
-        Ok(())
+    fn default_version_field(&self) -> VersionFieldSpec {
+        // Multiple in-file shapes (PEP 621 in pyproject.toml, plus
+        // `__version__ = "..."` in Python source files). The actual
+        // dispatch happens via the `PythonRewriter` /
+        // `PyProjectVersionRewriter`; this regex is a fallback for
+        // configured-RU paths that point at a `pyproject.toml`.
+        VersionFieldSpec::GenericRegex {
+            pattern: r#"version\s*=\s*"([^"]+)""#.to_string(),
+            replace: r#"version = "{version}""#.to_string(),
+        }
     }
 
-    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
-        (*self).into_projects(app)
+    fn make_rewriter(
+        &self,
+        unit_id: ReleaseUnitId,
+        manifest_path: RepoPathBuf,
+    ) -> Box<dyn Rewriter> {
+        // Configured-RU path: caller decides whether the manifest is
+        // a `pyproject.toml` or a `.py` annotated file. We default to
+        // PyProjectVersionRewriter since `pyproject.toml` is the
+        // ecosystem's canonical filename; callers wanting Python-file
+        // rewriting should configure `version_field = "generic_regex"`.
+        Box::new(PyProjectVersionRewriter::new(unit_id, manifest_path))
+    }
+
+    fn discover_units(
+        &self,
+        repo: &Repository,
+        configured_skip_paths: &[RepoPathBuf],
+    ) -> Result<Vec<DiscoveredUnit>> {
+        let dirs = self.collect_dirs(repo, configured_skip_paths)?;
+        if dirs.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.build_units(repo, dirs)
     }
 }
 
 fn scan_rewritten_file(
-    app: &mut AppBuilder,
-    path: &RepoPath,
+    repo: &Repository,
+    path: &RepoPathBuf,
     reqs: &mut HashSet<String>,
 ) -> Result<()> {
-    let file_path = app.repo.resolve_workdir(path);
+    let file_path = repo.resolve_workdir(path);
 
     let f = atry!(
         File::open(&file_path);
@@ -1006,67 +1050,8 @@ impl Rewriter for PyProjectVersionRewriter {
 
 #[cfg(test)]
 mod tests {
-    use super::{PypaLoader, PypaProjectData, RepoPathBuf};
     use crate::core::version::pep440::Pep440Version;
-    use std::collections::HashSet;
     use toml::Value;
-
-    #[test]
-    fn test_process_index_item_detects_setup_py() {
-        let mut loader = PypaLoader::default();
-        let dirname_buf = RepoPathBuf::new(b"python-project");
-        let basename_buf = RepoPathBuf::new(b"setup.py");
-
-        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
-
-        assert_eq!(loader.dirs_of_interest.len(), 1);
-        assert!(loader.dirs_of_interest.contains(&dirname_buf));
-    }
-
-    #[test]
-    fn test_process_index_item_detects_pyproject_toml() {
-        let mut loader = PypaLoader::default();
-        let dirname_buf = RepoPathBuf::new(b"modern-python");
-        let basename_buf = RepoPathBuf::new(b"pyproject.toml");
-
-        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
-
-        assert_eq!(loader.dirs_of_interest.len(), 1);
-        assert!(loader.dirs_of_interest.contains(&dirname_buf));
-    }
-
-    #[test]
-    fn test_process_index_item_ignores_other_files() {
-        let mut loader = PypaLoader::default();
-        let dirname_buf = RepoPathBuf::new(b"src");
-        let basename_buf = RepoPathBuf::new(b"main.py");
-
-        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
-
-        assert_eq!(loader.dirs_of_interest.len(), 0);
-    }
-
-    #[test]
-    fn test_process_index_item_multiple_projects() {
-        let mut loader = PypaLoader::default();
-
-        let dirname1_buf = RepoPathBuf::new(b"packages/lib1");
-        let basename1_buf = RepoPathBuf::new(b"setup.py");
-        loader.record_path(dirname1_buf.as_ref(), basename1_buf.as_ref());
-
-        let dirname2_buf = RepoPathBuf::new(b"packages/lib2");
-        let basename2_buf = RepoPathBuf::new(b"pyproject.toml");
-        loader.record_path(dirname2_buf.as_ref(), basename2_buf.as_ref());
-
-        let dirname3_buf = RepoPathBuf::new(b"packages/lib3");
-        let basename3_buf = RepoPathBuf::new(b"setup.py");
-        loader.record_path(dirname3_buf.as_ref(), basename3_buf.as_ref());
-
-        assert_eq!(loader.dirs_of_interest.len(), 3);
-        assert!(loader.dirs_of_interest.contains(&dirname1_buf));
-        assert!(loader.dirs_of_interest.contains(&dirname2_buf));
-        assert!(loader.dirs_of_interest.contains(&dirname3_buf));
-    }
 
     #[test]
     fn test_parse_setup_py_version_simple() {
@@ -1153,63 +1138,5 @@ version = {attr = "package.__version__"}
 
         assert!(double.contains('"'));
         assert!(single.contains('\''));
-    }
-
-    #[test]
-    fn test_pypa_project_data_creation() {
-        let mut reqs = HashSet::new();
-        reqs.insert("other-package".to_string());
-
-        let data = PypaProjectData {
-            ident: 0,
-            internal_reqs: reqs.clone(),
-        };
-
-        assert_eq!(data.ident, 0);
-        assert_eq!(data.internal_reqs, reqs);
-    }
-
-    #[test]
-    fn test_pypa_project_data_empty_reqs() {
-        let data = PypaProjectData {
-            ident: 5,
-            internal_reqs: HashSet::new(),
-        };
-
-        assert_eq!(data.ident, 5);
-        assert!(data.internal_reqs.is_empty());
-    }
-
-    #[test]
-    fn test_pypa_project_data_multiple_reqs() {
-        let mut reqs = HashSet::new();
-        reqs.insert("package-a".to_string());
-        reqs.insert("package-b".to_string());
-        reqs.insert("package-c".to_string());
-
-        let data = PypaProjectData {
-            ident: 1,
-            internal_reqs: reqs.clone(),
-        };
-
-        assert_eq!(data.internal_reqs.len(), 3);
-        assert!(data.internal_reqs.contains("package-a"));
-        assert!(data.internal_reqs.contains("package-b"));
-        assert!(data.internal_reqs.contains("package-c"));
-    }
-
-    #[test]
-    fn test_internal_reqs_hashset_operations() {
-        let mut reqs1 = HashSet::new();
-        reqs1.insert("shared-lib".to_string());
-        reqs1.insert("utils".to_string());
-
-        let mut reqs2 = HashSet::new();
-        reqs2.insert("shared-lib".to_string());
-
-        assert!(reqs1.contains("shared-lib"));
-        assert!(reqs2.contains("shared-lib"));
-        assert!(reqs1.contains("utils"));
-        assert!(!reqs2.contains("utils"));
     }
 }

@@ -8,37 +8,72 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
     core::{
-        ecosystem::registry::Ecosystem,
+        ecosystem::format_handler::{scan_index_for_filename, DiscoveredUnit, FormatHandler},
         errors::Result,
-        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
-        graph::ReleaseUnitGraphBuilder,
+        git::repository::{ChangeList, RepoPathBuf, Repository},
+        release_unit::VersionFieldSpec,
         resolved_release_unit::ReleaseUnitId,
         rewriters::Rewriter,
-        session::{AppBuilder, AppSession},
+        session::AppSession,
         version::Version,
     },
 };
 
 #[derive(Debug, Default)]
-pub struct GoLoader {
-    go_mod_paths: Vec<RepoPathBuf>,
-}
+pub struct GoLoader;
 
-impl GoLoader {
-    pub fn record_path(&mut self, dirname: &RepoPath, basename: &RepoPath) {
-        if basename.as_ref() != b"go.mod" {
-            return;
-        }
-
-        let mut path = dirname.to_owned();
-        path.push(basename);
-        self.go_mod_paths.push(path);
+impl FormatHandler for GoLoader {
+    fn name(&self) -> &'static str {
+        "go"
     }
 
-    pub fn into_projects(self, app: &mut AppBuilder) -> Result<()> {
-        for go_mod_path in self.go_mod_paths {
+    fn display_name(&self) -> &'static str {
+        "Go"
+    }
+
+    fn manifest_filename(&self) -> &'static str {
+        "go.mod"
+    }
+
+    fn default_version_field(&self) -> VersionFieldSpec {
+        // go.mod doesn't carry the project's release version; the
+        // canonical "version" lives in the git tag (`v1.2.3`). We
+        // expose a `GenericRegex` placeholder so the
+        // `version_field::read/write` dispatch doesn't panic, but it
+        // is not normally exercised — Go releases are tag-driven.
+        VersionFieldSpec::GenericRegex {
+            pattern: r"^module\s+(.+?)\s*$".to_string(),
+            replace: "module {version}".to_string(),
+        }
+    }
+
+    fn tag_format_default(&self) -> &'static str {
+        "{module}/v{version}"
+    }
+
+    fn tag_template_vars(&self) -> &'static [&'static str] {
+        &["name", "version", "ecosystem", "module"]
+    }
+
+    fn make_rewriter(
+        &self,
+        unit_id: ReleaseUnitId,
+        manifest_path: RepoPathBuf,
+    ) -> Box<dyn Rewriter> {
+        Box::new(GoModRewriter::new(unit_id, manifest_path))
+    }
+
+    fn discover_units(
+        &self,
+        repo: &Repository,
+        configured_skip_paths: &[RepoPathBuf],
+    ) -> Result<Vec<DiscoveredUnit>> {
+        let go_mod_paths = scan_index_for_filename(repo, "go.mod", configured_skip_paths)?;
+        let mut units = Vec::new();
+
+        for go_mod_path in go_mod_paths {
             let (prefix, _) = go_mod_path.split_basename();
-            let fs_path = app.repo.resolve_workdir(&go_mod_path);
+            let fs_path = repo.resolve_workdir(&go_mod_path);
 
             let f = atry!(
                 File::open(&fs_path);
@@ -66,52 +101,20 @@ impl GoLoader {
                 ["failed to parse module name from `{}`", fs_path.display()]
             );
 
-            let qnames = vec![module_name, "go".to_owned()];
-
-            let ident = app.graph.add_project(qnames);
-            let unit = app.graph.lookup_mut(ident);
-            unit.version = Some(Version::Semver(semver::Version::new(0, 0, 0)));
-            unit.prefix = Some(prefix.to_owned());
-
-            let go_rewrite = GoModRewriter::new(ident, go_mod_path);
-            unit.rewriters.push(Box::new(go_rewrite));
+            let manifest = go_mod_path.clone();
+            units.push(DiscoveredUnit {
+                qnames: vec![module_name, "go".to_owned()],
+                version: Version::Semver(semver::Version::new(0, 0, 0)),
+                prefix: prefix.to_owned(),
+                anchor_manifest: go_mod_path,
+                rewriter_factories: vec![Box::new(move |id| {
+                    Box::new(GoModRewriter::new(id, manifest))
+                })],
+                internal_deps: Vec::new(),
+            });
         }
 
-        Ok(())
-    }
-}
-
-impl Ecosystem for GoLoader {
-    fn name(&self) -> &'static str {
-        "go"
-    }
-    fn display_name(&self) -> &'static str {
-        "Go"
-    }
-    fn version_file(&self) -> &'static str {
-        "go.mod"
-    }
-    fn tag_format_default(&self) -> &'static str {
-        "{module}/v{version}"
-    }
-    fn tag_template_vars(&self) -> &'static [&'static str] {
-        &["name", "version", "ecosystem", "module"]
-    }
-
-    fn process_index_item(
-        &mut self,
-        _repo: &Repository,
-        _graph: &mut ReleaseUnitGraphBuilder,
-        _repopath: &RepoPath,
-        dirname: &RepoPath,
-        basename: &RepoPath,
-    ) -> Result<()> {
-        self.record_path(dirname, basename);
-        Ok(())
-    }
-
-    fn finalize(self: Box<Self>, app: &mut AppBuilder) -> Result<()> {
-        (*self).into_projects(app)
+        Ok(units)
     }
 }
 
@@ -168,50 +171,6 @@ impl Rewriter for GoModRewriter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    #[test]
-    fn test_process_index_item_detects_go_mod() {
-        let mut loader = GoLoader::default();
-        let dirname_buf = RepoPathBuf::new(b"backend");
-        let basename_buf = RepoPathBuf::new(b"go.mod");
-
-        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
-
-        assert_eq!(loader.go_mod_paths.len(), 1);
-        assert_eq!(
-            <RepoPathBuf as AsRef<[u8]>>::as_ref(&loader.go_mod_paths[0]),
-            b"backend/go.mod"
-        );
-    }
-
-    #[test]
-    fn test_process_index_item_ignores_other_files() {
-        let mut loader = GoLoader::default();
-        let dirname_buf = RepoPathBuf::new(b"backend");
-        let basename_buf = RepoPathBuf::new(b"main.go");
-
-        loader.record_path(dirname_buf.as_ref(), basename_buf.as_ref());
-
-        assert_eq!(loader.go_mod_paths.len(), 0);
-    }
-
-    #[test]
-    fn test_process_index_item_multiple_modules() {
-        let mut loader = GoLoader::default();
-
-        let backend_dir = RepoPathBuf::new(b"backend");
-        let frontend_dir = RepoPathBuf::new(b"frontend");
-        let api_dir = RepoPathBuf::new(b"api");
-        let go_mod = RepoPathBuf::new(b"go.mod");
-
-        loader.record_path(backend_dir.as_ref(), go_mod.as_ref());
-        loader.record_path(frontend_dir.as_ref(), go_mod.as_ref());
-        loader.record_path(api_dir.as_ref(), go_mod.as_ref());
-
-        assert_eq!(loader.go_mod_paths.len(), 3);
-    }
-
     #[test]
     fn test_extract_module_name_simple() {
         let content = "module github.com/user/project\n\ngo 1.21\n";
