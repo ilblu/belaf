@@ -892,12 +892,18 @@ fn build_tag_name(
 ) -> Result<String> {
     let registry = FormatHandlerRegistry::with_defaults();
     let eco_name = project.ecosystem.as_str();
-    let eco = registry.lookup(eco_name).ok_or_else(|| {
-        anyhow::anyhow!(
-            "no ecosystem `{eco_name}` registered — cannot build tag for project `{}`",
-            project.name
-        )
-    })?;
+
+    // Bundle / synthetic ecosystems (`tauri`, `hexagonal-cargo`,
+    // `jvm-library`) aren't `FormatHandler`-backed — they're
+    // taxonomy labels on configured `[release_unit.X]` blocks.
+    // For those we fall back to a generic tag template; the unit's
+    // own `tag_format` override (set by auto-detect or by the user)
+    // covers customisation, the default is a sensible last resort.
+    let (eco_default_tag, eco_allowed_vars): (&'static str, &'static [&'static str]) =
+        match registry.lookup(eco_name) {
+            Some(h) => (h.tag_format_default(), h.tag_template_vars()),
+            None => ("{name}@v{version}", &["name", "version", "ecosystem"]),
+        };
 
     // tag-format precedence: explicit [release_unit.<name>] > [group.<id>]
     // > ecosystem default.
@@ -921,8 +927,8 @@ fn build_tag_name(
         project_name: &project.name,
         version: &project.new_version,
         ecosystem: eco_name,
-        ecosystem_default: eco.tag_format_default(),
-        allowed_vars: eco.tag_template_vars(),
+        ecosystem_default: eco_default_tag,
+        allowed_vars: eco_allowed_vars,
         override_template: template,
         maven_coords,
         module_path: if eco_name == "go" {
