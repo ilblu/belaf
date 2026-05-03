@@ -220,3 +220,76 @@ fn clikd_shape_polyglot_classification() {
         "polyglot fixture must surface at least one ExternallyManaged entry"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Property: every bundle's emit-snippet round-trips through the
+// `release_unit::syntax` loader.
+//
+// Catches drift between the emit format and the resolver's input
+// grammar — a bundle that emits a key the syntax loader doesn't
+// recognise (or fails to escape a path correctly) breaks here.
+// ---------------------------------------------------------------------------
+
+mod bundle_emit_roundtrip {
+    use super::fixtures;
+    use super::TestRepo;
+    use belaf::cmd::init::auto_detect::DetectionCounters;
+    use belaf::core::release_unit::bundle;
+    use belaf::core::release_unit::syntax::ReleaseUnitConfig;
+    use std::collections::HashMap;
+
+    fn assert_snippet_parses(snippet: &str) {
+        // Bundles emit `[release_unit.<name>]` blocks directly; wrap
+        // in a synthetic config that mimics how `belaf/config.toml`
+        // would consume them.
+        let toml_in = format!("[release_unit]\n{snippet}");
+        let parsed: Result<HashMap<String, HashMap<String, ReleaseUnitConfig>>, toml::de::Error> =
+            toml::from_str(&toml_in);
+        if let Err(e) = parsed {
+            panic!(
+                "bundle emit-snippet failed to round-trip via release_unit::syntax loader:\n{e}\n\nsnippet:\n{snippet}"
+            );
+        }
+    }
+
+    fn collect_emit(seed: fn(&TestRepo)) -> String {
+        let repo = TestRepo::new();
+        seed(&repo);
+        let matches = bundle::detect_all(&repo.path);
+        let mut snippet = String::new();
+        let mut counters = DetectionCounters::default();
+        bundle::emit_all(&matches, &mut snippet, &mut counters);
+        snippet
+    }
+
+    #[test]
+    fn tauri_emit_parses_via_syntax_loader() {
+        let s = collect_emit(fixtures::seed_tauri_app_only);
+        assert!(s.contains("ecosystem = \"tauri\""), "got: {s}");
+        assert_snippet_parses(&s);
+    }
+
+    #[test]
+    fn hexagonal_emit_parses_via_syntax_loader() {
+        let s = collect_emit(fixtures::seed_hexagonal_cargo_only);
+        assert!(s.contains("ecosystem = \"cargo\""), "got: {s}");
+        assert_snippet_parses(&s);
+    }
+
+    #[test]
+    fn jvm_library_emit_parses_via_syntax_loader() {
+        let s = collect_emit(fixtures::seed_kotlin_library_only);
+        assert!(!s.is_empty(), "expected JvmLibrary emit content");
+        assert_snippet_parses(&s);
+    }
+
+    #[test]
+    fn polyglot_emit_parses_via_syntax_loader() {
+        let s = collect_emit(fixtures::seed_clikd_shape);
+        assert!(
+            !s.is_empty(),
+            "polyglot fixture should emit at least one bundle block"
+        );
+        assert_snippet_parses(&s);
+    }
+}
