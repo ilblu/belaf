@@ -190,17 +190,13 @@ impl AppBuilder {
                 ));
             }
 
-            // Step 1 — register every configured `[release_unit.X]` as
-            // a graph node. Read the version from the canonical
-            // manifest (or run the external read_command), build
-            // rewriters per manifest using the matching FormatHandler.
             for resolved in &resolved_units {
                 self.add_configured_unit_to_graph(&registry, resolved)?;
             }
 
-            // Step 2 — discover everything else (unconfigured
-            // single-package + workspace-shaped manifests). Skip-list
-            // ensures discovery doesn't double-claim configured paths.
+            // The skip-list keeps auto-discovery from claiming the
+            // same manifest paths that a `[release_unit.X]` block
+            // already covers.
             let discovered =
                 discover_implicit_release_units(&self.repo, &registry, &configured_skip_paths)?;
 

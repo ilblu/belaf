@@ -326,14 +326,12 @@ impl ScopeMatcher {
     fn match_suffix<'a>(&self, scope: &str, project_names: &'a [String]) -> Option<&'a String> {
         project_names.iter().find(|p| {
             let p_lower = p.to_lowercase();
+            // `/scope` matches npm scoped packages (`@org/schema`),
+            // making this a deterministic match before the contains
+            // fallback (which is order-dependent on the project list).
             p_lower == scope
                 || p_lower.ends_with(&format!("-{}", scope))
                 || p_lower.ends_with(&format!("_{}", scope))
-                // npm scoped packages: `@org/schema` ends with `/schema`.
-                // Without this the smart matcher falls through to
-                // `contains`, which is order-dependent across loaders
-                // and produces "first match wins" attribution that
-                // varies with registration order.
                 || p_lower.ends_with(&format!("/{}", scope))
         })
     }

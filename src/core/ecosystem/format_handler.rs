@@ -1,22 +1,18 @@
-//! `FormatHandler` trait: per-language file-format-handler +
+//! `FormatHandler` trait: per-language file-format handler +
 //! workspace discoverer.
 //!
-//! Replaces the old `Ecosystem` trait, which mixed three concerns
-//! (file-format I/O, project discovery, and the graph-builder push
-//! model). The new shape is:
+//! Three responsibilities, kept separate:
 //!
-//! - **File-format I/O** stays in [`crate::core::version_field`]
-//!   (already a free-function dispatch keyed off `VersionFieldSpec`).
-//! - **Workspace discovery** is the loader's job: walk the repo and
-//!   emit [`DiscoveredUnit`] records for everything not already
-//!   covered by a `[release_unit.X]` block.
-//! - **Graph construction** is no longer the loader's responsibility.
-//!   The session's [`AppBuilder`] consumes both configured
+//! - **File-format I/O** lives in [`crate::core::version_field`]
+//!   (free-function dispatch keyed off `VersionFieldSpec`).
+//! - **Workspace discovery** is the handler's job: walk the repo
+//!   and emit [`DiscoveredUnit`] records for every manifest not
+//!   already claimed by a `[release_unit.X]` config block.
+//! - **Graph construction** is the session's job. The
+//!   [`AppBuilder`] consumes both configured
 //!   `release_unit::ResolvedReleaseUnit`s (from the resolver) and
 //!   discovered `DiscoveredUnit`s, and feeds both into the graph
-//!   builder. Loaders are stateless after this change.
-//!
-//! See plan §Schicht 2.5 for the full migration rationale.
+//!   builder. Handlers stay stateless.
 //!
 //! [`AppBuilder`]: crate::core::session::AppBuilder
 

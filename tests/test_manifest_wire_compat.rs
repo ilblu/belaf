@@ -8,16 +8,9 @@
 //! wrote to `belaf/releases/*.json`, and validates it against
 //! `schemas/manifest.v1.schema.json`.
 //!
-//! Coverage today is the four ecosystems with a registered
-//! `Ecosystem` loader that fully wires through to `prepare`:
-//! single-crate cargo, single-package npm, cargo workspaces, and
-//! nested-submodule outer crates. The remaining seven variants
-//! (Tauri / hexagonal-cargo / JVM-library bundles, mobile-only,
-//! cascade-from SDKs, npm workspace monorepos, polyglot cross-eco
-//! groups) currently route through `[release_unit.X]` blocks whose
-//! resolver→graph integration is the work of the ReleaseUnit-centric
-//! graph refactor (see plan §Schicht 2.5). Once that lands, this file
-//! will grow to cover all eleven variants the same way.
+//! Variants without any release units (mobile-only) are the
+//! exception: prepare emits no manifest, so the assertion is "no
+//! manifest" rather than "schema-valid manifest".
 
 mod common;
 mod fixtures;
