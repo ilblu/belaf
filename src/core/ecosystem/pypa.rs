@@ -482,17 +482,12 @@ impl FormatHandler for PypaLoader {
         &self,
         repo: &Repository,
         manifest_path: &RepoPath,
-    ) -> Result<DiscoveredUnit> {
+    ) -> Result<Option<DiscoveredUnit>> {
         let (dirname, _) = manifest_path.split_basename();
         let mut dirs: HashSet<RepoPathBuf> = HashSet::new();
         dirs.insert(dirname.to_owned());
         let mut units = self.build_units(repo, dirs)?;
-        units.pop().ok_or_else(|| {
-            anyhow!(
-                "PyPA discovery for `{}` produced no unit",
-                manifest_path.escaped()
-            )
-        })
+        Ok(units.pop())
     }
 }
 

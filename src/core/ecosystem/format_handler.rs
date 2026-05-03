@@ -81,17 +81,17 @@ pub trait FormatHandler: Send + Sync + std::fmt::Debug {
     ) -> Box<dyn Rewriter>;
 
     /// Build a [`DiscoveredUnit`] for one canonical manifest in
-    /// single-package mode (no workspace context). Each loader
-    /// implements this so they can wire up their concrete `Rewriter`
-    /// type and any satellite files (pypa `annotated_files`, csproj
-    /// `AssemblyInfo.cs`); the default-impl-with-closure-capturing-
-    /// `&self` route runs into trait-object lifetime issues that
-    /// aren't worth the boilerplate savings.
+    /// single-package mode (no workspace context). Returns `Ok(None)`
+    /// when the path is recognised by `is_manifest_file` but doesn't
+    /// describe an emittable unit on its own — virtual cargo
+    /// workspace roots (no `[package]`), pypa-style nested
+    /// `setup.cfg` without metadata, etc. The orchestrator treats
+    /// `Ok(None)` as a clean skip.
     fn discover_single(
         &self,
         repo: &Repository,
         manifest_path: &RepoPath,
-    ) -> Result<DiscoveredUnit>;
+    ) -> Result<Option<DiscoveredUnit>>;
 }
 
 // ---------------------------------------------------------------------------

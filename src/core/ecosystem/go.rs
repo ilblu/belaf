@@ -78,7 +78,7 @@ impl FormatHandler for GoLoader {
         &self,
         repo: &Repository,
         manifest_path: &RepoPath,
-    ) -> Result<DiscoveredUnit> {
+    ) -> Result<Option<DiscoveredUnit>> {
         let fs_path = repo.resolve_workdir(manifest_path);
         let f = atry!(
             File::open(&fs_path);
@@ -102,7 +102,7 @@ impl FormatHandler for GoLoader {
         let (prefix, _) = manifest_path.split_basename();
         let manifest = manifest_path.to_owned();
         let manifest_for_rw = manifest.clone();
-        Ok(DiscoveredUnit {
+        Ok(Some(DiscoveredUnit {
             qnames: vec![module_name, "go".to_owned()],
             version: Version::Semver(semver::Version::new(0, 0, 0)),
             prefix: prefix.to_owned(),
@@ -111,7 +111,7 @@ impl FormatHandler for GoLoader {
                 Box::new(GoModRewriter::new(id, manifest_for_rw))
             })],
             internal_deps: Vec::new(),
-        })
+        }))
     }
 }
 

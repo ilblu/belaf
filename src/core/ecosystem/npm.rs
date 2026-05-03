@@ -171,15 +171,12 @@ impl FormatHandler for NpmLoader {
         &self,
         repo: &Repository,
         manifest_path: &RepoPath,
-    ) -> Result<DiscoveredUnit> {
+    ) -> Result<Option<DiscoveredUnit>> {
         let path_buf = manifest_path.to_owned();
-        let (unit, _load) = self.parse_one(repo, &path_buf)?.ok_or_else(|| {
-            anyhow!(
-                "package.json `{}` lacks the content keys belaf considers releasable",
-                manifest_path.escaped()
-            )
-        })?;
-        Ok(unit)
+        match self.parse_one(repo, &path_buf)? {
+            Some((unit, _load)) => Ok(Some(unit)),
+            None => Ok(None),
+        }
     }
 }
 

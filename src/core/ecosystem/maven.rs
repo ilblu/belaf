@@ -119,7 +119,7 @@ impl FormatHandler for MavenLoader {
         &self,
         repo: &Repository,
         manifest_path: &RepoPath,
-    ) -> Result<DiscoveredUnit> {
+    ) -> Result<Option<DiscoveredUnit>> {
         // Single-pom fallback: no parent-chain inheritance, no
         // property substitution. Used when the WorkspaceDiscoverer
         // didn't already claim this pom.
@@ -139,7 +139,7 @@ impl FormatHandler for MavenLoader {
         let (prefix, _) = manifest_path.split_basename();
         let manifest = manifest_path.to_owned();
         let manifest_for_rw = manifest.clone();
-        Ok(DiscoveredUnit {
+        Ok(Some(DiscoveredUnit {
             qnames: vec![user_name, "maven".to_owned()],
             version: Version::Semver(version),
             prefix: prefix.to_owned(),
@@ -148,7 +148,7 @@ impl FormatHandler for MavenLoader {
                 Box::new(MavenRewriter::new(id, manifest_for_rw))
             })],
             internal_deps: Vec::new(),
-        })
+        }))
     }
 }
 

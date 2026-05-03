@@ -95,7 +95,7 @@ impl FormatHandler for ElixirLoader {
         &self,
         repo: &Repository,
         manifest_path: &RepoPath,
-    ) -> Result<DiscoveredUnit> {
+    ) -> Result<Option<DiscoveredUnit>> {
         let fs_path = repo.resolve_workdir(manifest_path);
         let mut contents = String::new();
         let mut f = atry!(
@@ -131,7 +131,7 @@ impl FormatHandler for ElixirLoader {
         let (prefix, _) = manifest_path.split_basename();
         let manifest = manifest_path.to_owned();
         let manifest_for_rw = manifest.clone();
-        Ok(DiscoveredUnit {
+        Ok(Some(DiscoveredUnit {
             qnames: vec![app_name, "elixir".to_owned()],
             version,
             prefix: prefix.to_owned(),
@@ -140,7 +140,7 @@ impl FormatHandler for ElixirLoader {
                 Box::new(MixExsRewriter::new(id, manifest_for_rw))
             })],
             internal_deps: Vec::new(),
-        })
+        }))
     }
 }
 

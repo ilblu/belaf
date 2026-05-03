@@ -77,7 +77,7 @@ impl FormatHandler for SwiftLoader {
         &self,
         repo: &Repository,
         manifest_path: &RepoPath,
-    ) -> Result<DiscoveredUnit> {
+    ) -> Result<Option<DiscoveredUnit>> {
         let fs_path = repo.resolve_workdir(manifest_path);
         let f = atry!(
             File::open(&fs_path);
@@ -101,14 +101,14 @@ impl FormatHandler for SwiftLoader {
             ["failed to parse package name from `{}`", fs_path.display()]
         );
         let (prefix, _) = manifest_path.split_basename();
-        Ok(DiscoveredUnit {
+        Ok(Some(DiscoveredUnit {
             qnames: vec![package_name, "swift".to_owned()],
             version: Version::Semver(semver::Version::new(0, 0, 0)),
             prefix: prefix.to_owned(),
             anchor_manifest: manifest_path.to_owned(),
             rewriter_factories: vec![Box::new(|_id| Box::new(SwiftNoOpRewriter))],
             internal_deps: Vec::new(),
-        })
+        }))
     }
 }
 

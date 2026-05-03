@@ -367,14 +367,8 @@ impl FormatHandler for CargoLoader {
         &self,
         repo: &Repository,
         manifest_path: &RepoPath,
-    ) -> Result<DiscoveredUnit> {
-        self.direct_parse_unit(repo, &manifest_path.to_owned())?
-            .ok_or_else(|| {
-                anyhow!(
-                    "Cargo.toml `{}` has no [package] block (likely a virtual workspace root)",
-                    manifest_path.escaped()
-                )
-            })
+    ) -> Result<Option<DiscoveredUnit>> {
+        self.direct_parse_unit(repo, &manifest_path.to_owned())
     }
 }
 

@@ -85,9 +85,10 @@ pub fn discover_implicit_release_units(
         if claimed_dirs.contains(&parent_buf) {
             continue;
         }
-        let unit = handler.discover_single(repo, path)?;
-        claimed_dirs.insert(parent_buf);
-        units.push(unit);
+        if let Some(unit) = handler.discover_single(repo, path)? {
+            claimed_dirs.insert(parent_buf);
+            units.push(unit);
+        }
     }
 
     Ok(units)

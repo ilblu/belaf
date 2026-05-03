@@ -460,7 +460,7 @@ impl FormatHandler for CsProjLoader {
         &self,
         repo: &Repository,
         manifest_path: &RepoPath,
-    ) -> Result<DiscoveredUnit> {
+    ) -> Result<Option<DiscoveredUnit>> {
         // .csproj on its own — pull in the matching AssemblyInfo.cs
         // and any sibling .vdproj via the existing per-directory walker
         // restricted to this manifest's parent.
@@ -482,12 +482,7 @@ impl FormatHandler for CsProjLoader {
         );
 
         let mut units = self.build_units(repo, dirs_of_interest, Vec::new())?;
-        units.pop().ok_or_else(|| {
-            anyhow!(
-                "csproj discovery for `{}` produced no unit",
-                manifest_path.escaped()
-            )
-        })
+        Ok(units.pop())
     }
 }
 
