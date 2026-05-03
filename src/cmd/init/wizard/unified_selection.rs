@@ -20,7 +20,8 @@ use ratatui::{
 
 use crate::core::ui::glyphs;
 use crate::core::ui::release_unit_view::{
-    render_summary, ReleaseUnitView, RenderMode, RowIdx, StandaloneEntry, ViewContext,
+    render_summary, PrepareOverlay, ReleaseUnitView, RenderMode, RowIdx, StandaloneEntry,
+    ViewContext,
 };
 
 use super::{
@@ -37,6 +38,9 @@ pub struct UnifiedSelectionStep {
     /// Lazily-built view, regenerated on every initialisation so it
     /// stays in lockstep with state mutations.
     view: ReleaseUnitView,
+    /// Sidecar carrying user-confirmed `cascade_from` overrides so
+    /// `⇄ source · strategy` badges surface in the selection list.
+    overlay: PrepareOverlay,
     /// Cursor index into the flat row order returned by
     /// [`ReleaseUnitView::flat_indices`].
     cursor: usize,
@@ -67,16 +71,16 @@ impl UnifiedSelectionStep {
             &standalones,
             &state.detector_excluded,
         );
-        // Project user-confirmed cascade overrides onto matching unit
-        // rows so the `⇄ source · strategy` badge surfaces in the
-        // selection list. WizardState is the source-of-truth; the view
-        // mirrors it on every rebuild.
-        for unit in &mut self.view.units {
+        self.overlay = PrepareOverlay::default();
+        for unit in &self.view.units {
             if let Some(ov) = state.cascade_overrides.get(&unit.name) {
-                unit.cascade_override = Some(CascadeOverrideBadge {
-                    source: ov.source.clone(),
-                    strategy_label: ov.strategy.as_wire().to_string(),
-                });
+                self.overlay.cascade_overrides.insert(
+                    unit.backref,
+                    CascadeOverrideBadge {
+                        source: ov.source.clone(),
+                        strategy_label: ov.strategy.as_wire().to_string(),
+                    },
+                );
             }
         }
         if self.cursor >= self.view.flat_indices().len() {
@@ -116,7 +120,7 @@ impl Step for UnifiedSelectionStep {
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &WizardState) {
         self.ensure_initialised(state);
-        render(frame, area, &self.view, self.cursor);
+        render(frame, area, &self.view, &self.overlay, self.cursor);
     }
 
     fn handle_event(&mut self, event: &Event, state: &mut WizardState) -> StepResult {
@@ -200,7 +204,13 @@ impl Step for UnifiedSelectionStep {
     }
 }
 
-fn render(frame: &mut Frame, area: Rect, view: &ReleaseUnitView, cursor: usize) {
+fn render(
+    frame: &mut Frame,
+    area: Rect,
+    view: &ReleaseUnitView,
+    overlay: &PrepareOverlay,
+    cursor: usize,
+) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan))
@@ -265,7 +275,7 @@ fn render(frame: &mut Frame, area: Rect, view: &ReleaseUnitView, cursor: usize) 
         mode: RenderMode::Init,
         cursor: Some(cursor),
     };
-    view.render(frame, chunks[1], &ctx);
+    view.render_with_overlay(frame, chunks[1], &ctx, overlay);
 
     // Hints footer.
     let hints = Line::from(vec![

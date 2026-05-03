@@ -21,6 +21,8 @@
 //! plus a branch in `render`. The wizard adapters never touch
 //! classification logic.
 
+use std::collections::HashMap;
+
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -53,6 +55,11 @@ pub struct BundleRow {
 /// Single-manifest standalone unit (one entry per ecosystem loader
 /// hit). Togglable; carries optional hint annotations that decorate
 /// the row's secondary text.
+///
+/// Prepare-specific data (bump-hints, commit counts, cascade-override
+/// badges) lives in [`PrepareOverlay`] keyed by `backref`, not on the
+/// row itself — the view holds the universal shape, the overlay
+/// holds prepare's modal extras.
 #[derive(Clone, Debug)]
 pub struct UnitRow {
     pub name: String,
@@ -63,20 +70,9 @@ pub struct UnitRow {
     pub selected: bool,
     /// Index back into the original `WizardState::standalone_units`
     /// (init wizard) or the resolved-unit list (prepare). Used to
-    /// route toggles back to the right slot.
+    /// route toggles back to the right slot and to look up
+    /// prepare-overlay entries.
     pub backref: usize,
-    /// Optional bump hint label (`MAJOR` / `MINOR` / `PATCH`) — set by
-    /// the prepare wizard to surface conventional-commit recommendations.
-    /// `None` in init mode (no commit history yet).
-    pub bump_hint: Option<BumpHint>,
-    /// Optional commit count since the last tag — prepare-only.
-    pub commit_count: Option<usize>,
-    /// User-chosen cascade-from override (if any). Distinct from the
-    /// `sdk-cascade` *hint* annotation: the hint says "this looks
-    /// cascade-able"; the override is the wizard-user's actual
-    /// `cascade_from = { source, bump }` choice. Renders as
-    /// `⇄ <source> · <strategy>` after annotations.
-    pub cascade_override: Option<CascadeOverrideBadge>,
 }
 
 /// Visual badge for a wizard-confirmed cascade-from rule. Mirrors
@@ -282,9 +278,6 @@ impl ReleaseUnitView {
                 annotations,
                 selected: p.selected,
                 backref: idx,
-                bump_hint: None,
-                commit_count: None,
-                cascade_override: None,
             });
         }
 
@@ -378,14 +371,17 @@ impl ReleaseUnitView {
 
 /// Render a single [`UnitRow`] as a `(Line, background-style)` pair —
 /// used by the prepare wizard's selection table to share the row
-/// shape with init/dashboard while still interleaving prepare-specific
-/// Group rows. Caller wraps in `ListItem` themselves; `label_width`
-/// aligns the secondary column with the surrounding rows.
-pub fn build_unit_row_line(
+/// Render a single [`UnitRow`] as a `(Line, background-style)` pair.
+/// `pub(crate)` only because prepare's wizard interleaves single
+/// rows with collapsed group rows in its custom layout — once that
+/// layout migrates fully into `ReleaseUnitView`, this becomes
+/// strictly private and the only entry point is `render*`.
+pub(crate) fn render_unit_row_line(
     row: &UnitRow,
     is_current: bool,
     mode: RenderMode,
     label_width: usize,
+    overlay: Option<&PrepareOverlay>,
 ) -> (Line<'static>, Style) {
     let bg = if is_current {
         Style::default().bg(Color::Rgb(40, 40, 50))
@@ -410,7 +406,8 @@ pub fn build_unit_row_line(
     let indicator = checkbox_or_lock(mode, row.selected, false);
     let pad = label_width.saturating_sub(row.name.chars().count());
     let padded = format!("{}{}", row.name, " ".repeat(pad));
-    let secondary = match (mode, row.commit_count) {
+    let commit_count = overlay.and_then(|o| o.commits.get(&row.backref).copied());
+    let secondary = match (mode, commit_count) {
         (RenderMode::Prepare, Some(n)) => format!("({} commits)", n),
         _ => format!("@ {} ({})", row.version, row.prefix),
     };
@@ -436,7 +433,7 @@ pub fn build_unit_row_line(
             Style::default().fg(Color::Yellow),
         ));
     }
-    if let Some(badge) = &row.cascade_override {
+    if let Some(badge) = overlay.and_then(|o| o.cascade_overrides.get(&row.backref)) {
         spans.push(Span::styled("  ".to_string(), Style::default()));
         spans.push(Span::styled(
             format!("⇄ {} · {}", badge.source, badge.strategy_label),
@@ -444,7 +441,7 @@ pub fn build_unit_row_line(
         ));
     }
     if matches!(mode, RenderMode::Prepare) {
-        if let Some(hint) = row.bump_hint {
+        if let Some(hint) = overlay.and_then(|o| o.bumps.get(&row.backref).copied()) {
             let (text, color) = hint.label_and_color();
             if !text.is_empty() {
                 spans.push(Span::styled("  ".to_string(), Style::default()));
@@ -456,6 +453,30 @@ pub fn build_unit_row_line(
         }
     }
     (Line::from(spans), bg)
+}
+
+// ---------------------------------------------------------------------------
+// PrepareOverlay — wizard-modal extras keyed by `UnitRow::backref`.
+// ---------------------------------------------------------------------------
+
+/// Sidecar data the view layers on top of [`UnitRow`]s at render
+/// time. Init populates `cascade_overrides` (user-confirmed
+/// `cascade_from` rules); prepare populates `bumps` + `commits`
+/// (conventional-commit recommendations). Both wizards reach the
+/// same renderer via [`ReleaseUnitView::render_with_overlay`] —
+/// keeping this off `UnitRow` itself means dashboard and init's
+/// non-cascade flows aren't paying for fields they don't use.
+#[derive(Debug, Default)]
+pub struct PrepareOverlay {
+    /// Conventional-commit bump suggestion per unit, keyed by
+    /// `UnitRow::backref`. Populated by prepare.
+    pub bumps: HashMap<usize, BumpHint>,
+    /// Number of commits since the last release tag, keyed by
+    /// `UnitRow::backref`. Populated by prepare.
+    pub commits: HashMap<usize, usize>,
+    /// User-confirmed `cascade_from` overrides, keyed by
+    /// `UnitRow::backref`. Populated by init's `[c]` sub-step.
+    pub cascade_overrides: HashMap<usize, CascadeOverrideBadge>,
 }
 
 // ---------------------------------------------------------------------------
@@ -583,6 +604,30 @@ impl ReleaseUnitView {
     /// chrome (block / borders / hint bar); this method only fills
     /// the inner content area.
     pub fn render(&self, frame: &mut Frame, area: Rect, ctx: &ViewContext) {
+        self.render_inner(frame, area, ctx, None);
+    }
+
+    /// Render with prepare-modal overlay data (bump hints, commit
+    /// counts, cascade-override badges) layered on top of the
+    /// universal row shape. Init/dashboard use [`Self::render`]; only
+    /// the prepare wizard reaches this entry point.
+    pub fn render_with_overlay(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        ctx: &ViewContext,
+        overlay: &PrepareOverlay,
+    ) {
+        self.render_inner(frame, area, ctx, Some(overlay));
+    }
+
+    fn render_inner(
+        &self,
+        frame: &mut Frame,
+        area: Rect,
+        ctx: &ViewContext,
+        overlay: Option<&PrepareOverlay>,
+    ) {
         let mut items: Vec<ListItem> = Vec::new();
         let label_width = self
             .bundles
@@ -615,7 +660,7 @@ impl ReleaseUnitView {
             }
 
             let is_current = ctx.cursor == Some(display_idx);
-            let line = self.render_row(*row_idx, ctx.mode, label_width, is_current);
+            let line = self.render_row(*row_idx, ctx.mode, label_width, is_current, overlay);
             items.push(line);
         }
 
@@ -628,6 +673,7 @@ impl ReleaseUnitView {
         mode: RenderMode,
         label_width: usize,
         is_current: bool,
+        overlay: Option<&PrepareOverlay>,
     ) -> ListItem<'_> {
         let bg = if is_current {
             Style::default().bg(Color::Rgb(40, 40, 50))
@@ -681,56 +727,9 @@ impl ReleaseUnitView {
             }
             RowIdx::Unit(i) => {
                 let u = &self.units[i];
-                let indicator = checkbox_or_lock(mode, u.selected, false);
-                let pad = label_width.saturating_sub(u.name.chars().count());
-                let padded = format!("{}{}", u.name, " ".repeat(pad));
-                // Prepare mode swaps the secondary text to commit-count
-                // form and appends the bump-hint label after annotations.
-                let secondary = match (mode, u.commit_count) {
-                    (RenderMode::Prepare, Some(n)) => format!("({} commits)", n),
-                    _ => format!("@ {} ({})", u.version, u.prefix),
-                };
-                let mut spans = vec![
-                    Span::styled("    ", Style::default()),
-                    Span::styled(
-                        format!("{} ", indicator),
-                        Style::default().fg(cursor_color(u.selected, false)),
-                    ),
-                    Span::styled(
-                        u.ecosystem.as_deref().map(glyphs::ecosystem).unwrap_or(""),
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                    Span::styled(padded, label_style(u.selected, false)),
-                    Span::styled("  ", Style::default()),
-                    Span::styled(secondary, Style::default().fg(Color::Gray)),
-                ];
-                for ann in &u.annotations {
-                    spans.push(Span::styled("  ", Style::default()));
-                    spans.push(Span::styled(
-                        format!("↳ {}", ann.label()),
-                        Style::default().fg(Color::Yellow),
-                    ));
-                }
-                if let Some(badge) = &u.cascade_override {
-                    spans.push(Span::styled("  ", Style::default()));
-                    spans.push(Span::styled(
-                        format!("⇄ {} · {}", badge.source, badge.strategy_label),
-                        Style::default().fg(Color::Magenta),
-                    ));
-                }
-                if matches!(mode, RenderMode::Prepare) {
-                    if let Some(hint) = u.bump_hint {
-                        let (text, color) = hint.label_and_color();
-                        if !text.is_empty() {
-                            spans.push(Span::styled("  ", Style::default()));
-                            spans.push(Span::styled(
-                                format!("→ {}", text),
-                                Style::default().fg(color),
-                            ));
-                        }
-                    }
-                }
-                ListItem::new(Line::from(spans)).style(bg)
+                let (line, line_bg) =
+                    render_unit_row_line(u, is_current, mode, label_width, overlay);
+                ListItem::new(line).style(line_bg)
             }
             RowIdx::Ext(i) => {
                 let e = &self.externally_managed[i];

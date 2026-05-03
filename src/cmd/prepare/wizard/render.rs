@@ -20,8 +20,8 @@ use crate::core::{
     ui::{
         markdown,
         release_unit_view::{
-            build_group_row_lines, build_unit_row_line, BumpHint, GroupMemberDisplay,
-            GroupRowDisplay, RenderMode, UnitRow,
+            build_group_row_lines, render_unit_row_line, BumpHint, GroupMemberDisplay,
+            GroupRowDisplay, PrepareOverlay, RenderMode, UnitRow,
         },
         utils::centered_rect,
     },
@@ -201,40 +201,41 @@ pub(super) fn compute_display_rows(units: &[ReleaseUnitItem]) -> Vec<DisplayRow>
     out
 }
 
-/// Render one ungrouped project as a single list row by delegating
-/// to the shared [`build_unit_row_line`] helper. The caller maps each
-/// `ReleaseUnitItem` into a [`UnitRow`] (with bump_hint + commit_count
-/// populated from the candidate analysis), and the shared component
-/// owns the visual layout — same component init/dashboard consume.
+/// Render one ungrouped project as a single list row. Builds a
+/// transient `UnitRow` + `PrepareOverlay` slice for this one project,
+/// then delegates to the shared `render_unit_row_line` rendering
+/// path — same path init/dashboard consume.
 fn render_solo_row(
     project: &ReleaseUnitItem,
     is_current: bool,
     label_width: usize,
 ) -> ListItem<'static> {
-    let row = solo_to_unit_row(project);
-    let (line, bg) = build_unit_row_line(&row, is_current, RenderMode::Prepare, label_width);
-    ListItem::new(vec![line]).style(bg)
-}
-
-fn solo_to_unit_row(project: &ReleaseUnitItem) -> UnitRow {
-    let bump_hint = match project.suggested_bump() {
-        BumpRecommendation::Major => Some(BumpHint::Major),
-        BumpRecommendation::Minor => Some(BumpHint::Minor),
-        BumpRecommendation::Patch => Some(BumpHint::Patch),
-        BumpRecommendation::None => Some(BumpHint::None),
-    };
-    UnitRow {
+    let row = UnitRow {
         name: project.name().to_string(),
         version: project.current_version().to_string(),
         prefix: String::new(),
         ecosystem: Some(project.ecosystem().as_str().to_string()),
         annotations: Vec::new(),
         selected: project.selected,
-        backref: 0, // prepare doesn't route through view-toggles; uses ListState directly
-        bump_hint,
-        commit_count: Some(project.commit_count()),
-        cascade_override: None,
-    }
+        backref: 0,
+    };
+    let mut overlay = PrepareOverlay::default();
+    let bump_hint = match project.suggested_bump() {
+        BumpRecommendation::Major => BumpHint::Major,
+        BumpRecommendation::Minor => BumpHint::Minor,
+        BumpRecommendation::Patch => BumpHint::Patch,
+        BumpRecommendation::None => BumpHint::None,
+    };
+    overlay.bumps.insert(0, bump_hint);
+    overlay.commits.insert(0, project.commit_count());
+    let (line, bg) = render_unit_row_line(
+        &row,
+        is_current,
+        RenderMode::Prepare,
+        label_width,
+        Some(&overlay),
+    );
+    ListItem::new(vec![line]).style(bg)
 }
 
 fn render_group_row(
