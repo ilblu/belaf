@@ -145,11 +145,13 @@ impl AppBuilder {
 
         if self.populate_graph {
             use crate::core::ecosystem::format_handler::{
-                discover_implicit_release_units, FormatHandlerRegistry,
+                FormatHandlerRegistry, WorkspaceDiscovererRegistry,
             };
+            use crate::core::release_unit::discovery::discover_implicit_release_units;
             use crate::core::release_unit::VersionSource;
 
             let registry = FormatHandlerRegistry::with_defaults();
+            let discoverers = WorkspaceDiscovererRegistry::with_defaults();
 
             // Resolve `[release_unit.<name>]` entries first so we can
             // (a) add them to the graph as primary nodes and (b) feed
@@ -197,8 +199,12 @@ impl AppBuilder {
             // The skip-list keeps auto-discovery from claiming the
             // same manifest paths that a `[release_unit.X]` block
             // already covers.
-            let discovered =
-                discover_implicit_release_units(&self.repo, &registry, &configured_skip_paths)?;
+            let discovered = discover_implicit_release_units(
+                &self.repo,
+                &registry,
+                &discoverers,
+                &configured_skip_paths,
+            )?;
 
             if self.show_progress {
                 let total = discovered.len();

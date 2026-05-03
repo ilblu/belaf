@@ -44,10 +44,10 @@ use crate::{
     atry,
     core::{
         ecosystem::format_handler::{
-            scan_index_for_filename, DiscoveredUnit, FormatHandler, RawInternalDep,
+            DiscoveredUnit, FormatHandler, RawInternalDep, WorkspaceDiscoverer,
         },
         errors::Result,
-        git::repository::{RepoPathBuf, Repository},
+        git::repository::{RepoPath, RepoPathBuf, Repository},
         release_unit::VersionFieldSpec,
         resolved_release_unit::{DepRequirement, ReleaseUnitId},
         rewriters::Rewriter,
@@ -76,14 +76,23 @@ impl FormatHandler for MavenLoader {
         "Maven"
     }
 
-    fn manifest_filename(&self) -> &'static str {
-        "pom.xml"
+    fn is_manifest_file(&self, path: &RepoPath) -> bool {
+        let (_, basename) = path.split_basename();
+        basename.as_ref() == b"pom.xml"
+    }
+
+    fn parse_version(&self, content: &str) -> Result<String> {
+        // Lightweight version extraction. Full parent-chain inheritance
+        // is the WorkspaceDiscoverer's job; this is a single-file
+        // fallback.
+        let buf = RepoPathBuf::new(b"pom.xml");
+        let parsed = ParsedPom::from_str(buf.as_ref(), std::path::Path::new("pom.xml"), content)?;
+        parsed
+            .version
+            .ok_or_else(|| anyhow!("no <version> in pom.xml"))
     }
 
     fn default_version_field(&self) -> VersionFieldSpec {
-        // Maven `<version>...</version>` between the project root tags.
-        // The MavenRewriter handles full XML-aware rewriting; this
-        // regex is a fallback the version_field dispatcher uses.
         VersionFieldSpec::GenericRegex {
             pattern: r"<version>([^<]+)</version>".to_string(),
             replace: "<version>{version}</version>".to_string(),
@@ -106,16 +115,68 @@ impl FormatHandler for MavenLoader {
         Box::new(MavenRewriter::new(unit_id, manifest_path))
     }
 
-    /// Walk every pom.xml, resolve parent-chains + property substitution
-    /// (Tarjan-SCC cycle detection on the parent graph), and emit one
-    /// DiscoveredUnit per. Internal-deps come from `<dependencies>` +
-    /// `<parent>`; targets are matched by `groupId:artifactId`.
-    fn discover_units(
+    fn discover_single(
         &self,
         repo: &Repository,
-        configured_skip_paths: &[RepoPathBuf],
-    ) -> Result<Vec<DiscoveredUnit>> {
-        let pom_paths = scan_index_for_filename(repo, "pom.xml", configured_skip_paths)?;
+        manifest_path: &RepoPath,
+    ) -> Result<DiscoveredUnit> {
+        // Single-pom fallback: no parent-chain inheritance, no
+        // property substitution. Used when the WorkspaceDiscoverer
+        // didn't already claim this pom.
+        let fs_path = repo.resolve_workdir(manifest_path);
+        let pom = ParsedPom::from_file(manifest_path, &fs_path)?;
+        let group_id = pom
+            .group_id
+            .clone()
+            .ok_or_else(|| anyhow!("no <groupId> in {}", manifest_path.escaped()))?;
+        let version_str = pom
+            .version
+            .clone()
+            .ok_or_else(|| anyhow!("no <version> in {}", manifest_path.escaped()))?;
+        let version = semver::Version::parse(&version_str)
+            .map_err(|e| anyhow!("Maven version `{version_str}` not semver: {e}"))?;
+        let user_name = format!("{}:{}", group_id, pom.artifact_id);
+        let (prefix, _) = manifest_path.split_basename();
+        let manifest = manifest_path.to_owned();
+        let manifest_for_rw = manifest.clone();
+        Ok(DiscoveredUnit {
+            qnames: vec![user_name, "maven".to_owned()],
+            version: Version::Semver(version),
+            prefix: prefix.to_owned(),
+            anchor_manifest: manifest,
+            rewriter_factories: vec![Box::new(move |id| {
+                Box::new(MavenRewriter::new(id, manifest_for_rw))
+            })],
+            internal_deps: Vec::new(),
+        })
+    }
+}
+
+/// Workspace walker for maven: claims any `pom.xml`. Walks the full
+/// repo's poms once; subsequent pom paths land in the orchestrator's
+/// `consumed` set and skip re-discovery.
+#[derive(Debug, Default)]
+pub struct MavenWorkspaceDiscoverer;
+
+impl WorkspaceDiscoverer for MavenWorkspaceDiscoverer {
+    fn name(&self) -> &'static str {
+        "maven"
+    }
+
+    fn claims(&self, _repo: &Repository, manifest_path: &RepoPath) -> bool {
+        let (_, basename) = manifest_path.split_basename();
+        basename.as_ref() == b"pom.xml"
+    }
+
+    fn discover(&self, repo: &Repository, _root_path: &RepoPath) -> Result<Vec<DiscoveredUnit>> {
+        let mut pom_paths: Vec<RepoPathBuf> = Vec::new();
+        repo.scan_paths(|p| {
+            let (_, basename) = p.split_basename();
+            if basename.as_ref() == b"pom.xml" {
+                pom_paths.push(p.to_owned());
+            }
+            Ok(())
+        })?;
         if pom_paths.is_empty() {
             return Ok(Vec::new());
         }
@@ -138,14 +199,14 @@ impl FormatHandler for MavenLoader {
                 coord_to_idx.insert((gid.clone(), pom.artifact_id.clone()), idx);
             }
         }
-
         detect_parent_cycles(&parsed, &coord_to_idx)?;
 
         let mut resolved = Vec::with_capacity(parsed.len());
         for idx in 0..parsed.len() {
             let r = atry!(
                 resolve_pom(idx, &parsed, &coord_to_idx);
-                ["failed to resolve Maven coordinates for `{}`", parsed[idx].repo_path.escaped()]
+                ["failed to resolve Maven coordinates for `{}`",
+                 parsed[idx].repo_path.escaped()]
             );
             resolved.push(r);
         }

@@ -21,6 +21,7 @@ use crate::core::wire::known::Ecosystem;
 pub mod bundle;
 pub mod cascade;
 pub mod detector;
+pub mod discovery;
 pub mod resolver;
 pub mod shape;
 pub mod syntax;

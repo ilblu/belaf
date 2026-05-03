@@ -8,21 +8,16 @@
 
 use anyhow::anyhow;
 use cargo_metadata::MetadataCommand;
-use std::{
-    collections::HashMap,
-    fs::File,
-    io::Write,
-    path::{Path, PathBuf},
-};
+use std::{collections::HashMap, fs::File, io::Write, path::Path};
 use toml_edit::{DocumentMut, Item, Table};
 use tracing::info;
 
 use crate::core::{
     ecosystem::format_handler::{
-        is_path_inside_any, scan_index_for_filename, DiscoveredUnit, FormatHandler, RawInternalDep,
+        is_path_inside_any, DiscoveredUnit, FormatHandler, RawInternalDep, WorkspaceDiscoverer,
     },
     errors::Result,
-    git::repository::{ChangeList, RepoPathBuf, Repository},
+    git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
     release_unit::VersionFieldSpec,
     resolved_release_unit::{DepRequirement, ReleaseUnitId},
     rewriters::Rewriter,
@@ -96,101 +91,6 @@ impl CargoLoader {
             })],
             internal_deps: Vec::new(),
         }))
-    }
-
-    fn discover_workspaces_with_metadata(
-        &self,
-        repo: &Repository,
-        cargo_toml_paths: &[RepoPathBuf],
-    ) -> Result<Vec<(PathBuf, cargo_metadata::Metadata)>> {
-        let mut workspace_data = Vec::new();
-        let mut seen_packages = std::collections::HashSet::new();
-
-        for toml_repopath in cargo_toml_paths {
-            let toml_path = repo.resolve_workdir(toml_repopath);
-
-            if !toml_path.exists() {
-                continue;
-            }
-
-            let content = match read_config_file(&toml_path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-
-            let doc: DocumentMut = match content.parse() {
-                Ok(d) => d,
-                Err(_) => continue,
-            };
-
-            if doc.contains_key("workspace") {
-                let mut cmd = MetadataCommand::new();
-                cmd.manifest_path(&toml_path);
-                cmd.features(cargo_metadata::CargoOpt::AllFeatures);
-
-                let display_path = toml_path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|name| {
-                        toml_path
-                            .parent()
-                            .and_then(|p| p.file_name())
-                            .and_then(|p| p.to_str())
-                            .map(|parent| format!("{}/{}", parent, name))
-                            .unwrap_or_else(|| name.to_string())
-                    })
-                    .unwrap_or_else(|| "Cargo.toml".to_string());
-
-                let spinner = PhaseSpinner::new(format!("Loading {}", display_path));
-                let result = cmd.exec();
-                spinner.finish();
-
-                if let Ok(meta) = result {
-                    let mut has_new_packages = false;
-
-                    for pkg in &meta.workspace_packages() {
-                        let pkg_id = format!("{}:{}", pkg.name, pkg.version);
-                        if seen_packages.insert(pkg_id) {
-                            has_new_packages = true;
-                        }
-                    }
-
-                    if has_new_packages {
-                        workspace_data.push((toml_path.clone(), meta));
-                    }
-                }
-            }
-        }
-
-        if workspace_data.is_empty() && !cargo_toml_paths.is_empty() {
-            let first_toml = repo.resolve_workdir(&cargo_toml_paths[0]);
-            let mut cmd = MetadataCommand::new();
-            cmd.manifest_path(&first_toml);
-            cmd.features(cargo_metadata::CargoOpt::AllFeatures);
-
-            let display_path = first_toml
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|name| {
-                    first_toml
-                        .parent()
-                        .and_then(|p| p.file_name())
-                        .and_then(|p| p.to_str())
-                        .map(|parent| format!("{}/{}", parent, name))
-                        .unwrap_or_else(|| name.to_string())
-                })
-                .unwrap_or_else(|| "Cargo.toml".to_string());
-
-            let spinner = PhaseSpinner::new(format!("Loading {}", display_path));
-            let result = cmd.exec();
-            spinner.finish();
-
-            if let Ok(meta) = result {
-                workspace_data.push((first_toml, meta));
-            }
-        }
-
-        Ok(workspace_data)
     }
 
     fn is_workspace_project(&self, doc: &DocumentMut) -> bool {
@@ -424,8 +324,31 @@ impl FormatHandler for CargoLoader {
         "Rust (Cargo)"
     }
 
-    fn manifest_filename(&self) -> &'static str {
-        "Cargo.toml"
+    fn is_manifest_file(&self, path: &RepoPath) -> bool {
+        let (_, basename) = path.split_basename();
+        basename.as_ref() == b"Cargo.toml"
+    }
+
+    fn parse_version(&self, content: &str) -> Result<String> {
+        let doc: DocumentMut = content
+            .parse()
+            .map_err(|e| anyhow!("parse Cargo.toml: {e}"))?;
+        if let Some(pkg) = doc.get("package").and_then(|v| v.as_table()) {
+            if let Some(v) = pkg.get("version").and_then(|v| v.as_str()) {
+                return Ok(v.to_string());
+            }
+        }
+        if let Some(ws_pkg) = doc
+            .get("workspace")
+            .and_then(|v| v.as_table())
+            .and_then(|t| t.get("package"))
+            .and_then(|v| v.as_table())
+        {
+            if let Some(v) = ws_pkg.get("version").and_then(|v| v.as_str()) {
+                return Ok(v.to_string());
+            }
+        }
+        Err(anyhow!("no version field in Cargo.toml"))
     }
 
     fn default_version_field(&self) -> VersionFieldSpec {
@@ -440,90 +363,86 @@ impl FormatHandler for CargoLoader {
         Box::new(CargoRewriter::new(unit_id, manifest_path))
     }
 
-    fn discover_units(
+    fn discover_single(
         &self,
         repo: &Repository,
-        configured_skip_paths: &[RepoPathBuf],
-    ) -> Result<Vec<DiscoveredUnit>> {
-        let cargo_toml_paths = scan_index_for_filename(repo, "Cargo.toml", configured_skip_paths)?;
-        if cargo_toml_paths.is_empty() {
-            return Ok(Vec::new());
-        }
-
-        let workspace_data = self.discover_workspaces_with_metadata(repo, &cargo_toml_paths)?;
-
-        if workspace_data.is_empty() {
-            info!("no Cargo workspace roots found in repository");
-            // Bazel fallback: walk every Cargo.toml that wasn't covered.
-            return self.bazel_fallback_units(repo, &cargo_toml_paths, configured_skip_paths, &[]);
-        }
-
-        info!("found {} Cargo workspace root(s)", workspace_data.len());
-
-        let mut all_units: Vec<DiscoveredUnit> = Vec::new();
-        let mut all_pkgid_to_index: HashMap<cargo_metadata::PackageId, usize> = HashMap::new();
-
-        for (workspace_root, cargo_meta) in &workspace_data {
-            info!("loading Cargo workspace: {}", workspace_root.display());
-            let (units, pkgid_to_index) =
-                self.units_from_workspace(repo, cargo_meta, workspace_root, configured_skip_paths)?;
-            let offset = all_units.len();
-            all_units.extend(units);
-            for (pkg_id, idx) in pkgid_to_index {
-                all_pkgid_to_index.insert(pkg_id, offset + idx);
-            }
-        }
-
-        for (_, cargo_meta) in &workspace_data {
-            self.fill_internal_deps(repo, cargo_meta, &mut all_units, &all_pkgid_to_index)?;
-        }
-
-        // Bazel fallback for any Cargo.toml not covered by metadata.
-        let metadata_covered_manifests: std::collections::HashSet<PathBuf> = workspace_data
-            .iter()
-            .flat_map(|(_, meta)| {
-                meta.workspace_packages()
-                    .into_iter()
-                    .map(|p| p.manifest_path.clone().into_std_path_buf())
+        manifest_path: &RepoPath,
+    ) -> Result<DiscoveredUnit> {
+        self.direct_parse_unit(repo, &manifest_path.to_owned())?
+            .ok_or_else(|| {
+                anyhow!(
+                    "Cargo.toml `{}` has no [package] block (likely a virtual workspace root)",
+                    manifest_path.escaped()
+                )
             })
-            .collect();
-        let fallback_units = self.bazel_fallback_units(
-            repo,
-            &cargo_toml_paths,
-            configured_skip_paths,
-            &metadata_covered_manifests.into_iter().collect::<Vec<_>>(),
-        )?;
-        all_units.extend(fallback_units);
-
-        Ok(all_units)
     }
 }
 
-impl CargoLoader {
-    /// Direct-parse every Cargo.toml not covered by `cargo metadata`.
-    /// Inputs are pre-filtered against the skip-list.
-    fn bazel_fallback_units(
-        &self,
-        repo: &Repository,
-        cargo_toml_paths: &[RepoPathBuf],
-        skip_list: &[RepoPathBuf],
-        metadata_covered: &[PathBuf],
-    ) -> Result<Vec<DiscoveredUnit>> {
-        let covered_set: std::collections::HashSet<&PathBuf> = metadata_covered.iter().collect();
-        let mut out = Vec::new();
-        for toml_repopath in cargo_toml_paths {
-            if is_path_inside_any(toml_repopath, skip_list) {
-                continue;
-            }
-            let toml_abs = repo.resolve_workdir(toml_repopath);
-            if covered_set.contains(&toml_abs) {
-                continue;
-            }
-            if let Some(unit) = self.direct_parse_unit(repo, toml_repopath)? {
-                out.push(unit);
-            }
+/// Workspace walker for cargo: claims any Cargo.toml that has a
+/// `[workspace]` table; runs `cargo metadata` to enumerate every
+/// member crate; wires inter-member deps via the resolve graph.
+#[derive(Debug, Default)]
+pub struct CargoWorkspaceDiscoverer;
+
+impl WorkspaceDiscoverer for CargoWorkspaceDiscoverer {
+    fn name(&self) -> &'static str {
+        "cargo"
+    }
+
+    fn claims(&self, repo: &Repository, manifest_path: &RepoPath) -> bool {
+        let (_, basename) = manifest_path.split_basename();
+        if basename.as_ref() != b"Cargo.toml" {
+            return false;
         }
-        Ok(out)
+        let abs = repo.resolve_workdir(manifest_path);
+        let Ok(content) = read_config_file(&abs) else {
+            return false;
+        };
+        let Ok(doc) = content.parse::<DocumentMut>() else {
+            return false;
+        };
+        doc.contains_key("workspace")
+    }
+
+    fn discover(&self, repo: &Repository, root_path: &RepoPath) -> Result<Vec<DiscoveredUnit>> {
+        let workspace_root = repo.resolve_workdir(root_path);
+        let mut cmd = MetadataCommand::new();
+        cmd.manifest_path(&workspace_root);
+        cmd.features(cargo_metadata::CargoOpt::AllFeatures);
+
+        let display_path = workspace_root
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(|name| {
+                workspace_root
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .and_then(|p| p.to_str())
+                    .map(|parent| format!("{}/{}", parent, name))
+                    .unwrap_or_else(|| name.to_string())
+            })
+            .unwrap_or_else(|| "Cargo.toml".to_string());
+
+        let spinner = PhaseSpinner::new(format!("Loading {}", display_path));
+        let meta_result = cmd.exec();
+        spinner.finish();
+
+        let meta = match meta_result {
+            Ok(m) => m,
+            Err(e) => {
+                info!(
+                    "cargo metadata failed for {}: {e}",
+                    workspace_root.display()
+                );
+                return Ok(Vec::new());
+            }
+        };
+
+        let loader = CargoLoader;
+        let (mut units, pkgid_to_index) =
+            loader.units_from_workspace(repo, &meta, &workspace_root, &[])?;
+        loader.fill_internal_deps(repo, &meta, &mut units, &pkgid_to_index)?;
+        Ok(units)
     }
 }
 

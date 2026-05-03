@@ -5,7 +5,7 @@
 //!
 //! We currently "manually" update `Properties/AssemblyInfo.cs`.
 
-use anyhow::bail;
+use anyhow::{anyhow, bail};
 use quick_xml::{events::Event, Reader};
 use std::{
     collections::HashMap,
@@ -17,11 +17,9 @@ use tracing::{info, warn};
 use crate::{
     a_ok_or, atry,
     core::{
-        ecosystem::format_handler::{
-            is_path_inside_any, DiscoveredUnit, FormatHandler, RawInternalDep,
-        },
+        ecosystem::format_handler::{DiscoveredUnit, FormatHandler, RawInternalDep},
         errors::Result,
-        git::repository::{ChangeList, RepoPathBuf, Repository},
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
         release_unit::VersionFieldSpec,
         resolved_release_unit::{DepRequirement, ReleaseUnitId},
         rewriters::Rewriter,
@@ -40,37 +38,6 @@ struct DirData {
 }
 
 impl CsProjLoader {
-    /// Walk the git index and build the per-directory map of
-    /// `.csproj` + `AssemblyInfo.cs`, plus a flat `.vdproj` list.
-    fn collect_paths(
-        &self,
-        repo: &Repository,
-        configured_skip_paths: &[RepoPathBuf],
-    ) -> Result<(HashMap<RepoPathBuf, DirData>, Vec<RepoPathBuf>)> {
-        let mut dirs_of_interest: HashMap<RepoPathBuf, DirData> = HashMap::new();
-        let mut vdproj_files: Vec<RepoPathBuf> = Vec::new();
-
-        repo.scan_paths(|p| {
-            if is_path_inside_any(p, configured_skip_paths) {
-                return Ok(());
-            }
-            let (dirname, basename) = p.split_basename();
-            if basename.ends_with(b".csproj") {
-                let e = dirs_of_interest.entry(dirname.to_owned()).or_default();
-                e.csproj = Some(p.to_owned());
-            } else if basename.as_ref() == b"AssemblyInfo.cs" {
-                let (parent_dir, _) = dirname.pop_sep().split_basename();
-                let e = dirs_of_interest.entry(parent_dir.to_owned()).or_default();
-                e.assembly_info = Some(p.to_owned());
-            } else if basename.ends_with(b".vdproj") {
-                vdproj_files.push(p.to_owned());
-            }
-            Ok(())
-        })?;
-
-        Ok((dirs_of_interest, vdproj_files))
-    }
-
     fn build_units(
         &self,
         repo: &Repository,
@@ -455,15 +422,22 @@ impl FormatHandler for CsProjLoader {
         "C# (.NET)"
     }
 
-    fn manifest_filename(&self) -> &'static str {
-        "*.csproj"
+    fn is_manifest_file(&self, path: &RepoPath) -> bool {
+        let (_, basename) = path.split_basename();
+        basename.ends_with(b".csproj")
+    }
+
+    fn parse_version(&self, content: &str) -> Result<String> {
+        // .csproj rarely carries the actual version — that's in
+        // AssemblyInfo.cs. Best-effort extract `<Version>` if present.
+        let re = regex::Regex::new(r"<Version>([^<]+)</Version>").unwrap();
+        re.captures(content)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+            .ok_or_else(|| anyhow!("no <Version> in .csproj"))
     }
 
     fn default_version_field(&self) -> VersionFieldSpec {
-        // C# version actually lives in AssemblyInfo.cs; the manifest
-        // path returned for a discovered unit is the .csproj. Rewriting
-        // is handled by the AssemblyInfoCsRewriter, not via the
-        // version_field dispatcher — this placeholder is unused.
         VersionFieldSpec::GenericRegex {
             pattern: r#"\[assembly:\s*AssemblyVersion\("([^"]+)"\)\]"#.to_string(),
             replace: r#"[assembly: AssemblyVersion("{version}")]"#.to_string(),
@@ -479,21 +453,41 @@ impl FormatHandler for CsProjLoader {
         unit_id: ReleaseUnitId,
         manifest_path: RepoPathBuf,
     ) -> Box<dyn Rewriter> {
-        // Configured-RU path: caller passes the AssemblyInfo.cs as the
-        // manifest_path (the csproj+AssemblyInfo coupling is auto-only).
         Box::new(AssemblyInfoCsRewriter::new(unit_id, manifest_path))
     }
 
-    fn discover_units(
+    fn discover_single(
         &self,
         repo: &Repository,
-        configured_skip_paths: &[RepoPathBuf],
-    ) -> Result<Vec<DiscoveredUnit>> {
-        let (dirs_of_interest, vdproj_files) = self.collect_paths(repo, configured_skip_paths)?;
-        if dirs_of_interest.is_empty() && vdproj_files.is_empty() {
-            return Ok(Vec::new());
-        }
-        self.build_units(repo, dirs_of_interest, vdproj_files)
+        manifest_path: &RepoPath,
+    ) -> Result<DiscoveredUnit> {
+        // .csproj on its own — pull in the matching AssemblyInfo.cs
+        // and any sibling .vdproj via the existing per-directory walker
+        // restricted to this manifest's parent.
+        let (dirname, _) = manifest_path.split_basename();
+        let mut dirs_of_interest: HashMap<RepoPathBuf, super::csproj::DirData> = HashMap::new();
+        let mut props_dir = dirname.to_owned();
+        props_dir.push("Properties/AssemblyInfo.cs");
+        let assembly_info = if repo.resolve_workdir(&props_dir).exists() {
+            Some(props_dir)
+        } else {
+            None
+        };
+        dirs_of_interest.insert(
+            dirname.to_owned(),
+            super::csproj::DirData {
+                csproj: Some(manifest_path.to_owned()),
+                assembly_info,
+            },
+        );
+
+        let mut units = self.build_units(repo, dirs_of_interest, Vec::new())?;
+        units.pop().ok_or_else(|| {
+            anyhow!(
+                "csproj discovery for `{}` produced no unit",
+                manifest_path.escaped()
+            )
+        })
     }
 }
 

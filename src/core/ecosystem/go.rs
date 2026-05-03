@@ -8,9 +8,9 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
     core::{
-        ecosystem::format_handler::{scan_index_for_filename, DiscoveredUnit, FormatHandler},
+        ecosystem::format_handler::{DiscoveredUnit, FormatHandler},
         errors::Result,
-        git::repository::{ChangeList, RepoPathBuf, Repository},
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
         release_unit::VersionFieldSpec,
         resolved_release_unit::ReleaseUnitId,
         rewriters::Rewriter,
@@ -22,6 +22,16 @@ use crate::{
 #[derive(Debug, Default)]
 pub struct GoLoader;
 
+fn extract_module_name(content: &str) -> Option<String> {
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if let Some(stripped) = trimmed.strip_prefix("module ") {
+            return Some(stripped.trim().to_string());
+        }
+    }
+    None
+}
+
 impl FormatHandler for GoLoader {
     fn name(&self) -> &'static str {
         "go"
@@ -31,16 +41,17 @@ impl FormatHandler for GoLoader {
         "Go"
     }
 
-    fn manifest_filename(&self) -> &'static str {
-        "go.mod"
+    fn is_manifest_file(&self, path: &RepoPath) -> bool {
+        let (_, basename) = path.split_basename();
+        basename.as_ref() == b"go.mod"
+    }
+
+    fn parse_version(&self, _content: &str) -> Result<String> {
+        // Go releases are tag-driven; go.mod has no release version.
+        Ok("0.0.0".to_string())
     }
 
     fn default_version_field(&self) -> VersionFieldSpec {
-        // go.mod doesn't carry the project's release version; the
-        // canonical "version" lives in the git tag (`v1.2.3`). We
-        // expose a `GenericRegex` placeholder so the
-        // `version_field::read/write` dispatch doesn't panic, but it
-        // is not normally exercised — Go releases are tag-driven.
         VersionFieldSpec::GenericRegex {
             pattern: r"^module\s+(.+?)\s*$".to_string(),
             replace: "module {version}".to_string(),
@@ -63,58 +74,44 @@ impl FormatHandler for GoLoader {
         Box::new(GoModRewriter::new(unit_id, manifest_path))
     }
 
-    fn discover_units(
+    fn discover_single(
         &self,
         repo: &Repository,
-        configured_skip_paths: &[RepoPathBuf],
-    ) -> Result<Vec<DiscoveredUnit>> {
-        let go_mod_paths = scan_index_for_filename(repo, "go.mod", configured_skip_paths)?;
-        let mut units = Vec::new();
-
-        for go_mod_path in go_mod_paths {
-            let (prefix, _) = go_mod_path.split_basename();
-            let fs_path = repo.resolve_workdir(&go_mod_path);
-
-            let f = atry!(
-                File::open(&fs_path);
-                ["failed to open go.mod file `{}`", fs_path.display()]
-            );
-            atry!(
-                check_file_size(&f, &fs_path);
-                ["file size check failed for `{}`", fs_path.display()]
-            );
-            let reader = BufReader::new(f);
-            let mut module_name = None;
-
-            for line_result in reader.lines() {
-                let line = line_result?;
-                let trimmed = line.trim();
-
-                if let Some(stripped) = trimmed.strip_prefix("module ") {
-                    module_name = Some(stripped.trim().to_string());
-                    break;
-                }
-            }
-
-            let module_name = atry!(
-                module_name.ok_or_else(|| anyhow!("no module declaration found"));
-                ["failed to parse module name from `{}`", fs_path.display()]
-            );
-
-            let manifest = go_mod_path.clone();
-            units.push(DiscoveredUnit {
-                qnames: vec![module_name, "go".to_owned()],
-                version: Version::Semver(semver::Version::new(0, 0, 0)),
-                prefix: prefix.to_owned(),
-                anchor_manifest: go_mod_path,
-                rewriter_factories: vec![Box::new(move |id| {
-                    Box::new(GoModRewriter::new(id, manifest))
-                })],
-                internal_deps: Vec::new(),
-            });
+        manifest_path: &RepoPath,
+    ) -> Result<DiscoveredUnit> {
+        let fs_path = repo.resolve_workdir(manifest_path);
+        let f = atry!(
+            File::open(&fs_path);
+            ["failed to open go.mod file `{}`", fs_path.display()]
+        );
+        atry!(
+            check_file_size(&f, &fs_path);
+            ["file size check failed for `{}`", fs_path.display()]
+        );
+        let reader = BufReader::new(f);
+        let mut content = String::new();
+        for line_result in reader.lines() {
+            content.push_str(&line_result?);
+            content.push('\n');
         }
+        let module_name = atry!(
+            extract_module_name(&content).ok_or_else(|| anyhow!("no module declaration found"));
+            ["failed to parse module name from `{}`", fs_path.display()]
+        );
 
-        Ok(units)
+        let (prefix, _) = manifest_path.split_basename();
+        let manifest = manifest_path.to_owned();
+        let manifest_for_rw = manifest.clone();
+        Ok(DiscoveredUnit {
+            qnames: vec![module_name, "go".to_owned()],
+            version: Version::Semver(semver::Version::new(0, 0, 0)),
+            prefix: prefix.to_owned(),
+            anchor_manifest: manifest,
+            rewriter_factories: vec![Box::new(move |id| {
+                Box::new(GoModRewriter::new(id, manifest_for_rw))
+            })],
+            internal_deps: Vec::new(),
+        })
     }
 }
 

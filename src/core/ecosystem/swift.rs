@@ -12,9 +12,9 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
     core::{
-        ecosystem::format_handler::{scan_index_for_filename, DiscoveredUnit, FormatHandler},
+        ecosystem::format_handler::{DiscoveredUnit, FormatHandler},
         errors::Result,
-        git::repository::{ChangeList, RepoPathBuf, Repository},
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
         release_unit::VersionFieldSpec,
         resolved_release_unit::ReleaseUnitId,
         rewriters::Rewriter,
@@ -48,13 +48,17 @@ impl FormatHandler for SwiftLoader {
         "Swift"
     }
 
-    fn manifest_filename(&self) -> &'static str {
-        "Package.swift"
+    fn is_manifest_file(&self, path: &RepoPath) -> bool {
+        let (_, basename) = path.split_basename();
+        basename.as_ref() == b"Package.swift"
+    }
+
+    fn parse_version(&self, _content: &str) -> Result<String> {
+        // Swift releases are git-tag-driven.
+        Ok("0.0.0".to_string())
     }
 
     fn default_version_field(&self) -> VersionFieldSpec {
-        // Swift releases are git-tag-driven; no in-file version. The
-        // placeholder spec is never normally read.
         VersionFieldSpec::GenericRegex {
             pattern: r"//\s*belaf-version\s*=\s*(.+)".to_string(),
             replace: "// belaf-version = {version}".to_string(),
@@ -69,53 +73,42 @@ impl FormatHandler for SwiftLoader {
         Box::new(SwiftNoOpRewriter)
     }
 
-    fn discover_units(
+    fn discover_single(
         &self,
         repo: &Repository,
-        configured_skip_paths: &[RepoPathBuf],
-    ) -> Result<Vec<DiscoveredUnit>> {
-        let paths = scan_index_for_filename(repo, "Package.swift", configured_skip_paths)?;
-        let mut units = Vec::new();
-
-        for package_swift_path in paths {
-            let (prefix, _) = package_swift_path.split_basename();
-            let fs_path = repo.resolve_workdir(&package_swift_path);
-
-            let f = atry!(
-                File::open(&fs_path);
-                ["failed to open Package.swift file `{}`", fs_path.display()]
-            );
-            atry!(
-                check_file_size(&f, &fs_path);
-                ["file size check failed for `{}`", fs_path.display()]
-            );
-            let reader = BufReader::new(f);
-            let mut package_name = None;
-
-            for line_result in reader.lines() {
-                let line = line_result?;
-                if let Some(name) = extract_package_name(&line) {
-                    package_name = Some(name);
-                    break;
-                }
+        manifest_path: &RepoPath,
+    ) -> Result<DiscoveredUnit> {
+        let fs_path = repo.resolve_workdir(manifest_path);
+        let f = atry!(
+            File::open(&fs_path);
+            ["failed to open Package.swift file `{}`", fs_path.display()]
+        );
+        atry!(
+            check_file_size(&f, &fs_path);
+            ["file size check failed for `{}`", fs_path.display()]
+        );
+        let reader = BufReader::new(f);
+        let mut package_name = None;
+        for line_result in reader.lines() {
+            let line = line_result?;
+            if let Some(name) = extract_package_name(&line) {
+                package_name = Some(name);
+                break;
             }
-
-            let package_name = atry!(
-                package_name.ok_or_else(|| anyhow!("no package name declaration found"));
-                ["failed to parse package name from `{}`", fs_path.display()]
-            );
-
-            units.push(DiscoveredUnit {
-                qnames: vec![package_name, "swift".to_owned()],
-                version: Version::Semver(semver::Version::new(0, 0, 0)),
-                prefix: prefix.to_owned(),
-                anchor_manifest: package_swift_path,
-                rewriter_factories: vec![Box::new(|_id| Box::new(SwiftNoOpRewriter))],
-                internal_deps: Vec::new(),
-            });
         }
-
-        Ok(units)
+        let package_name = atry!(
+            package_name.ok_or_else(|| anyhow!("no package name declaration found"));
+            ["failed to parse package name from `{}`", fs_path.display()]
+        );
+        let (prefix, _) = manifest_path.split_basename();
+        Ok(DiscoveredUnit {
+            qnames: vec![package_name, "swift".to_owned()],
+            version: Version::Semver(semver::Version::new(0, 0, 0)),
+            prefix: prefix.to_owned(),
+            anchor_manifest: manifest_path.to_owned(),
+            rewriter_factories: vec![Box::new(|_id| Box::new(SwiftNoOpRewriter))],
+            internal_deps: Vec::new(),
+        })
     }
 }
 

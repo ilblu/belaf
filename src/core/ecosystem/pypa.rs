@@ -20,11 +20,9 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     a_ok_or, atry,
     core::{
-        ecosystem::format_handler::{
-            is_path_inside_any, DiscoveredUnit, FormatHandler, RawInternalDep,
-        },
+        ecosystem::format_handler::{DiscoveredUnit, FormatHandler, RawInternalDep},
         errors::{Error, Result},
-        git::repository::{ChangeList, RepoPathBuf, Repository},
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
         release_unit::VersionFieldSpec,
         resolved_release_unit::{DepRequirement, ReleaseUnitId},
         rewriters::Rewriter,
@@ -45,26 +43,6 @@ struct PypaProjectInfo {
 }
 
 impl PypaLoader {
-    fn collect_dirs(
-        &self,
-        repo: &Repository,
-        configured_skip_paths: &[RepoPathBuf],
-    ) -> Result<HashSet<RepoPathBuf>> {
-        let mut dirs: HashSet<RepoPathBuf> = HashSet::new();
-        repo.scan_paths(|p| {
-            if is_path_inside_any(p, configured_skip_paths) {
-                return Ok(());
-            }
-            let (dirname, basename) = p.split_basename();
-            let b = basename.as_ref();
-            if b == b"setup.py" || b == b"setup.cfg" || b == b"pyproject.toml" {
-                dirs.insert(dirname.to_owned());
-            }
-            Ok(())
-        })?;
-        Ok(dirs)
-    }
-
     fn build_units(
         &self,
         repo: &Repository,
@@ -456,8 +434,29 @@ impl FormatHandler for PypaLoader {
         "Python (PyPA)"
     }
 
-    fn manifest_filename(&self) -> &'static str {
-        "pyproject.toml"
+    fn is_manifest_file(&self, path: &RepoPath) -> bool {
+        let (_, basename) = path.split_basename();
+        let b = basename.as_ref();
+        b == b"pyproject.toml" || b == b"setup.py" || b == b"setup.cfg"
+    }
+
+    fn parse_version(&self, content: &str) -> Result<String> {
+        // Best-effort: parse as PEP 621 pyproject.toml first.
+        if let Ok(parsed) = toml::from_str::<PyProjectFile>(content) {
+            if let Some(v) = parsed.project_version() {
+                return Ok(v.to_string());
+            }
+        }
+        // setup.cfg fallback.
+        let mut cfg = configparser::ini::Ini::new();
+        if cfg.read(content.to_string()).is_ok() {
+            if let Some(v) = cfg.get("metadata", "version") {
+                return Ok(v);
+            }
+        }
+        Err(anyhow!(
+            "no `[project] version` (PEP 621) or `[metadata] version` (setup.cfg) found"
+        ))
     }
 
     fn tag_format_default(&self) -> &'static str {
@@ -465,11 +464,6 @@ impl FormatHandler for PypaLoader {
     }
 
     fn default_version_field(&self) -> VersionFieldSpec {
-        // Multiple in-file shapes (PEP 621 in pyproject.toml, plus
-        // `__version__ = "..."` in Python source files). The actual
-        // dispatch happens via the `PythonRewriter` /
-        // `PyProjectVersionRewriter`; this regex is a fallback for
-        // configured-RU paths that point at a `pyproject.toml`.
         VersionFieldSpec::GenericRegex {
             pattern: r#"version\s*=\s*"([^"]+)""#.to_string(),
             replace: r#"version = "{version}""#.to_string(),
@@ -481,24 +475,24 @@ impl FormatHandler for PypaLoader {
         unit_id: ReleaseUnitId,
         manifest_path: RepoPathBuf,
     ) -> Box<dyn Rewriter> {
-        // Configured-RU path: caller decides whether the manifest is
-        // a `pyproject.toml` or a `.py` annotated file. We default to
-        // PyProjectVersionRewriter since `pyproject.toml` is the
-        // ecosystem's canonical filename; callers wanting Python-file
-        // rewriting should configure `version_field = "generic_regex"`.
         Box::new(PyProjectVersionRewriter::new(unit_id, manifest_path))
     }
 
-    fn discover_units(
+    fn discover_single(
         &self,
         repo: &Repository,
-        configured_skip_paths: &[RepoPathBuf],
-    ) -> Result<Vec<DiscoveredUnit>> {
-        let dirs = self.collect_dirs(repo, configured_skip_paths)?;
-        if dirs.is_empty() {
-            return Ok(Vec::new());
-        }
-        self.build_units(repo, dirs)
+        manifest_path: &RepoPath,
+    ) -> Result<DiscoveredUnit> {
+        let (dirname, _) = manifest_path.split_basename();
+        let mut dirs: HashSet<RepoPathBuf> = HashSet::new();
+        dirs.insert(dirname.to_owned());
+        let mut units = self.build_units(repo, dirs)?;
+        units.pop().ok_or_else(|| {
+            anyhow!(
+                "PyPA discovery for `{}` produced no unit",
+                manifest_path.escaped()
+            )
+        })
     }
 }
 

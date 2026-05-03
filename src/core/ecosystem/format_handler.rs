@@ -1,20 +1,23 @@
-//! `FormatHandler` trait: per-language file-format handler +
-//! workspace discoverer.
+//! `FormatHandler` and `WorkspaceDiscoverer` traits — the pull-API
+//! that replaced the legacy `Ecosystem` push-API.
 //!
-//! Three responsibilities, kept separate:
+//! Three responsibilities, three places:
 //!
-//! - **File-format I/O** lives in [`crate::core::version_field`]
-//!   (free-function dispatch keyed off `VersionFieldSpec`).
-//! - **Workspace discovery** is the handler's job: walk the repo
-//!   and emit [`DiscoveredUnit`] records for every manifest not
-//!   already claimed by a `[release_unit.X]` config block.
-//! - **Graph construction** is the session's job. The
-//!   [`AppBuilder`] consumes both configured
-//!   `release_unit::ResolvedReleaseUnit`s (from the resolver) and
-//!   discovered `DiscoveredUnit`s, and feeds both into the graph
-//!   builder. Handlers stay stateless.
+//! - [`FormatHandler`] — file-format I/O for one canonical manifest.
+//!   Decides whether a path *is* one of "its" manifests
+//!   ([`FormatHandler::is_manifest_file`]), parses a version out of
+//!   that file's content ([`FormatHandler::parse_version`]), and
+//!   builds a [`Rewriter`] for releasing it.
 //!
-//! [`AppBuilder`]: crate::core::session::AppBuilder
+//! - [`WorkspaceDiscoverer`] — multi-package discovery for ecosystems
+//!   that have a workspace concept (cargo metadata, npm `workspaces`
+//!   field, maven `<modules>`). Single-package ecosystems
+//!   (go/swift/elixir/pypa/csproj) don't implement this.
+//!
+//! - [`crate::core::release_unit::discovery`] — the orchestrator. Walks
+//!   the repo, dispatches each manifest path to a `WorkspaceDiscoverer`
+//!   if one claims it, otherwise to the matching `FormatHandler`'s
+//!   default single-file discovery.
 
 use crate::core::{
     errors::Result,
@@ -25,10 +28,11 @@ use crate::core::{
     version::Version,
 };
 
-/// Per-language file-format handler + workspace discoverer.
-///
-/// Stateless. A fresh handler per session is fine; loaders no longer
-/// accumulate per-scan state.
+// ---------------------------------------------------------------------------
+// FormatHandler — file-format I/O.
+// ---------------------------------------------------------------------------
+
+/// Per-ecosystem file-format handler. Stateless.
 pub trait FormatHandler: Send + Sync + std::fmt::Debug {
     /// Stable wire-format name (e.g. `"cargo"`, `"npm"`). Must match
     /// the string used as `qualified_names()[1]` and as the
@@ -38,13 +42,21 @@ pub trait FormatHandler: Send + Sync + std::fmt::Debug {
     /// Human-facing label for CLI / PR-body output.
     fn display_name(&self) -> &'static str;
 
-    /// Canonical manifest filename for this ecosystem (e.g.
-    /// `"Cargo.toml"`, `"package.json"`).
-    fn manifest_filename(&self) -> &'static str;
+    /// True if `path` is one of the canonical manifest files this
+    /// handler claims responsibility for. Used by the repo-walking
+    /// orchestrator to dispatch each scanned path to at most one
+    /// handler.
+    fn is_manifest_file(&self, path: &RepoPath) -> bool;
 
-    /// The `VersionFieldSpec` that maps to this ecosystem's canonical
-    /// manifest. Used by configured-RU initialization to read the
-    /// initial version.
+    /// Extract the version string from one canonical manifest's
+    /// content. Pure: no Repo coupling, no I/O. Drives both single-
+    /// file discovery and the configured-RU initial-version read.
+    fn parse_version(&self, content: &str) -> Result<String>;
+
+    /// The [`VersionFieldSpec`] whose `read`/`write` round-trip
+    /// matches this handler's canonical manifest. Configured
+    /// `[release_unit.X]` blocks fall back to this when no per-
+    /// manifest `version_field` is declared.
     fn default_version_field(&self) -> VersionFieldSpec;
 
     /// Default tag template for releases in this ecosystem.
@@ -58,68 +70,79 @@ pub trait FormatHandler: Send + Sync + std::fmt::Debug {
         &["name", "version", "ecosystem"]
     }
 
-    /// Construct a `Rewriter` that updates the manifest at
-    /// `manifest_path` when the unit at `unit_id` is bumped.
-    /// Override for ecosystems that also rewrite internal-dep
-    /// version requirements (cargo, npm).
+    /// Construct a [`Rewriter`] that updates `manifest_path` when
+    /// the unit at `unit_id` is bumped. Override for ecosystems that
+    /// also need to rewrite internal-dep version requirements (cargo,
+    /// npm) or coordinate satellite files.
     fn make_rewriter(
         &self,
         unit_id: ReleaseUnitId,
         manifest_path: RepoPathBuf,
     ) -> Box<dyn Rewriter>;
 
-    /// Walk the repo for unconfigured units of this ecosystem.
-    ///
-    /// `configured_skip_paths` is a list of repo-relative directory
-    /// paths already claimed by `[release_unit.X]` blocks (their
-    /// manifest parents + satellites). Implementations must skip any
-    /// manifest at-or-inside one of those paths.
-    ///
-    /// Workspace-aware ecosystems (cargo via `cargo metadata`, npm
-    /// via `package.json` workspaces) override this to walk natively.
-    /// Single-manifest ecosystems can use the default scan via
-    /// [`scan_index_for_filename`].
-    fn discover_units(
+    /// Build a [`DiscoveredUnit`] for one canonical manifest in
+    /// single-package mode (no workspace context). Each loader
+    /// implements this so they can wire up their concrete `Rewriter`
+    /// type and any satellite files (pypa `annotated_files`, csproj
+    /// `AssemblyInfo.cs`); the default-impl-with-closure-capturing-
+    /// `&self` route runs into trait-object lifetime issues that
+    /// aren't worth the boilerplate savings.
+    fn discover_single(
         &self,
         repo: &Repository,
-        configured_skip_paths: &[RepoPathBuf],
-    ) -> Result<Vec<DiscoveredUnit>>;
+        manifest_path: &RepoPath,
+    ) -> Result<DiscoveredUnit>;
 }
 
+// ---------------------------------------------------------------------------
+// WorkspaceDiscoverer — multi-package walks. Only cargo/npm/maven.
+// ---------------------------------------------------------------------------
+
+/// Per-ecosystem workspace walker. Implementers are the three
+/// ecosystems with native workspace protocols: cargo (metadata),
+/// npm (`workspaces` field), maven (`<modules>`). Stateless.
+pub trait WorkspaceDiscoverer: Send + Sync + std::fmt::Debug {
+    /// Discoverer's stable label for diagnostics.
+    fn name(&self) -> &'static str;
+
+    /// True if `manifest_path` is the *root* of a workspace this
+    /// discoverer recognises. Implementations may need to read the
+    /// file's content to decide (`Cargo.toml` with a `[workspace]`
+    /// table, `package.json` with a `workspaces` field).
+    fn claims(&self, repo: &Repository, manifest_path: &RepoPath) -> bool;
+
+    /// Discover every unit reachable from `root_path`. Returns the
+    /// full set including the root if it's itself a unit.
+    fn discover(&self, repo: &Repository, root_path: &RepoPath) -> Result<Vec<DiscoveredUnit>>;
+}
+
+// ---------------------------------------------------------------------------
+// DiscoveredUnit — what discovery emits, before graph IDs are assigned.
+// ---------------------------------------------------------------------------
+
 /// Build a [`Rewriter`] for a unit once its `ReleaseUnitId` is known.
-///
-/// `discover_units` doesn't have IDs yet (they're assigned by
-/// `ReleaseUnitGraphBuilder::add_project`), so each unit carries one
-/// or more closures that produce rewriters at registration time.
 pub type RewriterFactory = Box<dyn FnOnce(ReleaseUnitId) -> Box<dyn Rewriter> + Send>;
 
-/// A unit discovered by a [`FormatHandler`]. Carries everything the
-/// session's [`AppBuilder`] needs to register the unit in the graph.
-///
-/// [`AppBuilder`]: crate::core::session::AppBuilder
 pub struct DiscoveredUnit {
     /// Qualified names; `qnames[0]` is the package-manager-native
     /// name, `qnames[1]` is the ecosystem (must equal the
-    /// FormatHandler's `name()`), additional entries help disambiguate
-    /// monorepo collisions.
+    /// `FormatHandler::name()`).
     pub qnames: Vec<String>,
     /// Current version read from the manifest.
     pub version: Version,
-    /// The directory `qnames[0]` lives in (parent of
-    /// `anchor_manifest`). Empty for repo-root manifests.
+    /// The directory the unit lives in (parent of `anchor_manifest`).
     pub prefix: RepoPathBuf,
-    /// The canonical manifest path. Used for tag-format precedence
-    /// and as the entry surfaced in CLI output. Bundles with multiple
-    /// manifests still declare one anchor.
+    /// The canonical manifest path (the file `is_manifest_file`
+    /// matched). Used for tag-format precedence.
     pub anchor_manifest: RepoPathBuf,
     /// Closures that produce the unit's rewriters once its
-    /// `ReleaseUnitId` is known. PyPA units typically have multiple
-    /// (e.g. `pyproject.toml` + several `# belaf project-version`
-    /// annotated `.py` files); single-file ecosystems have one.
+    /// `ReleaseUnitId` is known. Multi-rewriter cases (pypa
+    /// `annotated_files`, csproj `AssemblyInfo.cs`, multi-manifest
+    /// bundles) push more than one.
     pub rewriter_factories: Vec<RewriterFactory>,
-    /// Internal-dependency edges this unit declares, expressed as
-    /// "this unit depends on the package called X". Resolved against
-    /// the global name-to-id map at `complete_loading` time.
+    /// Internal-dependency edges this unit declares. The graph
+    /// builder resolves `target_package_name` against the global
+    /// name-to-id map after every unit is registered.
     pub internal_deps: Vec<RawInternalDep>,
 }
 
@@ -136,44 +159,16 @@ impl std::fmt::Debug for DiscoveredUnit {
     }
 }
 
-/// A pre-resolution internal dependency. The graph builder turns
-/// `target_package_name` into a `ReleaseUnitId` after every unit is
-/// in the builder.
 #[derive(Debug, Clone)]
 pub struct RawInternalDep {
-    /// Package-manager-native name of the target unit (matches some
-    /// other [`DiscoveredUnit::qnames`]`[0]`).
     pub target_package_name: String,
-    /// The textual version requirement as declared in this unit's
-    /// manifest (e.g. `"^1.2"` for npm, `"1.2"` for cargo).
     pub literal: String,
-    /// belaf's logical requirement (commit ID, manual override, …).
-    /// See [`DepRequirement`].
     pub requirement: DepRequirement,
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Helper for single-manifest FormatHandlers (no workspace concept):
-/// walks the git index, returns every path whose basename matches
-/// `manifest_filename` and isn't inside any `skip_paths` entry.
-pub fn scan_index_for_filename(
-    repo: &Repository,
-    manifest_filename: &str,
-    skip_paths: &[RepoPathBuf],
-) -> Result<Vec<RepoPathBuf>> {
-    let mut out = Vec::new();
-    repo.scan_paths(|p| {
-        let (_dirname, basename) = p.split_basename();
-        if basename.as_ref() == manifest_filename.as_bytes() && !is_path_inside_any(p, skip_paths) {
-            out.push(p.to_owned());
-        }
-        Ok(())
-    })?;
-    Ok(out)
-}
 
 /// Returns `true` if `path` equals or is inside (strict child of)
 /// any path in `skip_list`.
@@ -194,12 +189,27 @@ pub fn is_path_inside_any(path: &RepoPath, skip_list: &[RepoPathBuf]) -> bool {
     })
 }
 
+/// Parse a version string with the right type for an ecosystem
+/// (PEP 440 for pypa, semver for the rest).
+pub fn parse_version_string(version_str: &str, ecosystem_name: &str) -> Result<Version> {
+    let trimmed = version_str.trim();
+    if ecosystem_name == "pypa" {
+        Ok(Version::Pep440(
+            trimmed
+                .parse()
+                .map_err(|e| anyhow::anyhow!("not PEP 440: {e}"))?,
+        ))
+    } else {
+        Ok(Version::Semver(
+            semver::Version::parse(trimmed).map_err(|e| anyhow::anyhow!("not semver: {e}"))?,
+        ))
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Registry
+// Registries.
 // ---------------------------------------------------------------------------
 
-/// Owning collection of [`FormatHandler`] implementations. Stateless
-/// after construction.
 #[derive(Debug, Default)]
 pub struct FormatHandlerRegistry {
     handlers: Vec<Box<dyn FormatHandler>>,
@@ -210,7 +220,6 @@ impl FormatHandlerRegistry {
         Self::default()
     }
 
-    /// Build a registry with every ecosystem belaf ships with.
     pub fn with_defaults() -> Self {
         let mut r = Self::new();
         r.register(Box::new(super::cargo::CargoLoader));
@@ -240,29 +249,45 @@ impl FormatHandlerRegistry {
             .map(|h| h.as_ref())
     }
 
+    /// Find the handler that claims `path` via
+    /// [`FormatHandler::is_manifest_file`]. First-match wins; if
+    /// multiple handlers could claim the same path the registration
+    /// order in `with_defaults` decides.
+    pub fn handler_for(&self, path: &RepoPath) -> Option<&dyn FormatHandler> {
+        self.handlers
+            .iter()
+            .find(|h| h.is_manifest_file(path))
+            .map(|h| h.as_ref())
+    }
+
     pub fn handlers(&self) -> impl Iterator<Item = &dyn FormatHandler> {
         self.handlers.iter().map(|h| h.as_ref())
     }
 }
 
-// ---------------------------------------------------------------------------
-// discover_implicit_release_units — the new auto-discovery entry point.
-// ---------------------------------------------------------------------------
+#[derive(Debug, Default)]
+pub struct WorkspaceDiscovererRegistry {
+    discoverers: Vec<Box<dyn WorkspaceDiscoverer>>,
+}
 
-/// Walk the repo for every unconfigured manifest of every registered
-/// ecosystem. Skips paths covered by configured `[release_unit.X]`
-/// blocks (passed via `configured_skip_paths`).
-///
-/// Each ecosystem's `discover_units` is called once. The returned
-/// `Vec<DiscoveredUnit>` is the union, in registration order.
-pub fn discover_implicit_release_units(
-    repo: &Repository,
-    registry: &FormatHandlerRegistry,
-    configured_skip_paths: &[RepoPathBuf],
-) -> Result<Vec<DiscoveredUnit>> {
-    let mut all = Vec::new();
-    for h in registry.handlers() {
-        all.extend(h.discover_units(repo, configured_skip_paths)?);
+impl WorkspaceDiscovererRegistry {
+    pub fn new() -> Self {
+        Self::default()
     }
-    Ok(all)
+
+    pub fn with_defaults() -> Self {
+        let mut r = Self::new();
+        r.register(Box::new(super::cargo::CargoWorkspaceDiscoverer));
+        r.register(Box::new(super::npm::NpmWorkspaceDiscoverer));
+        r.register(Box::new(super::maven::MavenWorkspaceDiscoverer));
+        r
+    }
+
+    pub fn register(&mut self, d: Box<dyn WorkspaceDiscoverer>) {
+        self.discoverers.push(d);
+    }
+
+    pub fn discoverers(&self) -> impl Iterator<Item = &dyn WorkspaceDiscoverer> {
+        self.discoverers.iter().map(|d| d.as_ref())
+    }
 }

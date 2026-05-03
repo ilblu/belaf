@@ -23,10 +23,10 @@ use crate::{
     atry,
     core::{
         ecosystem::format_handler::{
-            scan_index_for_filename, DiscoveredUnit, FormatHandler, RawInternalDep,
+            DiscoveredUnit, FormatHandler, RawInternalDep, WorkspaceDiscoverer,
         },
         errors::Result,
-        git::repository::{ChangeList, RepoPathBuf, Repository},
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
         graph::GraphQueryBuilder,
         release_unit::VersionFieldSpec,
         resolved_release_unit::{DepRequirement, ReleaseUnitId},
@@ -136,8 +136,19 @@ impl FormatHandler for NpmLoader {
         "Node.js (npm)"
     }
 
-    fn manifest_filename(&self) -> &'static str {
-        "package.json"
+    fn is_manifest_file(&self, path: &RepoPath) -> bool {
+        let (_, basename) = path.split_basename();
+        basename.as_ref() == b"package.json"
+    }
+
+    fn parse_version(&self, content: &str) -> Result<String> {
+        let pkg: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(content).map_err(|e| anyhow!("parse package.json: {e}"))?;
+        let v = pkg
+            .get("version")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| anyhow!("no version in package.json"))?;
+        Ok(v.to_string())
     }
 
     fn default_version_field(&self) -> VersionFieldSpec {
@@ -156,19 +167,130 @@ impl FormatHandler for NpmLoader {
         Box::new(PackageJsonRewriter::new(unit_id, manifest_path))
     }
 
-    fn discover_units(
+    fn discover_single(
         &self,
         repo: &Repository,
-        configured_skip_paths: &[RepoPathBuf],
-    ) -> Result<Vec<DiscoveredUnit>> {
-        let manifest_paths = scan_index_for_filename(repo, "package.json", configured_skip_paths)?;
+        manifest_path: &RepoPath,
+    ) -> Result<DiscoveredUnit> {
+        let path_buf = manifest_path.to_owned();
+        let (unit, _load) = self.parse_one(repo, &path_buf)?.ok_or_else(|| {
+            anyhow!(
+                "package.json `{}` lacks the content keys belaf considers releasable",
+                manifest_path.escaped()
+            )
+        })?;
+        Ok(unit)
+    }
+}
+
+/// Workspace walker for npm: claims any `package.json` carrying a
+/// `workspaces` field; enumerates members per the glob array.
+#[derive(Debug, Default)]
+pub struct NpmWorkspaceDiscoverer;
+
+impl WorkspaceDiscoverer for NpmWorkspaceDiscoverer {
+    fn name(&self) -> &'static str {
+        "npm"
+    }
+
+    fn claims(&self, repo: &Repository, manifest_path: &RepoPath) -> bool {
+        let (_, basename) = manifest_path.split_basename();
+        if basename.as_ref() != b"package.json" {
+            return false;
+        }
+        let abs = repo.resolve_workdir(manifest_path);
+        let Ok(content) = std::fs::read_to_string(&abs) else {
+            return false;
+        };
+        let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return false;
+        };
+        pkg.get("workspaces").is_some()
+    }
+
+    fn discover(&self, repo: &Repository, root_path: &RepoPath) -> Result<Vec<DiscoveredUnit>> {
+        // Read root manifest, expand `workspaces` globs, parse each
+        // member's package.json, wire internal deps. Top-level
+        // package.json itself is treated as a unit only if it has a
+        // `version` + content key (parse_one handles the filter).
+        let root_abs = repo.resolve_workdir(root_path);
+        let root_content = match std::fs::read_to_string(&root_abs) {
+            Ok(c) => c,
+            Err(_) => return Ok(Vec::new()),
+        };
+        let root_json: serde_json::Value = match serde_json::from_str(&root_content) {
+            Ok(v) => v,
+            Err(_) => return Ok(Vec::new()),
+        };
+        let workspace_globs = match root_json.get("workspaces") {
+            Some(serde_json::Value::Array(arr)) => arr
+                .iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>(),
+            // npm-pro shape: `{ "packages": [...] }`
+            Some(serde_json::Value::Object(obj)) => obj
+                .get("packages")
+                .and_then(|v| v.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .collect()
+                })
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        };
+
+        let (root_dir, _) = root_path.split_basename();
+        let root_dir_owned = root_dir.to_owned();
+        let mut member_paths: Vec<RepoPathBuf> = Vec::new();
+
+        // Try the root itself if it has a `name` + content keys.
+        let mut tried_root_self = false;
+
+        for glob in &workspace_globs {
+            // Simple glob expansion — npm workspaces always uses
+            // `path/*` or `path/**`. Scan the index for any
+            // package.json under root_dir/{glob_prefix}.
+            let prefix = glob.trim_end_matches("/**").trim_end_matches("/*");
+            let prefix_path = if prefix.is_empty() || prefix == "." {
+                root_dir_owned.clone()
+            } else {
+                let mut p = root_dir_owned.clone();
+                p.push(prefix.as_bytes());
+                p
+            };
+            repo.scan_paths(|p| {
+                let (parent, basename) = p.split_basename();
+                if basename.as_ref() != b"package.json" {
+                    return Ok(());
+                }
+                if !crate::core::ecosystem::format_handler::is_path_inside_any(
+                    parent,
+                    std::slice::from_ref(&prefix_path),
+                ) {
+                    return Ok(());
+                }
+                if p == root_path {
+                    tried_root_self = true;
+                }
+                member_paths.push(p.to_owned());
+                Ok(())
+            })?;
+        }
+
+        // Always include root itself in case it's a publishable pkg.
+        if !tried_root_self {
+            member_paths.push(root_path.to_owned());
+        }
 
         let mut units: Vec<DiscoveredUnit> = Vec::new();
         let mut loads: Vec<PackageLoadData> = Vec::new();
         let mut name_to_index: HashMap<String, usize> = HashMap::new();
 
-        for repopath in &manifest_paths {
-            if let Some((unit, load)) = self.parse_one(repo, repopath)? {
+        for p in &member_paths {
+            if let Some((unit, load)) = self.dummy_loader().parse_one(repo, p)? {
                 let idx = units.len();
                 name_to_index.insert(load.package_name.clone(), idx);
                 units.push(unit);
@@ -176,15 +298,12 @@ impl FormatHandler for NpmLoader {
             }
         }
 
-        // Wire internal deps from each package's dependencies/devDependencies/
-        // optionalDependencies maps. Cross-package matches by package name.
         let strict_validation = false;
         for (idx, load) in loads.iter().enumerate() {
             let maybe_internal_specs = load
                 .pkg_data
                 .get("internalDepVersions")
                 .and_then(|v| v.as_object());
-
             for dep_key in DEPENDENCY_KEYS {
                 let Some(dep_map) = load.pkg_data.get(*dep_key).and_then(|v| v.as_object()) else {
                     continue;
@@ -205,12 +324,14 @@ impl FormatHandler for NpmLoader {
                             Err(e) => {
                                 if strict_validation {
                                     return Err(anyhow!(
-                                        "invalid `package.json` key `internalDepVersions.{}` for {}: {}",
-                                        dep_name, load.package_name, e
+                                        "invalid internalDepVersions.{} for {}: {}",
+                                        dep_name,
+                                        load.package_name,
+                                        e
                                     ));
                                 }
                                 warn!(
-                                    "invalid `package.json` key `internalDepVersions.{}` for {}: {}",
+                                    "invalid internalDepVersions.{} for {}: {}",
                                     dep_name, load.package_name, e
                                 );
                                 DepRequirement::Unavailable
@@ -219,7 +340,6 @@ impl FormatHandler for NpmLoader {
                     } else {
                         DepRequirement::Unavailable
                     };
-
                     units[idx].internal_deps.push(RawInternalDep {
                         target_package_name: dep_name.clone(),
                         literal: dep_spec.as_str().unwrap_or("UNDEFINED").to_owned(),
@@ -230,6 +350,13 @@ impl FormatHandler for NpmLoader {
         }
 
         Ok(units)
+    }
+}
+
+impl NpmWorkspaceDiscoverer {
+    /// Borrow a stateless NpmLoader handle to reuse `parse_one`.
+    fn dummy_loader(&self) -> NpmLoader {
+        NpmLoader
     }
 }
 

@@ -9,9 +9,9 @@ use crate::utils::file_io::check_file_size;
 use crate::{
     atry,
     core::{
-        ecosystem::format_handler::{scan_index_for_filename, DiscoveredUnit, FormatHandler},
+        ecosystem::format_handler::{DiscoveredUnit, FormatHandler},
         errors::Result,
-        git::repository::{ChangeList, RepoPathBuf, Repository},
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
         release_unit::VersionFieldSpec,
         resolved_release_unit::ReleaseUnitId,
         rewriters::Rewriter,
@@ -67,13 +67,16 @@ impl FormatHandler for ElixirLoader {
         "Elixir"
     }
 
-    fn manifest_filename(&self) -> &'static str {
-        "mix.exs"
+    fn is_manifest_file(&self, path: &RepoPath) -> bool {
+        let (_, basename) = path.split_basename();
+        basename.as_ref() == b"mix.exs"
+    }
+
+    fn parse_version(&self, content: &str) -> Result<String> {
+        Self::extract_version(content).ok_or_else(|| anyhow!("no version field in mix.exs"))
     }
 
     fn default_version_field(&self) -> VersionFieldSpec {
-        // mix.exs version is bracketed by quotes after `version:` —
-        // the regex captures the quoted string and replaces it.
         VersionFieldSpec::GenericRegex {
             pattern: r#"version:\s*"([^"]+)""#.to_string(),
             replace: r#"version: "{version}""#.to_string(),
@@ -88,71 +91,56 @@ impl FormatHandler for ElixirLoader {
         Box::new(MixExsRewriter::new(unit_id, manifest_path))
     }
 
-    fn discover_units(
+    fn discover_single(
         &self,
         repo: &Repository,
-        configured_skip_paths: &[RepoPathBuf],
-    ) -> Result<Vec<DiscoveredUnit>> {
-        let paths = scan_index_for_filename(repo, "mix.exs", configured_skip_paths)?;
-        let mut units = Vec::new();
+        manifest_path: &RepoPath,
+    ) -> Result<DiscoveredUnit> {
+        let fs_path = repo.resolve_workdir(manifest_path);
+        let mut contents = String::new();
+        let mut f = atry!(
+            File::open(&fs_path);
+            ["failed to open mix.exs file `{}`", fs_path.display()]
+        );
+        atry!(
+            check_file_size(&f, &fs_path);
+            ["file size check failed for `{}`", fs_path.display()]
+        );
+        atry!(
+            f.read_to_string(&mut contents);
+            ["failed to read mix.exs file `{}`", fs_path.display()]
+        );
 
-        for mix_exs_path in paths {
-            let (prefix, _) = mix_exs_path.split_basename();
-            let fs_path = repo.resolve_workdir(&mix_exs_path);
-
-            let mut contents = String::new();
-            let mut f = atry!(
-                File::open(&fs_path);
-                ["failed to open mix.exs file `{}`", fs_path.display()]
+        let app_name = atry!(
+            Self::extract_app_name(&contents)
+                .ok_or_else(|| anyhow!("failed to extract app name from mix.exs"));
+            ["failed to parse app name from `{}`", fs_path.display()]
+        );
+        let version_str = Self::extract_version(&contents).unwrap_or_else(|| {
+            warn!(
+                "failed to extract version from mix.exs `{}`, defaulting to 0.1.0",
+                fs_path.display()
             );
-            atry!(
-                check_file_size(&f, &fs_path);
-                ["file size check failed for `{}`", fs_path.display()]
-            );
-            atry!(
-                f.read_to_string(&mut contents);
-                ["failed to read mix.exs file `{}`", fs_path.display()]
-            );
+            String::from("0.1.0")
+        });
+        let version = match semver::Version::parse(&version_str) {
+            Ok(v) => Version::Semver(v),
+            Err(_) => Version::Semver(semver::Version::new(0, 1, 0)),
+        };
 
-            let app_name = atry!(
-                Self::extract_app_name(&contents)
-                    .ok_or_else(|| anyhow!("failed to extract app name from mix.exs"));
-                ["failed to parse app name from `{}`", fs_path.display()]
-            );
-
-            let version_str = Self::extract_version(&contents).unwrap_or_else(|| {
-                warn!(
-                    "failed to extract version from mix.exs `{}`, defaulting to 0.1.0",
-                    fs_path.display()
-                );
-                String::from("0.1.0")
-            });
-
-            let version = match semver::Version::parse(&version_str) {
-                Ok(v) => Version::Semver(v),
-                Err(_) => {
-                    warn!(
-                        "failed to parse version `{}` from mix.exs, using default",
-                        version_str
-                    );
-                    Version::Semver(semver::Version::new(0, 1, 0))
-                }
-            };
-
-            let manifest = mix_exs_path.clone();
-            units.push(DiscoveredUnit {
-                qnames: vec![app_name, "elixir".to_owned()],
-                version,
-                prefix: prefix.to_owned(),
-                anchor_manifest: mix_exs_path,
-                rewriter_factories: vec![Box::new(move |id| {
-                    Box::new(MixExsRewriter::new(id, manifest))
-                })],
-                internal_deps: Vec::new(),
-            });
-        }
-
-        Ok(units)
+        let (prefix, _) = manifest_path.split_basename();
+        let manifest = manifest_path.to_owned();
+        let manifest_for_rw = manifest.clone();
+        Ok(DiscoveredUnit {
+            qnames: vec![app_name, "elixir".to_owned()],
+            version,
+            prefix: prefix.to_owned(),
+            anchor_manifest: manifest,
+            rewriter_factories: vec![Box::new(move |id| {
+                Box::new(MixExsRewriter::new(id, manifest_for_rw))
+            })],
+            internal_deps: Vec::new(),
+        })
     }
 }
 
