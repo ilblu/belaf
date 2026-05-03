@@ -123,6 +123,66 @@ macro_rules! variant_test {
     };
 }
 
+/// Per-variant toggle test — sweeps every togglable row and asserts
+/// that each toggle hits exactly one row in the expected slot
+/// (Bundle vs Unit) without spilling over to a sibling section.
+/// Pins the brief's "toggle hits the right row in each repo shape"
+/// requirement.
+fn assert_toggle_round_trip(seed: fn(&TestRepo)) {
+    let repo = TestRepo::new();
+    seed(&repo);
+    let mut view = build_view(&repo);
+    let initial_selected = view.selected_togglable_count();
+
+    for idx in view.flat_indices().clone() {
+        match idx {
+            belaf::core::ui::release_unit_view::RowIdx::Bundle(i) => {
+                let prior = view.bundles[i].selected;
+                view.toggle(idx);
+                assert_eq!(
+                    view.bundles[i].selected, !prior,
+                    "Bundle({i}) toggle should flip its `selected` flag"
+                );
+                view.toggle(idx);
+                assert_eq!(view.bundles[i].selected, prior, "double-toggle restores");
+            }
+            belaf::core::ui::release_unit_view::RowIdx::Unit(i) => {
+                let prior = view.units[i].selected;
+                view.toggle(idx);
+                assert_eq!(
+                    view.units[i].selected, !prior,
+                    "Unit({i}) toggle should flip its `selected` flag"
+                );
+                view.toggle(idx);
+                assert_eq!(view.units[i].selected, prior, "double-toggle restores");
+            }
+            belaf::core::ui::release_unit_view::RowIdx::Ext(_) => {
+                let prior = view.selected_togglable_count();
+                view.toggle(idx);
+                assert_eq!(
+                    view.selected_togglable_count(),
+                    prior,
+                    "Ext rows are read-only — toggle must be a no-op"
+                );
+            }
+        }
+    }
+    assert_eq!(
+        view.selected_togglable_count(),
+        initial_selected,
+        "after the sweep + double-toggles every togglable row is back to its initial state"
+    );
+}
+
+macro_rules! toggle_test {
+    ($name:ident, $seed:path) => {
+        #[test]
+        fn $name() {
+            assert_toggle_round_trip($seed);
+        }
+    };
+}
+
 // ===========================================================================
 // 11 variants. Indexed per BELAF_PLAN §5.
 // ===========================================================================
@@ -190,5 +250,42 @@ variant_test!(
 // 11. Nested submodule with own monorepo
 variant_test!(
     nested_submodule_classification_and_render,
+    fixtures::seed_vendored_monorepo
+);
+
+// ===========================================================================
+// Per-variant toggle tests — pin that `view.toggle(idx)` hits the
+// right row slot in each repo shape (Bundles vs Units vs read-only
+// Ext). Complements the snapshot-style `*_struct.snap` coverage with
+// a behavioural assertion.
+// ===========================================================================
+
+toggle_test!(single_cargo_toggle_round_trip, fixtures::seed_tokio_single);
+toggle_test!(single_npm_toggle_round_trip, fixtures::seed_lodash_single);
+toggle_test!(
+    npm_workspace_toggle_round_trip,
+    fixtures::seed_turbo_workspace
+);
+toggle_test!(
+    cargo_workspace_toggle_round_trip,
+    fixtures::seed_cargo_monorepo_independent
+);
+toggle_test!(
+    hexagonal_cargo_toggle_round_trip,
+    fixtures::seed_hexagonal_cargo_only
+);
+toggle_test!(tauri_app_toggle_round_trip, fixtures::seed_tauri_app_only);
+toggle_test!(
+    jvm_sdk_toggle_round_trip,
+    fixtures::seed_kotlin_library_only
+);
+toggle_test!(
+    generated_ts_sdk_toggle_round_trip,
+    fixtures::seed_ts_sdk_cascade
+);
+toggle_test!(mobile_only_toggle_round_trip, fixtures::seed_ios_only);
+toggle_test!(polyglot_toggle_round_trip, fixtures::seed_clikd_shape);
+toggle_test!(
+    nested_submodule_toggle_round_trip,
     fixtures::seed_vendored_monorepo
 );
