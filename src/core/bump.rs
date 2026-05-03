@@ -329,6 +329,12 @@ impl ScopeMatcher {
             p_lower == scope
                 || p_lower.ends_with(&format!("-{}", scope))
                 || p_lower.ends_with(&format!("_{}", scope))
+                // npm scoped packages: `@org/schema` ends with `/schema`.
+                // Without this the smart matcher falls through to
+                // `contains`, which is order-dependent across loaders
+                // and produces "first match wins" attribution that
+                // varies with registration order.
+                || p_lower.ends_with(&format!("/{}", scope))
         })
     }
 
