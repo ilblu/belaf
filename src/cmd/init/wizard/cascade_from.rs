@@ -19,13 +19,14 @@
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{List, ListItem, Paragraph},
     Frame,
 };
 
+use super::chrome::{self, palette, step_index, STEP_TOTAL};
 use super::state::{CascadeOverride, CascadeStrategy, WizardState};
 use super::step::{Step, StepResult, WizardOutcome};
 
@@ -89,126 +90,76 @@ impl Step for CascadeFromStep {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, _state: &WizardState) {
-        let block = Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Cyan))
-            .title(Span::styled(
-                format!(" cascade-from: {} ", self.target_unit),
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            ));
-        let inner = block.inner(area);
-        frame.render_widget(block, area);
+        let title = format!("Cascade From → {}", self.target_unit);
+        let body = chrome::render_chrome(frame, area, &title, step_index::SELECTION, STEP_TOTAL);
+        let (content, hints_area) = chrome::split_body_with_hints(body);
 
-        let chunks = Layout::default()
+        let body_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(4),
-                Constraint::Min(0),
-                Constraint::Length(2),
+                Constraint::Length(2), // section header
+                Constraint::Length(1), // blank
+                Constraint::Length(1), // divider
+                Constraint::Length(1), // blank
+                Constraint::Min(0),    // list
             ])
-            .split(inner);
+            .split(content);
 
-        let header = match self.mode {
-            SubMode::SourcePicker => vec![
-                Line::from(""),
+        let (label, sub) = match self.mode {
+            SubMode::SourcePicker => (
+                "SOURCE",
                 Line::from(Span::styled(
-                    "Pick the source unit whose bumps cascade into",
-                    Style::default().fg(Color::White),
+                    "Whose bumps cascade into this unit?",
+                    Style::default().fg(palette::SUBTLE),
                 )),
-                Line::from(Span::styled(
-                    format!("`{}`", self.target_unit),
-                    Style::default().fg(Color::Cyan),
-                )),
-            ],
-            SubMode::StrategyPicker => vec![
-                Line::from(""),
+            ),
+            SubMode::StrategyPicker => (
+                "STRATEGY",
                 Line::from(vec![
-                    Span::styled("Source: ", Style::default().fg(Color::Gray)),
+                    Span::styled("from ", Style::default().fg(palette::MUTED)),
                     Span::styled(
-                        self.chosen_source.as_deref().unwrap_or("?"),
+                        self.chosen_source.as_deref().unwrap_or("?").to_string(),
                         Style::default()
-                            .fg(Color::Cyan)
+                            .fg(palette::ACCENT)
                             .add_modifier(Modifier::BOLD),
                     ),
+                    Span::styled(
+                        " · pick a bump-following strategy",
+                        Style::default().fg(palette::MUTED),
+                    ),
                 ]),
-                Line::from(Span::styled(
-                    "Pick a bump strategy:",
-                    Style::default().fg(Color::White),
-                )),
-            ],
+            ),
         };
-        frame.render_widget(
-            Paragraph::new(header).alignment(Alignment::Center),
-            chunks[0],
-        );
+        let header = Paragraph::new(vec![Line::from(chrome::section_label(label)), sub]);
+        frame.render_widget(header, body_chunks[0]);
+
+        frame.render_widget(chrome::divider(), body_chunks[2]);
 
         let items: Vec<ListItem> = match self.mode {
             SubMode::SourcePicker => self
                 .sources
                 .iter()
                 .enumerate()
-                .map(|(i, name)| {
-                    let style = if i == self.cursor {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                            .bg(Color::Rgb(40, 40, 50))
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    ListItem::new(Line::from(vec![
-                        Span::styled("    ", Style::default()),
-                        Span::styled(name.clone(), style),
-                    ]))
-                })
+                .map(|(i, name)| row_item(name, i == self.cursor))
                 .collect(),
             SubMode::StrategyPicker => STRATEGIES
                 .iter()
                 .enumerate()
-                .map(|(i, strat)| {
-                    let style = if i == self.cursor {
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD)
-                            .bg(Color::Rgb(40, 40, 50))
-                    } else {
-                        Style::default().fg(Color::White)
-                    };
-                    ListItem::new(Line::from(vec![
-                        Span::styled("    ", Style::default()),
-                        Span::styled(strat.label().to_string(), style),
-                    ]))
-                })
+                .map(|(i, strat)| row_item(strat.label(), i == self.cursor))
                 .collect(),
         };
-        frame.render_widget(List::new(items), chunks[1]);
+        frame.render_widget(List::new(items), body_chunks[4]);
 
-        let hints = match self.mode {
-            SubMode::SourcePicker => Line::from(vec![
-                Span::styled("↑↓", Style::default().fg(Color::Cyan)),
-                Span::styled(" navigate  ", Style::default().fg(Color::Gray)),
-                Span::styled("Enter", Style::default().fg(Color::Green)),
-                Span::styled(" pick source  ", Style::default().fg(Color::Gray)),
-                Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                Span::styled(" cancel  ", Style::default().fg(Color::Gray)),
-                Span::styled("d", Style::default().fg(Color::Red)),
-                Span::styled(" delete override", Style::default().fg(Color::Gray)),
-            ]),
-            SubMode::StrategyPicker => Line::from(vec![
-                Span::styled("↑↓", Style::default().fg(Color::Cyan)),
-                Span::styled(" navigate  ", Style::default().fg(Color::Gray)),
-                Span::styled("Enter", Style::default().fg(Color::Green)),
-                Span::styled(" save  ", Style::default().fg(Color::Gray)),
-                Span::styled("Esc", Style::default().fg(Color::Yellow)),
-                Span::styled(" back to source picker", Style::default().fg(Color::Gray)),
-            ]),
+        let hints: &[(&str, &str)] = match self.mode {
+            SubMode::SourcePicker => &[
+                ("↑↓", " navigate"),
+                ("Enter", " pick source"),
+                ("d", " delete override"),
+                ("Esc", " cancel"),
+            ],
+            SubMode::StrategyPicker => &[("↑↓", " navigate"), ("Enter", " save"), ("Esc", " back")],
         };
-        frame.render_widget(
-            Paragraph::new(hints).alignment(Alignment::Center),
-            chunks[2],
-        );
+        chrome::hint_bar(frame, hints_area, hints);
     }
 
     fn handle_event(&mut self, event: &Event, state: &mut WizardState) -> StepResult {
@@ -274,6 +225,37 @@ impl Step for CascadeFromStep {
             _ => StepResult::Continue,
         }
     }
+}
+
+fn row_item(label: &str, is_current: bool) -> ListItem<'static> {
+    let arrow = if is_current {
+        Span::styled(
+            "▸ ",
+            Style::default()
+                .fg(palette::ACCENT)
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::raw("  ")
+    };
+    let label_style = if is_current {
+        Style::default()
+            .fg(palette::ACCENT)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(palette::VALUE)
+    };
+    let bg = if is_current {
+        Style::default().bg(palette::ROW_HIGHLIGHT)
+    } else {
+        Style::default()
+    };
+    ListItem::new(Line::from(vec![
+        Span::raw("  "),
+        arrow,
+        Span::styled(label.to_string(), label_style),
+    ]))
+    .style(bg)
 }
 
 #[cfg(test)]

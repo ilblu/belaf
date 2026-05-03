@@ -4,17 +4,18 @@
 //! the surrounding chrome (block, summary line, key-hints footer).
 
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
-use crate::core::ui::glyphs;
 use crate::core::ui::release_unit_view::{
-    render_summary, PrepareOverlay, ReleaseUnitView, RenderMode, ViewContext,
+    render_summary, PrepareOverlay, ReleaseUnitView, RenderMode, ViewContext, ViewLayout,
 };
+
+use super::super::chrome::{self, palette, step_index, STEP_TOTAL};
 
 pub(super) fn render(
     frame: &mut Frame,
@@ -23,88 +24,73 @@ pub(super) fn render(
     overlay: &PrepareOverlay,
     cursor: usize,
 ) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(Span::styled(
-            " ReleaseUnit Selection ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let body = chrome::render_chrome(
+        frame,
+        area,
+        "Select Projects",
+        step_index::SELECTION,
+        STEP_TOTAL,
+    );
+    let (content, hints_area) = chrome::split_body_with_hints(body);
 
-    let chunks = Layout::default()
+    let body_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
-            Constraint::Min(0),
-            Constraint::Length(2),
+            Constraint::Length(2), // section label + summary
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // divider
+            Constraint::Length(1), // blank
+            Constraint::Min(0),    // view body
         ])
-        .split(inner);
+        .split(content);
 
     let selected = view.selected_togglable_count();
     let total = view.bundles.len() + view.units.len();
     let header = vec![
-        Line::from(""),
         Line::from(vec![
-            Span::styled(
-                format!("{} ", glyphs::header_clipboard()),
-                Style::default().fg(Color::Cyan),
-            ),
-            Span::styled(
-                "Review and toggle each ReleaseUnit you want belaf to manage",
-                Style::default().fg(Color::White),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("   ", Style::default()),
+            chrome::section_label("PROJECTS"),
+            Span::raw("  "),
             Span::styled(
                 format!("{}", selected),
                 Style::default()
                     .fg(if selected > 0 {
-                        Color::Green
+                        palette::OK
                     } else {
-                        Color::Yellow
+                        palette::WARN
                     })
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(
-                format!(" / {} selected · {}", total, render_summary(view)),
-                Style::default().fg(Color::Gray),
+                format!(" / {} selected", total),
+                Style::default().fg(palette::MUTED),
             ),
         ]),
+        Line::from(Span::styled(
+            render_summary(view),
+            Style::default().fg(palette::SUBTLE),
+        )),
     ];
-    frame.render_widget(
-        Paragraph::new(header).alignment(Alignment::Center),
-        chunks[0],
-    );
+    frame.render_widget(Paragraph::new(header), body_chunks[0]);
+
+    frame.render_widget(chrome::divider(), body_chunks[2]);
 
     let ctx = ViewContext {
         mode: RenderMode::Init,
         cursor: Some(cursor),
     };
-    view.render_with_overlay(frame, chunks[1], &ctx, overlay);
+    view.render_with_overlay(frame, body_chunks[4], &ctx, overlay, ViewLayout::Sectioned);
 
-    let hints = Line::from(vec![
-        Span::styled("↑↓", Style::default().fg(Color::Cyan)),
-        Span::styled(" navigate  ", Style::default().fg(Color::Gray)),
-        Span::styled("Space", Style::default().fg(Color::Cyan)),
-        Span::styled(" toggle  ", Style::default().fg(Color::Gray)),
-        Span::styled("c", Style::default().fg(Color::Magenta)),
-        Span::styled(" cascade-from  ", Style::default().fg(Color::Gray)),
-        Span::styled("a/n", Style::default().fg(Color::Green)),
-        Span::styled(" all/none  ", Style::default().fg(Color::Gray)),
-        Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::styled(" continue  ", Style::default().fg(Color::Gray)),
-        Span::styled("Esc", Style::default().fg(Color::Yellow)),
-        Span::styled(" back  ", Style::default().fg(Color::Gray)),
-        Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" quit", Style::default().fg(Color::Gray)),
-    ]);
-    frame.render_widget(
-        Paragraph::new(hints).alignment(Alignment::Center),
-        chunks[2],
+    chrome::hint_bar(
+        frame,
+        hints_area,
+        &[
+            ("↑↓", " navigate"),
+            ("Space", " toggle"),
+            ("a/n", " all/none"),
+            ("c", " cascade-from"),
+            ("Enter", " continue"),
+            ("Esc", " back"),
+            ("q", " quit"),
+        ],
     );
 }

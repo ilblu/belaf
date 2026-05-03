@@ -1,30 +1,27 @@
-//! Upstream-URL configuration step. Owns the input-active toggle.
+//! Upstream-URL configuration step.
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
-use crate::core::ui::utils::centered_rect;
-
 use super::{
+    chrome::{self, palette, step_index, STEP_TOTAL},
     confirmation::ConfirmationStep,
     state::WizardState,
     step::{Step, StepResult, WizardOutcome},
 };
 
 #[derive(Default)]
-pub struct UpstreamConfigStep {
-    input_active: bool,
-}
+pub struct UpstreamConfigStep;
 
 impl UpstreamConfigStep {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
 }
 
@@ -34,7 +31,7 @@ impl Step for UpstreamConfigStep {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &WizardState) {
-        render(frame, area, state, self.input_active);
+        render(frame, area, state);
     }
 
     fn handle_event(&mut self, event: &Event, state: &mut WizardState) -> StepResult {
@@ -46,20 +43,9 @@ impl Step for UpstreamConfigStep {
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                 StepResult::Exit(WizardOutcome::Cancelled)
             }
-            // Catch typing FIRST so `q` lands in the URL when the
-            // input field is active. Outside input mode, the next
-            // arm makes `q` a quit shortcut.
-            (KeyCode::Char(c), _) if self.input_active => {
-                state.upstream_url.push(c);
-                StepResult::Continue
-            }
-            (KeyCode::Char('q'), _) => StepResult::Exit(WizardOutcome::Cancelled),
-            (KeyCode::Backspace, _) if self.input_active => {
-                state.upstream_url.pop();
-                StepResult::Continue
-            }
+            (KeyCode::Esc, _) => StepResult::Back,
             (KeyCode::Enter, _) => {
-                if state.upstream_url.is_empty() {
+                if state.upstream_url.trim().is_empty() {
                     state.error_message = Some("Upstream URL is required".to_string());
                     StepResult::Continue
                 } else {
@@ -67,141 +53,158 @@ impl Step for UpstreamConfigStep {
                     StepResult::Next(Box::new(ConfirmationStep::new()))
                 }
             }
-            (KeyCode::Tab, _) => {
-                self.input_active = !self.input_active;
+            (KeyCode::Backspace, _) => {
+                state.upstream_url.pop();
+                state.error_message = None;
                 StepResult::Continue
             }
-            (KeyCode::Esc, _) => StepResult::Back,
+            (KeyCode::Char(c), _) => {
+                state.upstream_url.push(c);
+                state.error_message = None;
+                StepResult::Continue
+            }
             _ => StepResult::Continue,
         }
     }
 }
 
-fn render(frame: &mut Frame, area: Rect, state: &WizardState, input_active: bool) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(Span::styled(
-            " Step 3: Repository Configuration ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
+fn render(frame: &mut Frame, area: Rect, state: &WizardState) {
+    let body = chrome::render_chrome(
+        frame,
+        area,
+        "Repository URL",
+        step_index::UPSTREAM,
+        STEP_TOTAL,
+    );
+    let (content, hints_area) = chrome::split_body_with_hints(body);
 
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
+    let body_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
-            Constraint::Min(0),
-            Constraint::Length(2),
+            Constraint::Length(1), // intro
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // divider
+            Constraint::Length(1), // blank
+            Constraint::Length(2), // URL section header
+            Constraint::Length(1), // blank
+            Constraint::Length(2), // URL input line + underline
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // status (error or hint)
+            Constraint::Min(0),    // filler
         ])
-        .split(inner_area);
+        .split(content);
 
-    let header_lines = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("🔗 ", Style::default()),
-            Span::styled(
-                "Configure the upstream Git repository URL",
-                Style::default().fg(Color::White),
-            ),
-        ]),
+    let intro = Paragraph::new(Line::from(Span::styled(
+        "Used for changelog links and release references",
+        Style::default().fg(palette::VALUE),
+    )));
+    frame.render_widget(intro, body_chunks[0]);
+
+    frame.render_widget(chrome::divider(), body_chunks[2]);
+
+    let url_header = Paragraph::new(vec![
+        Line::from(chrome::section_label("URL")),
         Line::from(Span::styled(
-            "   Used for changelog links and release references",
-            Style::default().fg(Color::Gray),
+            "Enter the upstream Git remote — typing edits in place",
+            Style::default().fg(palette::MUTED),
         )),
-    ];
-    let header = Paragraph::new(header_lines).alignment(Alignment::Center);
-    frame.render_widget(header, chunks[0]);
+    ]);
+    frame.render_widget(url_header, body_chunks[4]);
 
-    let content_area = centered_rect(80, 50, chunks[1]);
+    render_input(frame, body_chunks[6], &state.upstream_url);
 
-    let input_border_color = if input_active {
-        Color::Yellow
+    if let Some(err) = &state.error_message {
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(
+                    "✗ ",
+                    Style::default()
+                        .fg(palette::ERROR)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(err.clone(), Style::default().fg(palette::ERROR)),
+            ])),
+            body_chunks[8],
+        );
     } else {
-        Color::Gray
-    };
+        let hint_text = if state.upstream_url.is_empty() {
+            "Examples: git@github.com:owner/repo.git  ·  https://github.com/owner/repo"
+        } else {
+            ""
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw("  "),
+                Span::styled(hint_text.to_string(), Style::default().fg(palette::MUTED)),
+            ])),
+            body_chunks[8],
+        );
+    }
 
-    let url_display = if state.upstream_url.is_empty() {
-        Span::styled(
-            "https://github.com/user/repo",
-            Style::default().fg(Color::Rgb(80, 80, 80)),
-        )
-    } else {
-        Span::styled(
-            state.upstream_url.clone(),
-            Style::default()
-                .fg(if input_active {
-                    Color::Yellow
-                } else {
-                    Color::White
-                })
-                .add_modifier(if input_active {
-                    Modifier::BOLD
-                } else {
-                    Modifier::empty()
-                }),
-        )
-    };
-
-    let cursor = if input_active {
-        Span::styled("▌", Style::default().fg(Color::Yellow))
-    } else {
-        Span::raw("")
-    };
-
-    let input_lines = vec![
-        Line::from(""),
-        Line::from(vec![Span::raw("  "), url_display, cursor]),
-        Line::from(""),
-    ];
-
-    let input_block = Paragraph::new(input_lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(input_border_color))
-            .title(Span::styled(
-                if input_active {
-                    " ✏️  Editing URL "
-                } else {
-                    " URL "
-                },
-                Style::default().fg(if input_active {
-                    Color::Yellow
-                } else {
-                    Color::White
-                }),
-            )),
+    chrome::hint_bar(
+        frame,
+        hints_area,
+        &[
+            ("type", " edit"),
+            ("Backspace", " delete"),
+            ("Enter", " continue"),
+            ("Esc", " back"),
+        ],
     );
+}
 
-    frame.render_widget(input_block, content_area);
+fn render_input(frame: &mut Frame, area: Rect, value: &str) {
+    let input_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Length(1)])
+        .split(area);
 
-    let hints = if input_active {
-        Line::from(vec![
-            Span::styled("Type", Style::default().fg(Color::Yellow)),
-            Span::styled(" to enter URL  ", Style::default().fg(Color::Gray)),
-            Span::styled("Backspace", Style::default().fg(Color::Yellow)),
-            Span::styled(" delete  ", Style::default().fg(Color::Gray)),
-            Span::styled("Tab/Esc", Style::default().fg(Color::Cyan)),
-            Span::styled(" finish editing", Style::default().fg(Color::Gray)),
-        ])
+    let display = if value.is_empty() {
+        vec![
+            Span::raw("  "),
+            Span::styled(
+                "https://github.com/owner/repo",
+                Style::default().fg(palette::PLACEHOLDER),
+            ),
+            Span::styled(
+                "▌",
+                Style::default()
+                    .fg(palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]
     } else {
-        Line::from(vec![
-            Span::styled("Tab", Style::default().fg(Color::Cyan)),
-            Span::styled(" edit URL  ", Style::default().fg(Color::Gray)),
-            Span::styled("Enter", Style::default().fg(Color::Green)),
-            Span::styled(" continue  ", Style::default().fg(Color::Gray)),
-            Span::styled("Backspace", Style::default().fg(Color::Yellow)),
-            Span::styled(" back  ", Style::default().fg(Color::Gray)),
-            Span::styled("q", Style::default().fg(Color::Red)),
-            Span::styled(" quit", Style::default().fg(Color::Gray)),
-        ])
+        vec![
+            Span::raw("  "),
+            Span::styled(
+                value.to_string(),
+                Style::default()
+                    .fg(palette::VALUE)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "▌",
+                Style::default()
+                    .fg(palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]
     };
-    let hints_para = Paragraph::new(hints).alignment(Alignment::Center);
-    frame.render_widget(hints_para, chunks[2]);
+    frame.render_widget(Paragraph::new(Line::from(display)), input_chunks[0]);
+
+    // Underline below the input — visual focus indicator without a box.
+    let underline_width = (area.width as usize).saturating_sub(4);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "─".repeat(underline_width),
+                Style::default().fg(palette::ACCENT),
+            ),
+        ])),
+        input_chunks[1],
+    );
 }
 
 #[cfg(test)]
@@ -222,7 +225,7 @@ mod tests {
     fn renders_upstream_input_active() {
         let mut state = WizardState::new(false, None);
         state.upstream_url = "git@github.com:example/repo.git".into();
-        let mut step = UpstreamConfigStep { input_active: true };
+        let mut step = UpstreamConfigStep::new();
         let out = render_to_string(&mut step, &state, 80, 24);
         insta::assert_snapshot!("upstream_input_active", out);
     }

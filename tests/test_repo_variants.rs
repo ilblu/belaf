@@ -165,6 +165,9 @@ fn assert_toggle_round_trip(seed: fn(&TestRepo)) {
                     "Ext rows are read-only — toggle must be a no-op"
                 );
             }
+            belaf::core::ui::release_unit_view::RowIdx::Group(_) => {
+                unreachable!("from_detection produces no group rows; only from_resolved does")
+            }
         }
     }
     assert_eq!(

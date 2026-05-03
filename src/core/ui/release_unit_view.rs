@@ -73,6 +73,11 @@ pub struct UnitRow {
     /// route toggles back to the right slot and to look up
     /// prepare-overlay entries.
     pub backref: usize,
+    /// Group id when this unit is part of a `[group.<id>]` block.
+    /// Drives [`ViewLayout::Grouped`] rendering: units with `Some(_)`
+    /// are folded into their group's tree; units with `None` render
+    /// as solo rows.
+    pub group_id: Option<String>,
 }
 
 /// Visual badge for a wizard-confirmed cascade-from rule. Mirrors
@@ -152,11 +157,16 @@ impl HintAnnotation {
 // ---------------------------------------------------------------------------
 
 /// The classified, render-ready view of a repo's ReleaseUnits.
+///
+/// `groups` is populated only by [`Self::from_resolved`] (prepare's
+/// post-resolve constructor). [`Self::from_detection`] leaves it
+/// empty — init has no group rows in its selection step.
 #[derive(Clone, Debug, Default)]
 pub struct ReleaseUnitView {
     pub bundles: Vec<BundleRow>,
     pub units: Vec<UnitRow>,
     pub externally_managed: Vec<ExtRow>,
+    pub groups: Vec<GroupRowDisplay>,
 }
 
 /// Stable index into the view, used to route toggle / cursor events
@@ -165,7 +175,21 @@ pub struct ReleaseUnitView {
 pub enum RowIdx {
     Bundle(usize),
     Unit(usize),
+    Group(usize),
     Ext(usize),
+}
+
+/// Selects which row order the view renders.
+///
+/// - [`ViewLayout::Sectioned`] — bundles → units → ext. The init and
+///   dashboard wizards use this; `groups` are ignored.
+/// - [`ViewLayout::Grouped`] — bundles → groups (with their members
+///   embedded as a tree under the header) → solo units (those with
+///   `group_id == None`) → ext. Prepare uses this.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ViewLayout {
+    Sectioned,
+    Grouped,
 }
 
 /// Standalone-loader output, matches `init::wizard::state::DetectedUnit`.
@@ -178,6 +202,25 @@ pub struct StandaloneEntry {
     pub prefix: String,
     pub selected: bool,
     pub ecosystem: Option<String>,
+}
+
+/// One resolved release unit as prepare sees it: the unit data plus
+/// the bump-pipeline outputs (suggested bump, commit count) that
+/// decorate the row in [`RenderMode::Prepare`].
+///
+/// Re-declared here to keep `release_unit_view` agnostic of the
+/// prepare wizard's private types — the prepare adapter does the
+/// trivial copy from `ReleaseUnitItem` (or any equivalent) into
+/// `ResolvedEntry` before calling [`ReleaseUnitView::from_resolved`].
+#[derive(Clone, Debug)]
+pub struct ResolvedEntry {
+    pub name: String,
+    pub version: String,
+    pub ecosystem: Option<String>,
+    pub selected: bool,
+    pub group_id: Option<String>,
+    pub commit_count: usize,
+    pub bump_hint: BumpHint,
 }
 
 impl ReleaseUnitView {
@@ -229,6 +272,10 @@ impl ReleaseUnitView {
                         ExtKind::MobileAndroid => {
                             ("Android app — auto [allow_uncovered]", "kotlin")
                         }
+                        ExtKind::JvmPluginManaged => (
+                            "JVM (plugin-managed) — uses your plugin's release flow (axion-release / nebula-release / app-versioning)",
+                            "kotlin",
+                        ),
                     };
                     ext_rows.push(ExtRow {
                         label: m.path.escaped().to_string(),
@@ -278,6 +325,7 @@ impl ReleaseUnitView {
                 annotations,
                 selected: p.selected,
                 backref: idx,
+                group_id: None,
             });
         }
 
@@ -285,7 +333,80 @@ impl ReleaseUnitView {
             bundles,
             units,
             externally_managed: ext_rows,
+            groups: Vec::new(),
         }
+    }
+
+    /// Build the view from prepare's resolved-unit list. Produces
+    /// `(view, overlay)`: the view holds the universal row shape with
+    /// `[group.<id>]` membership baked into [`UnitRow::group_id`] and
+    /// one [`GroupRowDisplay`] per group; the overlay carries
+    /// prepare-modal extras (bump hints, commit counts) keyed by
+    /// `UnitRow::backref`. Render with
+    /// `view.render_with_overlay(.., ViewLayout::Grouped)`.
+    pub fn from_resolved(entries: &[ResolvedEntry]) -> (Self, PrepareOverlay) {
+        let mut units: Vec<UnitRow> = Vec::with_capacity(entries.len());
+        let mut overlay = PrepareOverlay::default();
+
+        for (idx, e) in entries.iter().enumerate() {
+            units.push(UnitRow {
+                name: e.name.clone(),
+                version: e.version.clone(),
+                prefix: String::new(),
+                ecosystem: e.ecosystem.clone(),
+                annotations: Vec::new(),
+                selected: e.selected,
+                backref: idx,
+                group_id: e.group_id.clone(),
+            });
+            overlay.bumps.insert(idx, e.bump_hint);
+            overlay.commits.insert(idx, e.commit_count);
+        }
+
+        let mut groups: Vec<GroupRowDisplay> = Vec::new();
+        let mut group_pos: HashMap<String, usize> = HashMap::new();
+        for e in entries {
+            let Some(gid) = e.group_id.as_ref() else {
+                continue;
+            };
+            if let Some(&pos) = group_pos.get(gid) {
+                let g = &mut groups[pos];
+                g.members.push(GroupMemberDisplay {
+                    name: e.name.clone(),
+                    ecosystem_label: e.ecosystem.clone().unwrap_or_else(|| "unknown".to_string()),
+                });
+                if !e.selected {
+                    g.all_selected = false;
+                }
+                if e.selected {
+                    g.any_selected = true;
+                }
+            } else {
+                let pos = groups.len();
+                group_pos.insert(gid.clone(), pos);
+                groups.push(GroupRowDisplay {
+                    id: gid.clone(),
+                    members: vec![GroupMemberDisplay {
+                        name: e.name.clone(),
+                        ecosystem_label: e
+                            .ecosystem
+                            .clone()
+                            .unwrap_or_else(|| "unknown".to_string()),
+                    }],
+                    all_selected: e.selected,
+                    any_selected: e.selected,
+                    suggested_bump: Some(e.bump_hint),
+                });
+            }
+        }
+
+        let view = Self {
+            bundles: Vec::new(),
+            units,
+            externally_managed: Vec::new(),
+            groups,
+        };
+        (view, overlay)
     }
 
     /// Total togglable rows (Bundles + Units; Ext is read-only).
@@ -293,18 +414,52 @@ impl ReleaseUnitView {
         self.bundles.len() + self.units.len()
     }
 
-    /// All rows in display order (Bundles → Units → Ext) as `RowIdx`.
-    /// Useful for cursor navigation: cursor is an index into the flat
-    /// returned list.
+    /// All rows in [`ViewLayout::Sectioned`] order as `RowIdx`. Useful
+    /// for cursor navigation: cursor is an index into the flat returned
+    /// list. Equivalent to `flat_indices_for_layout(ViewLayout::Sectioned)`.
     pub fn flat_indices(&self) -> Vec<RowIdx> {
+        self.flat_indices_for_layout(ViewLayout::Sectioned)
+    }
+
+    /// All rows in display order for the given layout. In Grouped, the
+    /// returned indices match the cursor stops the renderer produces:
+    /// each group is a single stop (members are visually embedded but
+    /// not separately addressable), and units with `group_id` set are
+    /// hidden from the solo list.
+    pub fn flat_indices_for_layout(&self, layout: ViewLayout) -> Vec<RowIdx> {
         let mut out = Vec::with_capacity(
-            self.bundles.len() + self.units.len() + self.externally_managed.len(),
+            self.bundles.len()
+                + self.units.len()
+                + self.externally_managed.len()
+                + self.groups.len(),
         );
         for i in 0..self.bundles.len() {
             out.push(RowIdx::Bundle(i));
         }
-        for i in 0..self.units.len() {
-            out.push(RowIdx::Unit(i));
+        match layout {
+            ViewLayout::Sectioned => {
+                for i in 0..self.units.len() {
+                    out.push(RowIdx::Unit(i));
+                }
+            }
+            ViewLayout::Grouped => {
+                let mut emitted_groups: Vec<&str> = Vec::with_capacity(self.groups.len());
+                for (i, u) in self.units.iter().enumerate() {
+                    match &u.group_id {
+                        Some(gid) => {
+                            if !emitted_groups.contains(&gid.as_str()) {
+                                if let Some(group_idx) =
+                                    self.groups.iter().position(|g| g.id == *gid)
+                                {
+                                    out.push(RowIdx::Group(group_idx));
+                                    emitted_groups.push(gid.as_str());
+                                }
+                            }
+                        }
+                        None => out.push(RowIdx::Unit(i)),
+                    }
+                }
+            }
         }
         for i in 0..self.externally_managed.len() {
             out.push(RowIdx::Ext(i));
@@ -327,6 +482,23 @@ impl ReleaseUnitView {
             RowIdx::Unit(i) => {
                 if let Some(u) = self.units.get_mut(i) {
                     u.selected = !u.selected;
+                    return true;
+                }
+            }
+            RowIdx::Group(i) => {
+                if let Some(g) = self.groups.get(i).cloned() {
+                    let target = !g.all_selected;
+                    let member_names: Vec<String> =
+                        g.members.iter().map(|m| m.name.clone()).collect();
+                    for u in self.units.iter_mut() {
+                        if member_names.contains(&u.name) {
+                            u.selected = target;
+                        }
+                    }
+                    if let Some(gm) = self.groups.get_mut(i) {
+                        gm.all_selected = target;
+                        gm.any_selected = target;
+                    }
                     return true;
                 }
             }
@@ -369,14 +541,11 @@ impl ReleaseUnitView {
     }
 }
 
-/// Render a single [`UnitRow`] as a `(Line, background-style)` pair —
-/// used by the prepare wizard's selection table to share the row
 /// Render a single [`UnitRow`] as a `(Line, background-style)` pair.
-/// `pub(crate)` only because prepare's wizard interleaves single
-/// rows with collapsed group rows in its custom layout — once that
-/// layout migrates fully into `ReleaseUnitView`, this becomes
-/// strictly private and the only entry point is `render*`.
-pub(crate) fn render_unit_row_line(
+/// All callers go through [`ReleaseUnitView::render`] /
+/// [`ReleaseUnitView::render_with_overlay`]; this helper stays
+/// internal so per-row formatting cannot drift between consumers.
+fn render_unit_row_line(
     row: &UnitRow,
     is_current: bool,
     mode: RenderMode,
@@ -484,6 +653,7 @@ pub struct PrepareOverlay {
 // ---------------------------------------------------------------------------
 
 /// One member entry in a group row's tree.
+#[derive(Clone, Debug)]
 pub struct GroupMemberDisplay {
     pub name: String,
     pub ecosystem_label: String,
@@ -492,6 +662,7 @@ pub struct GroupMemberDisplay {
 /// Aggregate state of a `[group.<id>]` block as a list row: the
 /// header summarises the group's selection-state and shared bump,
 /// the tree below it lists each member by ecosystem.
+#[derive(Clone, Debug)]
 pub struct GroupRowDisplay {
     pub id: String,
     pub members: Vec<GroupMemberDisplay>,
@@ -504,7 +675,7 @@ impl GroupRowDisplay {
     /// Render this group-row into the multi-line shape prepare uses
     /// in its selection table. Header line carries selection state +
     /// shared bump; one indented connector-line per member follows.
-    pub fn render_lines(&self, is_current: bool) -> Vec<Line<'static>> {
+    fn render_lines(&self, is_current: bool) -> Vec<Line<'static>> {
         let checkbox = if self.all_selected {
             "✅"
         } else if self.any_selected {
@@ -602,25 +773,26 @@ pub struct ViewContext {
 }
 
 impl ReleaseUnitView {
-    /// Render the view inside `area`. The caller owns the layout
-    /// chrome (block / borders / hint bar); this method only fills
-    /// the inner content area.
+    /// Render the view inside `area` using [`ViewLayout::Sectioned`].
+    /// The caller owns the layout chrome (block / borders / hint bar);
+    /// this method only fills the inner content area.
     pub fn render(&self, frame: &mut Frame, area: Rect, ctx: &ViewContext) {
-        self.render_inner(frame, area, ctx, None);
+        self.render_inner(frame, area, ctx, None, ViewLayout::Sectioned);
     }
 
     /// Render with prepare-modal overlay data (bump hints, commit
     /// counts, cascade-override badges) layered on top of the
-    /// universal row shape. Init/dashboard use [`Self::render`]; only
-    /// the prepare wizard reaches this entry point.
+    /// universal row shape. Pass [`ViewLayout::Sectioned`] for
+    /// init/dashboard, [`ViewLayout::Grouped`] for prepare.
     pub fn render_with_overlay(
         &self,
         frame: &mut Frame,
         area: Rect,
         ctx: &ViewContext,
         overlay: &PrepareOverlay,
+        layout: ViewLayout,
     ) {
-        self.render_inner(frame, area, ctx, Some(overlay));
+        self.render_inner(frame, area, ctx, Some(overlay), layout);
     }
 
     fn render_inner(
@@ -629,10 +801,17 @@ impl ReleaseUnitView {
         area: Rect,
         ctx: &ViewContext,
         overlay: Option<&PrepareOverlay>,
+        layout: ViewLayout,
     ) {
-        let mut items: Vec<ListItem> = Vec::new();
-        let label_width = self
-            .bundles
+        let items = match layout {
+            ViewLayout::Sectioned => self.build_sectioned_items(ctx, overlay),
+            ViewLayout::Grouped => self.build_grouped_items(ctx, overlay),
+        };
+        frame.render_widget(List::new(items), area);
+    }
+
+    fn label_width(&self) -> usize {
+        self.bundles
             .iter()
             .map(|b| b.label.chars().count())
             .chain(self.units.iter().map(|u| u.name.chars().count()))
@@ -642,9 +821,17 @@ impl ReleaseUnitView {
                     .map(|e| e.label.chars().count()),
             )
             .max()
-            .unwrap_or(0);
+            .unwrap_or(0)
+    }
 
-        let flat = self.flat_indices();
+    fn build_sectioned_items<'a>(
+        &'a self,
+        ctx: &ViewContext,
+        overlay: Option<&PrepareOverlay>,
+    ) -> Vec<ListItem<'a>> {
+        let mut items: Vec<ListItem> = Vec::new();
+        let label_width = self.label_width();
+        let flat = self.flat_indices_for_layout(ViewLayout::Sectioned);
         let mut last_section: Option<&'static str> = None;
 
         for (display_idx, row_idx) in flat.iter().enumerate() {
@@ -652,6 +839,7 @@ impl ReleaseUnitView {
                 RowIdx::Bundle(_) => "Bundles",
                 RowIdx::Unit(_) => "Standalone",
                 RowIdx::Ext(_) => "Externally-managed",
+                RowIdx::Group(_) => "Groups",
             };
             if last_section != Some(section) {
                 if last_section.is_some() {
@@ -666,7 +854,25 @@ impl ReleaseUnitView {
             items.push(line);
         }
 
-        frame.render_widget(List::new(items), area);
+        items
+    }
+
+    fn build_grouped_items<'a>(
+        &'a self,
+        ctx: &ViewContext,
+        overlay: Option<&PrepareOverlay>,
+    ) -> Vec<ListItem<'a>> {
+        let mut items: Vec<ListItem> = Vec::new();
+        let label_width = self.label_width();
+        let flat = self.flat_indices_for_layout(ViewLayout::Grouped);
+
+        for (display_idx, row_idx) in flat.iter().enumerate() {
+            let is_current = ctx.cursor == Some(display_idx);
+            let item = self.render_row(*row_idx, ctx.mode, label_width, is_current, overlay);
+            items.push(item);
+        }
+
+        items
     }
 
     fn render_row(
@@ -732,6 +938,16 @@ impl ReleaseUnitView {
                 let (line, line_bg) =
                     render_unit_row_line(u, is_current, mode, label_width, overlay);
                 ListItem::new(line).style(line_bg)
+            }
+            RowIdx::Group(i) => {
+                let group = &self.groups[i];
+                let lines = group.render_lines(is_current);
+                let style = if is_current {
+                    Style::default().bg(Color::Rgb(40, 40, 50))
+                } else {
+                    Style::default()
+                };
+                ListItem::new(lines).style(style)
             }
             RowIdx::Ext(i) => {
                 let e = &self.externally_managed[i];
@@ -820,7 +1036,6 @@ pub fn bundle_kind_label(b: &BundleKind) -> String {
             let v = match version_source {
                 JvmVersionSource::GradleProperties => "gradle.properties",
                 JvmVersionSource::BuildGradleKtsLiteral => "build.gradle.kts",
-                JvmVersionSource::PluginManaged => "plugin-managed",
             };
             format!("jvm-library/{v}")
         }
@@ -978,6 +1193,61 @@ mod tests {
         let mut view2 =
             ReleaseUnitView::from_detection(&r2, &[], &std::collections::HashSet::new());
         assert!(!view2.toggle(RowIdx::Ext(0)));
+    }
+
+    fn resolved(name: &str, group_id: Option<&str>, selected: bool) -> ResolvedEntry {
+        ResolvedEntry {
+            name: name.into(),
+            version: "0.1.0".into(),
+            ecosystem: Some("npm".into()),
+            selected,
+            group_id: group_id.map(str::to_string),
+            commit_count: 0,
+            bump_hint: BumpHint::None,
+        }
+    }
+
+    #[test]
+    fn from_resolved_collapses_group_members_in_encounter_order() {
+        let entries = vec![
+            resolved("@org/utils", None, true),
+            resolved("@org/schema", Some("schema-bundle"), true),
+            resolved("com.org:schema", Some("schema-bundle"), true),
+            resolved("cli", None, true),
+        ];
+        let (view, overlay) = ReleaseUnitView::from_resolved(&entries);
+
+        assert_eq!(view.units.len(), 4);
+        assert_eq!(view.groups.len(), 1);
+        assert_eq!(view.groups[0].id, "schema-bundle");
+        assert_eq!(view.groups[0].members.len(), 2);
+        assert!(view.groups[0].all_selected);
+
+        let flat = view.flat_indices_for_layout(ViewLayout::Grouped);
+        assert_eq!(flat.len(), 3, "two solos plus one group row");
+        assert!(matches!(flat[0], RowIdx::Unit(0)));
+        assert!(matches!(flat[1], RowIdx::Group(0)));
+        assert!(matches!(flat[2], RowIdx::Unit(3)));
+
+        assert_eq!(overlay.commits.len(), 4);
+        assert_eq!(overlay.bumps.len(), 4);
+    }
+
+    #[test]
+    fn from_resolved_group_toggle_flips_all_members() {
+        let entries = vec![
+            resolved("a", Some("g"), true),
+            resolved("b", Some("g"), true),
+        ];
+        let (mut view, _overlay) = ReleaseUnitView::from_resolved(&entries);
+        assert!(view.groups[0].all_selected);
+        assert!(view.toggle(RowIdx::Group(0)));
+        assert!(!view.units[0].selected);
+        assert!(!view.units[1].selected);
+        assert!(!view.groups[0].all_selected);
+        assert!(view.toggle(RowIdx::Group(0)));
+        assert!(view.units[0].selected);
+        assert!(view.units[1].selected);
     }
 
     #[test]

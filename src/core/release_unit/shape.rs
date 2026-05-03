@@ -62,6 +62,12 @@ pub enum HintKind {
 pub enum ExtKind {
     MobileIos,
     MobileAndroid,
+    /// JVM project where versioning is owned by a Gradle plugin
+    /// (axion-release, nebula-release, app-versioning, etc.). The
+    /// plugin is the user's release tool of choice; belaf treats it
+    /// as out-of-scope and lands the path in `[allow_uncovered]` —
+    /// same mental model as Mobile (Fastlane/Bitrise).
+    JvmPluginManaged,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -116,7 +122,6 @@ impl std::fmt::Display for HexagonalPrimary {
 pub enum JvmVersionSource {
     GradleProperties,
     BuildGradleKtsLiteral,
-    PluginManaged,
 }
 
 impl DetectedShape {

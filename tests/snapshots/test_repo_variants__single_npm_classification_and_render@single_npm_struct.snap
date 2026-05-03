@@ -6,4 +6,5 @@ ReleaseUnitView {
     bundles: [],
     units: [],
     externally_managed: [],
+    groups: [],
 }

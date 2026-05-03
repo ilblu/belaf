@@ -1,26 +1,38 @@
 //! Final review screen. ENTER/y confirms (orchestrator runs the
 //! bootstrap), n/Esc goes back to upstream config.
 
+use std::collections::BTreeMap;
+
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{List, ListItem, ListState, Paragraph},
     Frame,
 };
 
 use super::{
-    state::WizardState,
+    chrome::{self, palette, step_index, STEP_TOTAL},
+    state::{DetectedUnit, WizardState},
     step::{Step, StepResult, WizardOutcome},
 };
 
-#[derive(Default)]
-pub struct ConfirmationStep;
+pub struct ConfirmationStep {
+    list_state: ListState,
+}
+
+impl Default for ConfirmationStep {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ConfirmationStep {
     pub fn new() -> Self {
-        Self
+        let mut list_state = ListState::default();
+        list_state.select(Some(0));
+        Self { list_state }
     }
 }
 
@@ -30,10 +42,10 @@ impl Step for ConfirmationStep {
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, state: &WizardState) {
-        render(frame, area, state);
+        render(frame, area, state, &mut self.list_state);
     }
 
-    fn handle_event(&mut self, event: &Event, _state: &mut WizardState) -> StepResult {
+    fn handle_event(&mut self, event: &Event, state: &mut WizardState) -> StepResult {
         let Event::Key(key) = event else {
             return StepResult::Continue;
         };
@@ -44,144 +56,202 @@ impl Step for ConfirmationStep {
             }
             (KeyCode::Enter | KeyCode::Char('y'), _) => StepResult::Exit(WizardOutcome::Confirmed),
             (KeyCode::Char('n') | KeyCode::Esc, _) => StepResult::Back,
+            (KeyCode::Up | KeyCode::Char('k'), _) => {
+                let total = state.selected_units().len();
+                if total > 0 {
+                    let cur = self.list_state.selected().unwrap_or(0);
+                    self.list_state.select(Some(cur.saturating_sub(1)));
+                }
+                StepResult::Continue
+            }
+            (KeyCode::Down | KeyCode::Char('j'), _) => {
+                let total = state.selected_units().len();
+                if total > 0 {
+                    let cur = self.list_state.selected().unwrap_or(0);
+                    let next = (cur + 1).min(total - 1);
+                    self.list_state.select(Some(next));
+                }
+                StepResult::Continue
+            }
+            (KeyCode::Home | KeyCode::Char('g'), _) => {
+                self.list_state.select(Some(0));
+                StepResult::Continue
+            }
+            (KeyCode::End | KeyCode::Char('G'), _) => {
+                let total = state.selected_units().len();
+                if total > 0 {
+                    self.list_state.select(Some(total - 1));
+                }
+                StepResult::Continue
+            }
             _ => StepResult::Continue,
         }
     }
 }
 
-fn render(frame: &mut Frame, area: Rect, state: &WizardState) {
+fn render(frame: &mut Frame, area: Rect, state: &WizardState, list_state: &mut ListState) {
+    let body = chrome::render_chrome(
+        frame,
+        area,
+        "Confirmation",
+        step_index::CONFIRMATION,
+        STEP_TOTAL,
+    );
+    let (content, hints_area) = chrome::split_body_with_hints(body);
+
     let selected = state.selected_units();
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(Span::styled(
-            " Step 4: Confirmation ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
-
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
+    let body_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(2),
+            Constraint::Length(2), // repo section: label + value
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // divider
+            Constraint::Length(1), // blank
+            Constraint::Length(2), // projects label + stats
+            Constraint::Length(1), // blank
+            Constraint::Min(3),    // project list
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // divider
+            Constraint::Length(1), // blank
+            Constraint::Length(5), // actions section
         ])
-        .split(inner_area);
+        .split(content);
 
-    let header_lines = vec![
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("📋 ", Style::default()),
-            Span::styled(
-                "Review your configuration before initializing",
-                Style::default().fg(Color::White),
-            ),
-        ]),
-    ];
-    let header = Paragraph::new(header_lines).alignment(Alignment::Center);
-    frame.render_widget(header, chunks[0]);
-
-    let content_chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .margin(1)
-        .split(chunks[1]);
-
-    let mut summary_lines = vec![
-        Line::from(vec![
-            Span::styled("🔗 ", Style::default()),
-            Span::styled("Repository", Style::default().fg(Color::White)),
-        ]),
+    // ─ REPOSITORY ─
+    let repo_lines = vec![
+        Line::from(chrome::section_label("REPOSITORY")),
         Line::from(Span::styled(
-            format!("   {}", state.upstream_url),
-            Style::default().fg(Color::Gray),
+            state.upstream_url.clone(),
+            Style::default()
+                .fg(palette::VALUE)
+                .add_modifier(Modifier::BOLD),
         )),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("📦 ", Style::default()),
-            Span::styled(
-                format!("Projects ({})", selected.len()),
-                Style::default().fg(Color::White),
-            ),
-        ]),
     ];
+    frame.render_widget(Paragraph::new(repo_lines), body_chunks[0]);
 
-    for unit in selected.iter().take(8) {
-        summary_lines.push(Line::from(vec![
-            Span::styled("   ✅ ", Style::default().fg(Color::Green)),
-            Span::styled(unit.name.clone(), Style::default().fg(Color::White)),
+    frame.render_widget(chrome::divider(), body_chunks[2]);
+
+    // ─ PROJECTS ─
+    let stats = ecosystem_stats(&selected);
+    let projects_header = vec![
+        Line::from(vec![
+            chrome::section_label("PROJECTS"),
+            Span::raw("  "),
             Span::styled(
-                format!(" @ {}", unit.version),
-                Style::default().fg(Color::Gray),
+                format!("{}", selected.len()),
+                Style::default()
+                    .fg(palette::VALUE)
+                    .add_modifier(Modifier::BOLD),
             ),
-        ]));
-    }
+            Span::styled(" total", Style::default().fg(palette::MUTED)),
+        ]),
+        Line::from(stats_spans(&stats)),
+    ];
+    frame.render_widget(Paragraph::new(projects_header), body_chunks[4]);
 
-    if selected.len() > 8 {
-        summary_lines.push(Line::from(Span::styled(
-            format!("   ... and {} more", selected.len() - 8),
-            Style::default().fg(Color::Gray),
-        )));
-    }
+    let pill_width = stats.keys().map(|k| k.len()).max().unwrap_or(4).max(4);
+    let name_width = selected
+        .iter()
+        .map(|u| u.name.chars().count())
+        .max()
+        .unwrap_or(20)
+        .min(40);
+    let items: Vec<ListItem> = selected
+        .iter()
+        .map(|u| project_row(u, name_width, pill_width))
+        .collect();
 
-    let summary_block = Paragraph::new(summary_lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Gray))
-            .title(Span::styled(" Summary ", Style::default().fg(Color::White))),
-    );
-    frame.render_widget(summary_block, content_chunks[0]);
+    let list = List::new(items).highlight_style(Style::default().bg(palette::ROW_HIGHLIGHT));
+    frame.render_stateful_widget(list, body_chunks[6], list_state);
 
+    frame.render_widget(chrome::divider(), body_chunks[8]);
+
+    // ─ ON CONFIRM ─
     let action_lines = vec![
-        Line::from(vec![
-            Span::styled("⚡ ", Style::default()),
-            Span::styled("Actions", Style::default().fg(Color::White)),
-        ]),
-        Line::from(""),
-        Line::from(vec![
-            Span::styled("   📄 ", Style::default().fg(Color::Cyan)),
-            Span::styled("Create belaf/config.toml", Style::default().fg(Color::Gray)),
-        ]),
-        Line::from(vec![
-            Span::styled("   ✏️  ", Style::default().fg(Color::Yellow)),
-            Span::styled(
-                "Update project version files",
-                Style::default().fg(Color::Gray),
-            ),
-        ]),
-        Line::from(vec![
-            Span::styled("   🏷️  ", Style::default().fg(Color::Green)),
-            Span::styled("Create baseline Git tags", Style::default().fg(Color::Gray)),
-        ]),
+        Line::from(chrome::section_label("ON CONFIRM")),
+        Line::from(chrome::action_row("Write belaf/config.toml")),
+        Line::from(chrome::action_row(&format!(
+            "Update version files in {} project{}",
+            selected.len(),
+            if selected.len() == 1 { "" } else { "s" }
+        ))),
+        Line::from(chrome::action_row(
+            "Create baseline tags for all release units",
+        )),
     ];
+    frame.render_widget(Paragraph::new(action_lines), body_chunks[10]);
 
-    let action_block = Paragraph::new(action_lines).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Gray))
-            .title(Span::styled(
-                " Will Execute ",
-                Style::default().fg(Color::White),
-            )),
+    chrome::hint_bar(
+        frame,
+        hints_area,
+        &[
+            ("↑↓", " scroll"),
+            ("Enter", " confirm"),
+            ("Esc", " back"),
+            ("q", " quit"),
+        ],
     );
-    frame.render_widget(action_block, content_chunks[1]);
+}
 
-    let hints = Line::from(vec![
-        Span::styled("Enter/y", Style::default().fg(Color::Green)),
-        Span::styled(" confirm  ", Style::default().fg(Color::Gray)),
-        Span::styled("Backspace/n", Style::default().fg(Color::Yellow)),
-        Span::styled(" go back  ", Style::default().fg(Color::Gray)),
-        Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" quit", Style::default().fg(Color::Gray)),
-    ]);
-    let hints_para = Paragraph::new(hints).alignment(Alignment::Center);
-    frame.render_widget(hints_para, chunks[2]);
+fn ecosystem_stats(selected: &[&DetectedUnit]) -> BTreeMap<String, usize> {
+    let mut out: BTreeMap<String, usize> = BTreeMap::new();
+    for u in selected {
+        let key = u.ecosystem.clone().unwrap_or_else(|| "other".to_string());
+        *out.entry(key).or_insert(0) += 1;
+    }
+    out
+}
+
+fn stats_spans(stats: &BTreeMap<String, usize>) -> Vec<Span<'static>> {
+    if stats.is_empty() {
+        return vec![Span::styled(
+            "no ecosystem detected",
+            Style::default().fg(palette::MUTED),
+        )];
+    }
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    for (i, (eco, count)) in stats.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled("   ", Style::default().fg(palette::MUTED)));
+        }
+        spans.push(Span::styled(
+            format!("{} ", eco),
+            Style::default().fg(chrome::ecosystem_color(eco)),
+        ));
+        spans.push(Span::styled(
+            format!("{}", count),
+            Style::default()
+                .fg(palette::VALUE)
+                .add_modifier(Modifier::BOLD),
+        ));
+    }
+    spans
+}
+
+fn project_row(u: &DetectedUnit, name_width: usize, pill_width: usize) -> ListItem<'static> {
+    let eco = u.ecosystem.as_deref().unwrap_or("other");
+    let eco_color = chrome::ecosystem_color(eco);
+
+    let display_name = if u.name.chars().count() > name_width {
+        let mut s: String = u.name.chars().take(name_width.saturating_sub(1)).collect();
+        s.push('…');
+        s
+    } else {
+        let pad = name_width - u.name.chars().count();
+        format!("{}{}", u.name, " ".repeat(pad))
+    };
+
+    let pill = format!("{:<width$}", eco, width = pill_width);
+
+    ListItem::new(Line::from(vec![
+        Span::raw("  "),
+        Span::styled(display_name, Style::default().fg(palette::VALUE)),
+        Span::raw("   "),
+        Span::styled(pill, Style::default().fg(eco_color)),
+        Span::raw("   "),
+        Span::styled(u.version.clone(), Style::default().fg(palette::SUBTLE)),
+    ]))
 }
 
 #[cfg(test)]
@@ -202,14 +272,14 @@ mod tests {
                 version: "0.1.0".into(),
                 prefix: "crates/alpha".into(),
                 selected: true,
-                ecosystem: None,
+                ecosystem: Some("cargo".into()),
             },
             DetectedUnit {
                 name: "beta".into(),
                 version: "0.2.3".into(),
                 prefix: "crates/beta".into(),
                 selected: true,
-                ecosystem: None,
+                ecosystem: Some("cargo".into()),
             },
         ];
         let mut step = ConfirmationStep::new();

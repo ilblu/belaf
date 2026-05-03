@@ -144,6 +144,9 @@ fn drift_shape_label(s: &DetectedShape) -> String {
         DetectedShape::ExternallyManaged(e) => match e {
             ExtKind::MobileIos => "iOS app — recommend Bitrise/fastlane".to_string(),
             ExtKind::MobileAndroid => "Android app — recommend Bitrise/Codemagic".to_string(),
+            ExtKind::JvmPluginManaged => {
+                "JVM (plugin-managed) — release flow owned by Gradle plugin".to_string()
+            }
         },
     }
 }
@@ -152,7 +155,6 @@ fn jvm_label(s: &JvmVersionSource) -> &'static str {
     match s {
         JvmVersionSource::GradleProperties => "gradle.properties (recommended)",
         JvmVersionSource::BuildGradleKtsLiteral => "literal version in build.gradle(.kts)",
-        JvmVersionSource::PluginManaged => "plugin-managed (suggest external_versioner)",
     }
 }
 

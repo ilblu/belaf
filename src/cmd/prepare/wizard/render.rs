@@ -20,8 +20,7 @@ use crate::core::{
     ui::{
         markdown,
         release_unit_view::{
-            render_unit_row_line, BumpHint, GroupMemberDisplay, GroupRowDisplay, PrepareOverlay,
-            RenderMode, UnitRow,
+            BumpHint, ReleaseUnitView, RenderMode, ResolvedEntry, ViewContext, ViewLayout,
         },
         utils::centered_rect,
     },
@@ -31,7 +30,7 @@ use crate::core::{
 
 use super::{
     calculate_major_version, calculate_minor_version, calculate_next_version,
-    calculate_patch_version, DisplayRow, ReleaseUnitItem, WizardState, WizardStep,
+    calculate_patch_version, WizardState, WizardStep,
 };
 
 pub(super) fn ui(f: &mut Frame, state: &mut WizardState) {
@@ -114,48 +113,37 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
     let header = Paragraph::new(header_lines).alignment(ratatui::layout::Alignment::Center);
     f.render_widget(header, chunks[0]);
 
-    // Plan §5: render groups as a single header row with members shown
-    // as a read-only tree below. Cursor lands on the header row only.
-    let display_rows = state.display_rows();
-    // Compute the label width across solo rows so the secondary column
-    // lines up — same shape the init wizard uses via the shared view.
-    let label_width = state
+    let entries: Vec<ResolvedEntry> = state
         .units
         .iter()
-        .map(|u| u.name().chars().count())
-        .max()
-        .unwrap_or(0);
-    let items: Vec<ListItem> = display_rows
-        .iter()
-        .enumerate()
-        .map(|(row_idx, row)| {
-            let is_current = state.unit_list_state.selected() == Some(row_idx);
-
-            match row {
-                DisplayRow::Solo { unit_idx } => {
-                    let project = &state.units[*unit_idx];
-                    render_solo_row(project, is_current, label_width)
-                }
-                DisplayRow::Group { id, member_indices } => {
-                    render_group_row(id, member_indices, &state.units, is_current)
-                }
-            }
+        .map(|u| ResolvedEntry {
+            name: u.name().to_string(),
+            version: u.current_version().to_string(),
+            ecosystem: Some(u.ecosystem().as_str().to_string()),
+            selected: u.selected,
+            group_id: u.group_id().map(str::to_string),
+            commit_count: u.commit_count(),
+            bump_hint: bump_hint_from(u.suggested_bump()),
         })
         .collect();
+    let (view, overlay) = ReleaseUnitView::from_resolved(&entries);
 
-    let list = List::new(items)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Gray))
-                .title(Span::styled(
-                    " Projects ",
-                    Style::default().fg(Color::White),
-                )),
-        )
-        .highlight_symbol("");
+    let cursor = state.unit_list_state.selected();
+    let ctx = ViewContext {
+        mode: RenderMode::Prepare,
+        cursor,
+    };
 
-    f.render_stateful_widget(list, chunks[1], &mut state.unit_list_state);
+    let list_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Gray))
+        .title(Span::styled(
+            " Projects ",
+            Style::default().fg(Color::White),
+        ));
+    let inner = list_block.inner(chunks[1]);
+    f.render_widget(list_block, chunks[1]);
+    view.render_with_overlay(f, inner, &ctx, &overlay, ViewLayout::Grouped);
 
     let hints = Line::from(vec![
         Span::styled("↑↓", Style::default().fg(Color::Cyan)),
@@ -175,108 +163,13 @@ fn render_project_selection(f: &mut Frame, area: Rect, state: &mut WizardState) 
     f.render_widget(hints_para, chunks[2]);
 }
 
-/// Solo projects are one row each; grouped projects collapse into one
-/// row per group with member indices in original-order. Plan §5.
-pub(super) fn compute_display_rows(units: &[ReleaseUnitItem]) -> Vec<DisplayRow> {
-    let mut out: Vec<DisplayRow> = Vec::new();
-    let mut group_pos: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for (i, p) in units.iter().enumerate() {
-        match p.group_id() {
-            Some(gid) => {
-                if let Some(&pos) = group_pos.get(gid) {
-                    if let DisplayRow::Group { member_indices, .. } = &mut out[pos] {
-                        member_indices.push(i);
-                    }
-                } else {
-                    group_pos.insert(gid.to_string(), out.len());
-                    out.push(DisplayRow::Group {
-                        id: gid.to_string(),
-                        member_indices: vec![i],
-                    });
-                }
-            }
-            None => out.push(DisplayRow::Solo { unit_idx: i }),
-        }
-    }
-    out
-}
-
-/// Render one ungrouped project as a single list row. Builds a
-/// transient `UnitRow` + `PrepareOverlay` slice for this one project,
-/// then delegates to the shared `render_unit_row_line` rendering
-/// path — same path init/dashboard consume.
-fn render_solo_row(
-    project: &ReleaseUnitItem,
-    is_current: bool,
-    label_width: usize,
-) -> ListItem<'static> {
-    let row = UnitRow {
-        name: project.name().to_string(),
-        version: project.current_version().to_string(),
-        prefix: String::new(),
-        ecosystem: Some(project.ecosystem().as_str().to_string()),
-        annotations: Vec::new(),
-        selected: project.selected,
-        backref: 0,
-    };
-    let mut overlay = PrepareOverlay::default();
-    let bump_hint = match project.suggested_bump() {
+fn bump_hint_from(rec: BumpRecommendation) -> BumpHint {
+    match rec {
         BumpRecommendation::Major => BumpHint::Major,
         BumpRecommendation::Minor => BumpHint::Minor,
         BumpRecommendation::Patch => BumpHint::Patch,
         BumpRecommendation::None => BumpHint::None,
-    };
-    overlay.bumps.insert(0, bump_hint);
-    overlay.commits.insert(0, project.commit_count());
-    let (line, bg) = render_unit_row_line(
-        &row,
-        is_current,
-        RenderMode::Prepare,
-        label_width,
-        Some(&overlay),
-    );
-    ListItem::new(vec![line]).style(bg)
-}
-
-fn render_group_row(
-    group_id: &str,
-    member_indices: &[usize],
-    projects: &[ReleaseUnitItem],
-    is_current: bool,
-) -> ListItem<'static> {
-    let members: Vec<&ReleaseUnitItem> = member_indices.iter().map(|i| &projects[*i]).collect();
-    if members.is_empty() {
-        return ListItem::new(Line::from(""));
     }
-
-    let suggested_bump = match members[0].suggested_bump() {
-        BumpRecommendation::Major => Some(BumpHint::Major),
-        BumpRecommendation::Minor => Some(BumpHint::Minor),
-        BumpRecommendation::Patch => Some(BumpHint::Patch),
-        BumpRecommendation::None => None,
-    };
-
-    let row = GroupRowDisplay {
-        id: group_id.to_string(),
-        members: members
-            .iter()
-            .map(|m| GroupMemberDisplay {
-                name: m.name().to_string(),
-                ecosystem_label: m.ecosystem().display_name().to_string(),
-            })
-            .collect(),
-        all_selected: members.iter().all(|m| m.selected),
-        any_selected: members.iter().any(|m| m.selected),
-        suggested_bump,
-    };
-
-    let lines = row.render_lines(is_current);
-    let style = if is_current {
-        Style::default().bg(Color::Rgb(40, 40, 50))
-    } else {
-        Style::default()
-    };
-    ListItem::new(lines).style(style)
 }
 
 fn render_project_bump_strategy(f: &mut Frame, area: Rect, state: &mut WizardState) {

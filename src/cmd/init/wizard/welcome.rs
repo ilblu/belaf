@@ -8,11 +8,12 @@ use ratatui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
 use super::{
+    chrome::{self, palette, step_index, STEP_TOTAL},
     preset::PresetSelectionStep,
     state::WizardState,
     step::{Step, StepResult, WizardOutcome},
@@ -54,9 +55,6 @@ impl Step for WelcomeStep {
                 // --force on top of an explicit Enter.
                 state.force = true;
                 state.error_message = None;
-                // UnifiedSelectionStep covers both auto-detected
-                // bundles and manual project list. Skip it only when
-                // both are empty (preset-only flow).
                 if !state.detection.matches.is_empty() || !state.standalone_units.is_empty() {
                     StepResult::Next(Box::new(UnifiedSelectionStep::new()))
                 } else {
@@ -71,239 +69,149 @@ impl Step for WelcomeStep {
 fn render_welcome(frame: &mut Frame, area: Rect, state: &WizardState) {
     let is_reconfigure = state.config_exists;
 
-    let border_color = if is_reconfigure {
-        Color::Red
+    let title = if is_reconfigure {
+        "Reconfigure"
     } else {
-        Color::Cyan
+        "Welcome"
     };
+    let body = chrome::render_chrome(frame, area, title, step_index::WELCOME, STEP_TOTAL);
+    let (content, hints_area) = chrome::split_body_with_hints(body);
+
+    let body_chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(7), // logo
+            Constraint::Length(1), // tagline
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // divider
+            Constraint::Length(1), // blank
+            Constraint::Length(2), // STATUS section
+            Constraint::Length(1), // blank
+            Constraint::Min(0),    // warnings + flow
+        ])
+        .split(content);
 
     let logo_color = if is_reconfigure {
-        Color::Red
+        palette::WARN
     } else {
-        Color::Cyan
+        palette::ACCENT
     };
+    frame.render_widget(
+        Paragraph::new(belaf_logo(logo_color)).alignment(Alignment::Center),
+        body_chunks[0],
+    );
+
+    let tagline = if is_reconfigure {
+        Line::from(vec![
+            Span::styled(
+                "▲ ",
+                Style::default()
+                    .fg(palette::WARN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "A configuration already exists — continuing will overwrite it",
+                Style::default().fg(palette::WARN),
+            ),
+        ])
+    } else {
+        Line::from(Span::styled(
+            "Bootstrap your repository for PR-based releases",
+            Style::default().fg(palette::SUBTLE),
+        ))
+    };
+    frame.render_widget(
+        Paragraph::new(tagline).alignment(Alignment::Center),
+        body_chunks[1],
+    );
+
+    frame.render_widget(chrome::divider(), body_chunks[3]);
 
     let unit_count = state.standalone_units.len();
-    let unit_text = if unit_count == 1 {
-        "1 project".to_string()
-    } else {
-        format!("{} projects", unit_count)
-    };
+    let bundle_count = state.detection.matches.len();
+    let status_lines = vec![
+        Line::from(chrome::section_label("STATUS")),
+        Line::from(status_spans(unit_count, bundle_count)),
+    ];
+    frame.render_widget(Paragraph::new(status_lines), body_chunks[5]);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color))
-        .title(if is_reconfigure {
-            Span::styled(
-                " ⚠ Reconfigure ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            )
-        } else {
-            Span::styled(
-                " Welcome ",
-                Style::default()
-                    .fg(Color::Cyan)
-                    .add_modifier(Modifier::BOLD),
-            )
-        });
+    render_flow_or_warnings(frame, body_chunks[7], state);
 
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
+    chrome::hint_bar(frame, hints_area, &[("Enter", " continue"), ("q", " quit")]);
+}
 
-    if is_reconfigure {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(8),
-                Constraint::Length(3),
-                Constraint::Length(3),
-                Constraint::Min(0),
-                Constraint::Length(3),
-            ])
-            .margin(1)
-            .split(inner_area);
-
-        let logo = belaf_logo(logo_color);
-        let logo_para = Paragraph::new(logo).alignment(Alignment::Center);
-        frame.render_widget(logo_para, chunks[0]);
-
-        let warning_header = vec![
-            Line::from(""),
-            Line::from(vec![Span::styled(
-                "⚠️  RECONFIGURE MODE  ⚠️",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            )]),
-        ];
-        let warning_para = Paragraph::new(warning_header).alignment(Alignment::Center);
-        frame.render_widget(warning_para, chunks[1]);
-
-        let warning_text = vec![
-            Line::from(Span::styled(
-                "A configuration already exists in this repo.",
-                Style::default().fg(Color::Yellow),
-            )),
-            Line::from(Span::styled(
-                "Continuing will overwrite your settings.",
-                Style::default().fg(Color::Yellow),
-            )),
-        ];
-        let warning_text_para = Paragraph::new(warning_text).alignment(Alignment::Center);
-        frame.render_widget(warning_text_para, chunks[2]);
-
-        let mut info_lines = vec![
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("📦 ", Style::default()),
-                Span::styled("Detected: ", Style::default().fg(Color::Gray)),
-                Span::styled(
-                    unit_text,
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
-        ];
-
-        if let Some(ref warning) = state.dirty_warning {
-            info_lines.push(Line::from(""));
-            info_lines.push(Line::from(vec![
-                Span::styled("⚠️  ", Style::default()),
-                Span::styled(warning.clone(), Style::default().fg(Color::Yellow)),
-            ]));
-        }
-
-        if let Some(ref error) = state.error_message {
-            info_lines.push(Line::from(""));
-            info_lines.push(Line::from(vec![
-                Span::styled("❌ ", Style::default()),
-                Span::styled(error.clone(), Style::default().fg(Color::Red)),
-            ]));
-        }
-        let info_para = Paragraph::new(info_lines).alignment(Alignment::Center);
-        frame.render_widget(info_para, chunks[3]);
-
-        let has_warnings = state.dirty_warning.is_some() || state.error_message.is_some();
-        let enter_label = if has_warnings {
-            " to override and reconfigure  •  "
-        } else {
-            " to reconfigure  •  "
-        };
-        let action_text = vec![Line::from(vec![
-            Span::styled("Press ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                "ENTER",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(enter_label, Style::default().fg(Color::Gray)),
-            Span::styled(
-                "Q",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" to quit", Style::default().fg(Color::Gray)),
-        ])];
-        let action_para = Paragraph::new(action_text).alignment(Alignment::Center);
-        frame.render_widget(action_para, chunks[4]);
-    } else {
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(8),
-                Constraint::Min(0),
-                Constraint::Length(3),
-            ])
-            .margin(1)
-            .split(inner_area);
-
-        let logo = belaf_logo(logo_color);
-        let logo_para = Paragraph::new(logo).alignment(Alignment::Center);
-        frame.render_widget(logo_para, chunks[0]);
-
-        let mut info_lines = vec![
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("📦 ", Style::default()),
-                Span::styled("Detected: ", Style::default().fg(Color::Gray)),
-                Span::styled(
-                    unit_text,
-                    Style::default()
-                        .fg(Color::Green)
-                        .add_modifier(Modifier::BOLD),
-                ),
-            ]),
-            Line::from(""),
-        ];
-
-        if let Some(ref warning) = state.dirty_warning {
-            info_lines.push(Line::from(vec![
-                Span::styled("⚠️  ", Style::default()),
-                Span::styled(warning.clone(), Style::default().fg(Color::Yellow)),
-            ]));
-            info_lines.push(Line::from(""));
-        }
-
-        if let Some(ref error) = state.error_message {
-            info_lines.push(Line::from(vec![
-                Span::styled("❌ ", Style::default()),
-                Span::styled(error.clone(), Style::default().fg(Color::Red)),
-            ]));
-            info_lines.push(Line::from(""));
-        }
-
-        info_lines.push(Line::from(""));
-        info_lines.push(Line::from(Span::styled(
-            "This wizard will guide you through:",
-            Style::default().fg(Color::White),
-        )));
-        info_lines.push(Line::from(vec![
-            Span::styled("  → ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                "Changelog preset selection",
-                Style::default().fg(Color::Gray),
-            ),
-        ]));
-        info_lines.push(Line::from(vec![
-            Span::styled("  → ", Style::default().fg(Color::Cyan)),
-            Span::styled(
-                "ReleaseUnit configuration",
-                Style::default().fg(Color::Gray),
-            ),
-        ]));
-        info_lines.push(Line::from(vec![
-            Span::styled("  → ", Style::default().fg(Color::Cyan)),
-            Span::styled("Repository setup", Style::default().fg(Color::Gray)),
-        ]));
-
-        let info_para = Paragraph::new(info_lines).alignment(Alignment::Center);
-        frame.render_widget(info_para, chunks[1]);
-
-        let has_warnings = state.dirty_warning.is_some() || state.error_message.is_some();
-        let enter_label = if has_warnings {
-            " to override and start  •  "
-        } else {
-            " to start  •  "
-        };
-        let action_text = vec![Line::from(vec![
-            Span::styled("Press ", Style::default().fg(Color::Gray)),
-            Span::styled(
-                "ENTER",
-                Style::default()
-                    .fg(Color::Green)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(enter_label, Style::default().fg(Color::Gray)),
-            Span::styled(
-                "Q",
-                Style::default()
-                    .fg(Color::White)
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" to quit", Style::default().fg(Color::Gray)),
-        ])];
-        let action_para = Paragraph::new(action_text).alignment(Alignment::Center);
-        frame.render_widget(action_para, chunks[2]);
+fn status_spans(units: usize, bundles: usize) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    spans.push(Span::styled(
+        format!("{}", units),
+        Style::default()
+            .fg(palette::VALUE)
+            .add_modifier(Modifier::BOLD),
+    ));
+    spans.push(Span::styled(
+        if units == 1 { " project" } else { " projects" },
+        Style::default().fg(palette::MUTED),
+    ));
+    if bundles > 0 {
+        spans.push(Span::styled("    ", Style::default()));
+        spans.push(Span::styled(
+            format!("{}", bundles),
+            Style::default()
+                .fg(palette::VALUE)
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            if bundles == 1 {
+                " bundle detected"
+            } else {
+                " bundles detected"
+            },
+            Style::default().fg(palette::MUTED),
+        ));
     }
+    spans
+}
+
+fn render_flow_or_warnings(frame: &mut Frame, area: Rect, state: &WizardState) {
+    let mut lines: Vec<Line> = Vec::new();
+
+    if let Some(warning) = &state.dirty_warning {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "▲ ",
+                Style::default()
+                    .fg(palette::WARN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(warning.clone(), Style::default().fg(palette::WARN)),
+        ]));
+        lines.push(Line::from(""));
+    }
+
+    if let Some(error) = &state.error_message {
+        lines.push(Line::from(vec![
+            Span::styled(
+                "✗ ",
+                Style::default()
+                    .fg(palette::ERROR)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(error.clone(), Style::default().fg(palette::ERROR)),
+        ]));
+        lines.push(Line::from(""));
+    }
+
+    lines.push(Line::from(chrome::section_label("WHAT'S NEXT")));
+    for label in [
+        "Select projects and detected bundles",
+        "Pick a changelog preset",
+        "Confirm the upstream repository URL",
+        "Bootstrap belaf/config.toml + baseline tags",
+    ] {
+        lines.push(Line::from(chrome::action_row(label)));
+    }
+
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn belaf_logo(color: Color) -> Vec<Line<'static>> {
@@ -332,10 +240,6 @@ fn belaf_logo(color: Color) -> Vec<Line<'static>> {
             "╚═════╝ ╚══════╝╚══════╝╚═╝  ╚═╝╚═╝     ",
             Style::default().fg(color),
         )),
-        Line::from(Span::styled(
-            "           Release Management",
-            Style::default().fg(Color::Gray),
-        )),
     ]
 }
 
@@ -352,7 +256,7 @@ mod tests {
     fn renders_first_run_welcome() {
         let mut step = WelcomeStep::new();
         let state = fresh_state();
-        let out = render_to_string(&mut step, &state, 80, 24);
+        let out = render_to_string(&mut step, &state, 80, 30);
         insta::assert_snapshot!("welcome_first_run", out);
     }
 
@@ -361,7 +265,7 @@ mod tests {
         let mut step = WelcomeStep::new();
         let mut state = fresh_state();
         state.config_exists = true;
-        let out = render_to_string(&mut step, &state, 80, 24);
+        let out = render_to_string(&mut step, &state, 80, 30);
         insta::assert_snapshot!("welcome_reconfigure", out);
     }
 
@@ -373,7 +277,7 @@ mod tests {
             Some("Warning: uncommitted changes detected (e.g.: src/foo.rs)".into());
         state.error_message =
             Some("Repository has uncommitted changes. Use --force to override.".into());
-        let out = render_to_string(&mut step, &state, 80, 24);
+        let out = render_to_string(&mut step, &state, 80, 30);
         insta::assert_snapshot!("welcome_dirty_warning", out);
     }
 }

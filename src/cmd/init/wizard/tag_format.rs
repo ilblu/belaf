@@ -9,14 +9,15 @@
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph},
+    widgets::{List, ListItem, Paragraph},
     Frame,
 };
 
 use super::{
+    chrome::{self, palette, step_index, STEP_TOTAL},
     state::WizardState,
     step::{Step, StepResult, WizardOutcome},
     upstream::UpstreamConfigStep,
@@ -109,27 +110,19 @@ impl Step for TagFormatStep {
 }
 
 fn render(frame: &mut Frame, area: Rect, state: &WizardState, cursor: usize) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(Span::styled(
-            " Tag Format (single-project repo) ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
+    let body = chrome::render_chrome(frame, area, "Tag Format", step_index::SELECTION, STEP_TOTAL);
+    let (content, hints_area) = chrome::split_body_with_hints(body);
 
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
+    let body_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(4),
-            Constraint::Min(0),
-            Constraint::Length(2),
+            Constraint::Length(2), // section header
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // divider
+            Constraint::Length(1), // blank
+            Constraint::Min(0),    // options list
         ])
-        .split(inner_area);
+        .split(content);
 
     let project_name = state
         .selected_units()
@@ -137,52 +130,58 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState, cursor: usize) {
         .map(|p| p.name.as_str())
         .unwrap_or("(none)");
 
-    let header_lines = vec![
-        Line::from(""),
+    let header = Paragraph::new(vec![
+        Line::from(chrome::section_label("FORMAT")),
         Line::from(vec![
-            Span::styled("🏷  ", Style::default()),
+            Span::styled("single project: ", Style::default().fg(palette::MUTED)),
             Span::styled(
-                format!("Detected single project: {}", project_name),
-                Style::default().fg(Color::White),
+                project_name.to_string(),
+                Style::default()
+                    .fg(palette::ACCENT)
+                    .add_modifier(Modifier::BOLD),
             ),
         ]),
-        Line::from(Span::styled(
-            "   Choose how release tags should be formatted",
-            Style::default().fg(Color::Gray),
-        )),
-    ];
-    let header = Paragraph::new(header_lines).alignment(Alignment::Center);
-    frame.render_widget(header, chunks[0]);
+    ]);
+    frame.render_widget(header, body_chunks[0]);
+
+    frame.render_widget(chrome::divider(), body_chunks[2]);
 
     let items: Vec<ListItem> = OPTIONS
         .iter()
         .enumerate()
         .map(|(idx, (label, _, description))| {
             let is_selected = idx == cursor;
+            let arrow = if is_selected {
+                Span::styled(
+                    "▸ ",
+                    Style::default()
+                        .fg(palette::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::raw("  ")
+            };
+            let label_style = if is_selected {
+                Style::default()
+                    .fg(palette::ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette::VALUE)
+            };
             let lines = vec![
                 Line::from(vec![
-                    Span::styled(
-                        if is_selected { " ▶ " } else { "   " },
-                        Style::default().fg(Color::Cyan),
-                    ),
-                    Span::styled(
-                        (*label).to_string(),
-                        if is_selected {
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(Color::White)
-                        },
-                    ),
+                    Span::raw("  "),
+                    arrow,
+                    Span::styled((*label).to_string(), label_style),
                 ]),
                 Line::from(Span::styled(
-                    format!("       {}", description),
-                    Style::default().fg(Color::Gray),
+                    format!("      {}", description),
+                    Style::default().fg(palette::SUBTLE),
                 )),
+                Line::from(""),
             ];
             let style = if is_selected {
-                Style::default().bg(Color::Rgb(40, 40, 50))
+                Style::default().bg(palette::ROW_HIGHLIGHT)
             } else {
                 Style::default()
             };
@@ -190,26 +189,18 @@ fn render(frame: &mut Frame, area: Rect, state: &WizardState, cursor: usize) {
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Gray))
-            .title(Span::styled(" Options ", Style::default().fg(Color::White))),
-    );
-    frame.render_widget(list, chunks[1]);
+    frame.render_widget(List::new(items), body_chunks[4]);
 
-    let hints = Line::from(vec![
-        Span::styled("↑↓", Style::default().fg(Color::Cyan)),
-        Span::styled(" select  ", Style::default().fg(Color::Gray)),
-        Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::styled(" continue  ", Style::default().fg(Color::Gray)),
-        Span::styled("Esc", Style::default().fg(Color::Cyan)),
-        Span::styled(" back  ", Style::default().fg(Color::Gray)),
-        Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" quit", Style::default().fg(Color::Gray)),
-    ]);
-    let hints_para = Paragraph::new(hints).alignment(Alignment::Center);
-    frame.render_widget(hints_para, chunks[2]);
+    chrome::hint_bar(
+        frame,
+        hints_area,
+        &[
+            ("↑↓", " select"),
+            ("Enter", " continue"),
+            ("Esc", " back"),
+            ("q", " quit"),
+        ],
+    );
 }
 
 #[cfg(test)]

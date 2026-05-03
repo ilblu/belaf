@@ -13,7 +13,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::super::shape::{BundleKind, DetectedShape, DetectorMatch, JvmVersionSource};
+use super::super::shape::{BundleKind, DetectedShape, DetectorMatch, ExtKind, JvmVersionSource};
 use super::super::walk::{file_contains_line, file_contains_pattern, relative_repopath};
 
 use crate::cmd::init::auto_detect::DetectionCounters;
@@ -27,29 +27,42 @@ pub fn detect(workdir: &Path) -> Vec<DetectorMatch> {
         let bgk = dir.join("build.gradle.kts");
         let bg = dir.join("build.gradle");
 
-        let kind = if gp.exists() && file_contains_line(&gp, "version=") {
-            JvmVersionSource::GradleProperties
-        } else if (bgk.exists() && file_contains_pattern(&bgk, r#"version\s*=\s*""#))
-            || (bg.exists() && file_contains_pattern(&bg, r#"version\s*=\s*""#))
-        {
-            JvmVersionSource::BuildGradleKtsLiteral
-        } else if bgk.exists() || bg.exists() {
-            JvmVersionSource::PluginManaged
-        } else {
-            continue;
-        };
-
         let repopath = match relative_repopath(workdir, &dir) {
             Some(r) => r,
             None => continue,
         };
-        out.push(DetectorMatch {
-            shape: DetectedShape::Bundle(BundleKind::JvmLibrary {
-                version_source: kind.clone(),
-            }),
-            path: repopath,
-            note: Some(jvm_label(&kind).to_string()),
-        });
+
+        if gp.exists() && file_contains_line(&gp, "version=") {
+            out.push(DetectorMatch {
+                shape: DetectedShape::Bundle(BundleKind::JvmLibrary {
+                    version_source: JvmVersionSource::GradleProperties,
+                }),
+                path: repopath,
+                note: Some(jvm_label(&JvmVersionSource::GradleProperties).to_string()),
+            });
+        } else if (bgk.exists() && file_contains_pattern(&bgk, r#"(?m)^version\s*=\s*""#))
+            || (bg.exists() && file_contains_pattern(&bg, r#"(?m)^version\s*=\s*""#))
+        {
+            out.push(DetectorMatch {
+                shape: DetectedShape::Bundle(BundleKind::JvmLibrary {
+                    version_source: JvmVersionSource::BuildGradleKtsLiteral,
+                }),
+                path: repopath,
+                note: Some(jvm_label(&JvmVersionSource::BuildGradleKtsLiteral).to_string()),
+            });
+        } else if bgk.exists() || bg.exists() {
+            // Plugin-managed JVM project (axion-release, nebula-release,
+            // app-versioning, etc.). The user already chose dedicated
+            // tooling for releases — belaf stays out and emits an
+            // [allow_uncovered] entry, same as Mobile (Fastlane/Bitrise).
+            out.push(DetectorMatch {
+                shape: DetectedShape::ExternallyManaged(ExtKind::JvmPluginManaged),
+                path: repopath,
+                note: Some(
+                    "Gradle plugin-managed versioning — use your plugin's release flow".into(),
+                ),
+            });
+        }
     }
     out
 }
@@ -87,12 +100,6 @@ fn emit_block(m: &DetectorMatch, snippet: &mut String, counters: &mut DetectionC
         JvmVersionSource::BuildGradleKtsLiteral => {
             ("generic_regex", format!("{path}/build.gradle.kts"))
         }
-        JvmVersionSource::PluginManaged => {
-            snippet.push_str(&format!(
-                "\n# Plugin-managed JVM library at {path} — recommend external_versioner.\n# Edit the [release_unit.{name_raw}.external] block below to drive your gradle plugin.\n[release_unit.{name_raw}]\necosystem = \"external\"\nsatellites = [{satellites_q}]\n\n[release_unit.{name_raw}.external]\ntool = \"gradle\"\nread_command = \"./gradlew :printVersion -q\"\nwrite_command = \"./gradlew :setVersion -PnewVersion={{version}}\"\ntimeout_sec = 120\n",
-            ));
-            return;
-        }
     };
     let manifest_q = toml_quote(&manifest_raw);
     if vfield == "generic_regex" {
@@ -110,7 +117,6 @@ fn jvm_label(s: &JvmVersionSource) -> &'static str {
     match s {
         JvmVersionSource::GradleProperties => "gradle.properties (recommended)",
         JvmVersionSource::BuildGradleKtsLiteral => "literal version in build.gradle(.kts)",
-        JvmVersionSource::PluginManaged => "plugin-managed (suggest external_versioner)",
     }
 }
 
@@ -185,7 +191,36 @@ mod tests {
     }
 
     #[test]
-    fn plugin_managed() {
+    fn indented_version_classifies_as_plugin_managed_externally_managed() {
+        // An `allprojects { version = "..." }` block is NOT something
+        // the BuildGradleKtsLiteral rewriter can handle — its regex is
+        // `(?m)^version\s*=\s*"…"` (line-start anchored). The detector
+        // mirrors that strictness, so indented matches fall through to
+        // the plugin-managed branch and surface as ExternallyManaged.
+        let t = TempDir::new().unwrap();
+        let root = t.path();
+        write(
+            &root.join("sdks/kotlin/build.gradle.kts"),
+            "allprojects {\n    version = \"0.1.0\"\n}\n",
+        );
+        let matches = detect(root);
+        assert_eq!(matches.len(), 1);
+        assert!(
+            matches!(
+                matches[0].shape,
+                DetectedShape::ExternallyManaged(ExtKind::JvmPluginManaged)
+            ),
+            "expected JvmPluginManaged, got {:?}",
+            matches[0].shape
+        );
+    }
+
+    #[test]
+    fn plugin_managed_classifies_as_externally_managed() {
+        // Plugin-managed JVM (axion-release / nebula-release / app-
+        // versioning) — the user already chose dedicated tooling, belaf
+        // stays out of the way and lets `auto_detect` emit an
+        // [allow_uncovered] entry instead of a release_unit block.
         let t = TempDir::new().unwrap();
         let root = t.path();
         write(
@@ -194,11 +229,13 @@ mod tests {
         );
         let matches = detect(root);
         assert_eq!(matches.len(), 1);
-        match &matches[0].shape {
-            DetectedShape::Bundle(BundleKind::JvmLibrary { version_source }) => {
-                assert_eq!(*version_source, JvmVersionSource::PluginManaged);
-            }
-            _ => panic!("expected JvmLibrary bundle"),
-        }
+        assert!(
+            matches!(
+                matches[0].shape,
+                DetectedShape::ExternallyManaged(ExtKind::JvmPluginManaged)
+            ),
+            "expected JvmPluginManaged, got {:?}",
+            matches[0].shape
+        );
     }
 }

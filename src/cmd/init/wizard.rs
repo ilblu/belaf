@@ -6,6 +6,7 @@
 //! returned. Concrete steps live in their own modules.
 
 pub mod cascade_from;
+pub mod chrome;
 pub mod confirmation;
 pub mod preset;
 pub mod single_mobile;

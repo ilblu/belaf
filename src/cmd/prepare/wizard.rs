@@ -58,13 +58,8 @@ struct ReleaseUnitItem {
 /// projects, so a 5-member group still navigates as one stop.
 #[derive(Debug, Clone)]
 enum DisplayRow {
-    Solo {
-        unit_idx: usize,
-    },
-    Group {
-        id: String,
-        member_indices: Vec<usize>,
-    },
+    Solo { unit_idx: usize },
+    Group { member_indices: Vec<usize> },
 }
 
 impl ReleaseUnitItem {
@@ -114,6 +109,29 @@ impl ReleaseUnitItem {
     fn effective_bump_str(&self) -> &'static str {
         self.effective_bump().resolve(self.candidate.suggested_bump)
     }
+}
+
+fn compute_display_rows(units: &[ReleaseUnitItem]) -> Vec<DisplayRow> {
+    let mut out: Vec<DisplayRow> = Vec::new();
+    let mut group_pos: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    for (i, p) in units.iter().enumerate() {
+        match p.group_id() {
+            Some(gid) => {
+                if let Some(&pos) = group_pos.get(gid) {
+                    if let DisplayRow::Group { member_indices } = &mut out[pos] {
+                        member_indices.push(i);
+                    }
+                } else {
+                    group_pos.insert(gid.to_string(), out.len());
+                    out.push(DisplayRow::Group {
+                        member_indices: vec![i],
+                    });
+                }
+            }
+            None => out.push(DisplayRow::Solo { unit_idx: i }),
+        }
+    }
+    out
 }
 
 fn calculate_next_version(current: &str, recommendation: BumpRecommendation) -> String {
@@ -324,11 +342,13 @@ impl WizardState {
         self.units.iter().filter(|p| p.selected).count()
     }
 
-    /// Compute the per-render display rows. Delegates to the free
-    /// `compute_display_rows` so tests can exercise the layout
-    /// algorithm without standing up a full WizardState.
+    /// Compute the per-render display rows. Solo (ungrouped) units
+    /// are one row each; grouped units collapse into a single
+    /// `Group` row whose `member_indices` point into `Self::units`.
+    /// Cursor navigation moves through these rows so a 5-member
+    /// group still navigates as one stop.
     fn display_rows(&self) -> Vec<DisplayRow> {
-        render::compute_display_rows(&self.units)
+        compute_display_rows(&self.units)
     }
 
     /// ResolvedReleaseUnit indices the row at `display_idx` represents — one for
@@ -959,7 +979,7 @@ mod tests {
             item("com.org:schema", Some("schema-bundle")),
             item("cli", None),
         ];
-        let rows = render::compute_display_rows(&projects);
+        let rows = compute_display_rows(&projects);
         assert_eq!(
             rows.len(),
             3,
@@ -971,9 +991,16 @@ mod tests {
             other => panic!("row 0 should be Solo, got {other:?}"),
         }
         match &rows[1] {
-            DisplayRow::Group { id, member_indices } => {
-                assert_eq!(id, "schema-bundle");
+            DisplayRow::Group { member_indices } => {
                 assert_eq!(member_indices, &vec![1, 2]);
+                assert_eq!(
+                    projects[member_indices[0]].group_id(),
+                    Some("schema-bundle")
+                );
+                assert_eq!(
+                    projects[member_indices[1]].group_id(),
+                    Some("schema-bundle")
+                );
             }
             other => panic!("row 1 should be Group(schema-bundle), got {other:?}"),
         }
@@ -992,12 +1019,13 @@ mod tests {
             item("@org/utils", None), // unrelated solo between members
             item("com.org:schema", Some("schema-bundle")),
         ];
-        let rows = render::compute_display_rows(&projects);
+        let rows = compute_display_rows(&projects);
         assert_eq!(rows.len(), 2, "got {rows:?}");
         match &rows[0] {
-            DisplayRow::Group { id, member_indices } => {
-                assert_eq!(id, "schema-bundle");
+            DisplayRow::Group { member_indices } => {
                 assert_eq!(member_indices, &vec![0, 2]);
+                assert_eq!(projects[0].group_id(), Some("schema-bundle"));
+                assert_eq!(projects[2].group_id(), Some("schema-bundle"));
             }
             other => panic!("expected Group first, got {other:?}"),
         }
@@ -1011,12 +1039,12 @@ mod tests {
             item("@org/b", Some("group-b")),
             item("@org/a-helper", Some("group-a")),
         ];
-        let rows = render::compute_display_rows(&projects);
+        let rows = compute_display_rows(&projects);
         assert_eq!(rows.len(), 2);
         let group_ids: Vec<&str> = rows
             .iter()
             .filter_map(|r| match r {
-                DisplayRow::Group { id, .. } => Some(id.as_str()),
+                DisplayRow::Group { member_indices } => projects[member_indices[0]].group_id(),
                 _ => None,
             })
             .collect();
@@ -1027,7 +1055,7 @@ mod tests {
     /// a freshly-released repo with no candidates.
     #[test]
     fn compute_display_rows_empty_input() {
-        let rows = render::compute_display_rows(&[]);
+        let rows = compute_display_rows(&[]);
         assert!(rows.is_empty());
     }
 }

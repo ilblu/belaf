@@ -64,6 +64,7 @@ pub struct DetectionCounters {
     pub jvm_library: usize,
     pub mobile_ios: usize,
     pub mobile_android: usize,
+    pub jvm_plugin_managed: usize,
     pub nested_npm_workspace: usize,
     pub sdk_cascade_member: usize,
     pub single_project: usize,
@@ -302,6 +303,7 @@ fn register_externally_managed(
     match ext {
         ExtKind::MobileIos => counters.mobile_ios += 1,
         ExtKind::MobileAndroid => counters.mobile_android += 1,
+        ExtKind::JvmPluginManaged => counters.jvm_plugin_managed += 1,
     }
     allow_uncovered.push(format!("{}/", m.path.escaped()));
 }

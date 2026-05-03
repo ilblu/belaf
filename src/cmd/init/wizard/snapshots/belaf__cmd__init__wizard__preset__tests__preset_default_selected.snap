@@ -2,33 +2,33 @@
 source: src/cmd/init/wizard/preset.rs
 expression: out
 ---
-"┌ Step 1: Changelog Preset ────────────────────────────────────────────────────────────────────────┐"
-"│                        📋 Choose a changelog format that fits your project                       │" Hidden by multi-width symbols: [(26, " ")]
+"┌ Changelog Preset   ● ● ● ○ ○ ────────────────────────────────────────────────────────────────────┐"
 "│                                                                                                  │"
+"│  Choose a changelog format that fits your project                                                │"
 "│                                                                                                  │"
-"│┌ Presets ───────────────────────┐┌ default ─────────────────────────────────────────────────────┐│"
-"││ 📦 default                     ││                   ◉ Preview    ◉ Source   (m)                ││" Hidden by multi-width symbols: [(4, " ")]
-"││    Conventional Commits grouped│└──────────────────────────────────────────────────────────────┘│"
-"││ 📄 flat                        │┌ Changelog Preview ───────────────────────────────────────────┐│" Hidden by multi-width symbols: [(4, " ")]
-"││    Simple flat list - What's Ch││ [1.2.0] - 2025-01-15                                         ││"
-"││ 📝 keepachangelog              ││                                                              ││" Hidden by multi-width symbols: [(4, " ")]
-"││    Keep a Changelog specificati││ ✨ Features                                                  ││" Hidden by multi-width symbols: [(38, " ")]
-"││ ✨ minimal                     ││                                                              ││" Hidden by multi-width symbols: [(4, " ")]
-"││    Minimal - just version and d││ • cli: Add --verbose flag for detailed output                ││"
-"││                                ││ • api: Implement rate limiting for requests                  ││"
-"││                                ││                                                              ││"
-"││                                ││ 🐛 Bug Fixes                                                 ││" Hidden by multi-width symbols: [(38, " ")]
-"││                                ││                                                              ││"
-"││                                ││ • auth: Resolve token refresh race condition                 ││"
-"││                                ││ • parser: Handle unicode characters in paths                 ││"
-"││                                ││                                                              ││"
-"││                                ││ ⚡ Performance                                               ││" Hidden by multi-width symbols: [(38, " ")]
-"││                                ││                                                              ││"
-"││                                ││ • Optimize database queries                                  ││"
-"││                                ││                                                              ││"
-"││                                ││ 📚 Documentation                                             ││" Hidden by multi-width symbols: [(38, " ")]
-"││                                ││                                                              ││"
-"│└────────────────────────────────┘└──────────────────────────────────────────────────────────────┘│"
-"│                         ↑↓ select  m toggle view  Enter continue  q quit                         │"
+"│  ──────────────────────────────────────────────────────────────────────────────────────────────  │"
+"│                                                                                                  │"
+"│  PRESETS                             PREVIEW                                                     │"
+"│  4 available                         default → CHANGELOG.md                                      │"
+"│  ▸ default                           ┌ default ───────────────────────────────────────────────┐  │"
+"│      Conventional Commits grouped by │                ◉ Preview    ◉ Source   (m)             │  │"
+"│                                      └────────────────────────────────────────────────────────┘  │"
+"│    flat                              [1.2.0] - 2025-01-15                                        │"
+"│      Simple flat list — What's Change                                                            │"
+"│                                      ✨ Features                                                 │" Hidden by multi-width symbols: [(40, " ")]
+"│    keepachangelog                                                                                │"
+"│      Keep a Changelog specification  • cli: Add --verbose flag for detailed output               │"
+"│                                      • api: Implement rate limiting for requests                 │"
+"│    minimal                                                                                       │"
+"│      Minimal — version and date only 🐛 Bug Fixes                                                │" Hidden by multi-width symbols: [(40, " ")]
+"│                                                                                                  │"
+"│                                      • auth: Resolve token refresh race condition                │"
+"│                                      • parser: Handle unicode characters in paths                │"
+"│                                                                                                  │"
+"│                                      ⚡ Performance                                              │" Hidden by multi-width symbols: [(40, " ")]
+"│                                                                                                  │"
+"│                                      • Optimize database queries                                 │"
+"│                                                                                                  │"
+"│             ↑↓ select  ·  m toggle preview  ·  Enter continue  ·  Esc back  ·  q quit            │"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

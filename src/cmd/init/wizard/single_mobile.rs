@@ -10,16 +10,17 @@
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::Paragraph,
     Frame,
 };
 
 use crate::core::release_unit::detector::{DetectedShape, ExtKind};
 
 use super::{
+    chrome::{self, palette},
     state::WizardState,
     step::{Step, StepResult, WizardOutcome},
 };
@@ -64,124 +65,115 @@ impl Step for SingleMobileStep {
 }
 
 fn render(frame: &mut Frame, area: Rect, state: &WizardState) {
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(Span::styled(
-            " ⚠ Mobile-only repo detected ",
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        ));
+    // Stand-alone screen — no progress dots.
+    let body = chrome::render_chrome(frame, area, "Mobile-Only Repo Detected", 0, 0);
+    let (content, hints_area) = chrome::split_body_with_hints(body);
 
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
-
-    let chunks = Layout::default()
+    let body_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(2),
+            Constraint::Length(2), // intro
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // divider
+            Constraint::Length(1), // blank
+            Constraint::Min(0),    // body
         ])
-        .split(inner_area);
+        .split(content);
 
-    let header_lines = vec![
-        Line::from(""),
+    let intro = Paragraph::new(vec![
         Line::from(vec![
-            Span::styled("📱 ", Style::default()),
             Span::styled(
-                "Detected only mobile-app bundles in this repo",
-                Style::default().fg(Color::White),
+                "▲ ",
+                Style::default()
+                    .fg(palette::WARN)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "This repo only contains mobile-app bundles",
+                Style::default().fg(palette::WARN),
             ),
         ]),
-    ];
-    let header = Paragraph::new(header_lines).alignment(Alignment::Center);
-    frame.render_widget(header, chunks[0]);
+        Line::from(Span::styled(
+            "belaf manages source releases — not signed mobile binaries",
+            Style::default().fg(palette::SUBTLE),
+        )),
+    ]);
+    frame.render_widget(intro, body_chunks[0]);
 
-    let mut body = vec![Line::from("")];
+    frame.render_widget(chrome::divider(), body_chunks[2]);
+
+    let mut body = vec![Line::from(chrome::section_label("DETECTED"))];
     for m in &state.detection.matches {
         if let DetectedShape::ExternallyManaged(ext) = &m.shape {
             let label = match ext {
                 ExtKind::MobileIos => "iOS",
                 ExtKind::MobileAndroid => "Android",
+                ExtKind::JvmPluginManaged => "JVM (plugin-managed)",
             };
             body.push(Line::from(vec![
-                Span::styled("   • ", Style::default().fg(Color::Yellow)),
+                Span::raw("  "),
+                Span::styled("• ", Style::default().fg(palette::WARN)),
                 Span::styled(
                     m.path.escaped().to_string(),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(palette::VALUE),
                 ),
-                Span::styled(format!("  ({label})"), Style::default().fg(Color::Gray)),
+                Span::styled(format!("  ({label})"), Style::default().fg(palette::MUTED)),
             ]));
         }
     }
     body.push(Line::from(""));
-    body.push(Line::from(""));
-    body.push(Line::from(Span::styled(
-        "What belaf does:",
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    )));
-    body.push(Line::from(Span::styled(
-        "  - changelog generation, semver bumps, multi-package release coordination",
-        Style::default().fg(Color::Gray),
+    body.push(Line::from(chrome::section_label("WHAT BELAF DOES")));
+    body.push(Line::from(chrome::action_row(
+        "Changelog generation, semver bumps, multi-package release coordination",
     )));
     body.push(Line::from(""));
-    body.push(Line::from(Span::styled(
-        "What belaf doesn't do:",
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
-    )));
-    body.push(Line::from(Span::styled(
-        "  - sign / build / upload mobile binaries",
-        Style::default().fg(Color::Gray),
-    )));
+    body.push(Line::from(chrome::section_label("WHAT BELAF DOESN'T DO")));
+    body.push(Line::from(vec![
+        Span::raw("  "),
+        Span::styled("✗ ", Style::default().fg(palette::ERROR)),
+        Span::styled(
+            "Sign, build, or upload mobile binaries",
+            Style::default().fg(palette::VALUE),
+        ),
+    ]));
     body.push(Line::from(""));
-    body.push(Line::from(Span::styled(
-        "Recommended alternatives for mobile releases:",
-        Style::default()
-            .fg(Color::White)
-            .add_modifier(Modifier::BOLD),
+    body.push(Line::from(chrome::section_label(
+        "RECOMMENDED ALTERNATIVES",
     )));
-    body.push(Line::from(vec![
-        Span::styled("  → ", Style::default().fg(Color::Cyan)),
-        Span::styled("Bitrise", Style::default().fg(Color::Green)),
-        Span::styled(
-            "   — hosted CI tailored to iOS / Android",
-            Style::default().fg(Color::Gray),
+    for (name, desc) in [
+        ("Bitrise", "hosted CI tailored to iOS / Android"),
+        (
+            "fastlane",
+            "local automation: signing, screenshots, store upload",
         ),
-    ]));
-    body.push(Line::from(vec![
-        Span::styled("  → ", Style::default().fg(Color::Cyan)),
-        Span::styled("fastlane", Style::default().fg(Color::Green)),
-        Span::styled(
-            "  — local automation: signing, screenshots, store upload",
-            Style::default().fg(Color::Gray),
-        ),
-    ]));
-    body.push(Line::from(vec![
-        Span::styled("  → ", Style::default().fg(Color::Cyan)),
-        Span::styled("Codemagic", Style::default().fg(Color::Green)),
-        Span::styled(
-            " — Flutter-friendly hosted CI",
-            Style::default().fg(Color::Gray),
-        ),
-    ]));
+        ("Codemagic", "Flutter-friendly hosted CI"),
+    ] {
+        body.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                "▸ ",
+                Style::default()
+                    .fg(palette::ACTION)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                name.to_string(),
+                Style::default()
+                    .fg(palette::OK)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("  · ", Style::default().fg(palette::MUTED)),
+            Span::styled(desc.to_string(), Style::default().fg(palette::SUBTLE)),
+        ]));
+    }
 
-    let body_para = Paragraph::new(body).alignment(Alignment::Left);
-    frame.render_widget(body_para, chunks[1]);
+    frame.render_widget(Paragraph::new(body), body_chunks[4]);
 
-    let hints = Line::from(vec![
-        Span::styled("Enter", Style::default().fg(Color::Yellow)),
-        Span::styled(" exit with suggestion  ", Style::default().fg(Color::Gray)),
-        Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" cancel quietly", Style::default().fg(Color::Gray)),
-    ]);
-    let hints_para = Paragraph::new(hints).alignment(Alignment::Center);
-    frame.render_widget(hints_para, chunks[2]);
+    chrome::hint_bar(
+        frame,
+        hints_area,
+        &[("Enter", " exit with suggestion"), ("q", " cancel quietly")],
+    );
 }
 
 #[cfg(test)]

@@ -3,16 +3,17 @@
 
 use crossterm::event::{Event, KeyCode, KeyModifiers};
 use ratatui::{
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Padding, Paragraph, Wrap},
+    widgets::{List, ListItem, Paragraph, Wrap},
     Frame,
 };
 
 use crate::core::ui::components::toggle_panel::TogglePanel;
 
 use super::{
+    chrome::{self, palette, step_index, STEP_TOTAL},
     state::WizardState,
     step::{MouseClick, Step, StepResult, WizardOutcome},
     upstream::UpstreamConfigStep,
@@ -119,84 +120,119 @@ fn render(
 ) {
     use crate::core::embed::{EmbeddedConfig, EmbeddedPresets};
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(Span::styled(
-            " Step 1: Changelog Preset ",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ));
+    let body = chrome::render_chrome(
+        frame,
+        area,
+        "Changelog Preset",
+        step_index::PRESET,
+        STEP_TOTAL,
+    );
+    let (content, hints_area) = chrome::split_body_with_hints(body);
 
-    let inner_area = block.inner(area);
-    frame.render_widget(block, area);
-
-    let outer_chunks = Layout::default()
+    // Body sections.
+    let body_chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-            Constraint::Length(2),
+            Constraint::Length(1), // intro line
+            Constraint::Length(1), // blank
+            Constraint::Length(1), // divider
+            Constraint::Length(1), // blank
+            Constraint::Min(0),    // two-column body
         ])
-        .split(inner_area);
+        .split(content);
 
-    let header_text = vec![Line::from(vec![
-        Span::styled("📋 ", Style::default()),
-        Span::styled(
-            "Choose a changelog format that fits your project",
-            Style::default().fg(Color::White),
-        ),
-    ])];
-    let header = Paragraph::new(header_text).alignment(Alignment::Center);
-    frame.render_widget(header, outer_chunks[0]);
+    let intro = Paragraph::new(Line::from(Span::styled(
+        "Choose a changelog format that fits your project",
+        Style::default().fg(palette::VALUE),
+    )));
+    frame.render_widget(intro, body_chunks[0]);
 
-    let main_chunks = Layout::default()
+    frame.render_widget(chrome::divider(), body_chunks[2]);
+
+    let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(35), Constraint::Percentage(65)])
-        .split(outer_chunks[1]);
+        .constraints([Constraint::Percentage(38), Constraint::Percentage(62)])
+        .split(body_chunks[4]);
+
+    // ─ left: PRESETS list ─
+    render_presets_column(frame, cols[0], state, selected_idx);
+
+    // ─ right: PREVIEW with toggle ─
+    let preset_name = state
+        .available_presets
+        .get(selected_idx)
+        .cloned()
+        .unwrap_or_else(|| "default".to_string());
+    let config_content = if preset_name == "default" {
+        EmbeddedConfig::get_config_string().unwrap_or_else(|_| "Config not available".to_string())
+    } else {
+        EmbeddedPresets::get_preset_string(&preset_name)
+            .unwrap_or_else(|_| "Preset not available".to_string())
+    };
+    render_preview_column(frame, cols[1], &preset_name, &config_content, toggle);
+
+    chrome::hint_bar(
+        frame,
+        hints_area,
+        &[
+            ("↑↓", " select"),
+            ("m", " toggle preview"),
+            ("Enter", " continue"),
+            ("Esc", " back"),
+            ("q", " quit"),
+        ],
+    );
+}
+
+fn render_presets_column(frame: &mut Frame, area: Rect, state: &WizardState, selected_idx: usize) {
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(2), Constraint::Min(0)])
+        .split(area);
+
+    let header = Paragraph::new(vec![
+        Line::from(chrome::section_label("PRESETS")),
+        Line::from(Span::styled(
+            format!("{} available", state.available_presets.len()),
+            Style::default().fg(palette::MUTED),
+        )),
+    ]);
+    frame.render_widget(header, chunks[0]);
 
     let items: Vec<ListItem> = state
         .available_presets
         .iter()
         .enumerate()
         .map(|(idx, name)| {
-            let (icon, description) = match name.as_str() {
-                "default" => ("📦", "Conventional Commits grouped by type"),
-                "keepachangelog" => ("📝", "Keep a Changelog specification"),
-                "flat" => ("📄", "Simple flat list - What's Changed"),
-                "minimal" => ("✨", "Minimal - just version and date"),
-                _ => ("📋", "Custom preset"),
-            };
             let is_selected = idx == selected_idx;
+            let description = preset_description(name);
+            let arrow = if is_selected {
+                Span::styled(
+                    "▸ ",
+                    Style::default()
+                        .fg(palette::ACCENT)
+                        .add_modifier(Modifier::BOLD),
+                )
+            } else {
+                Span::styled("  ", Style::default())
+            };
+            let name_style = if is_selected {
+                Style::default()
+                    .fg(palette::ACCENT)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(palette::VALUE)
+            };
             let lines = vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {} ", icon),
-                        if is_selected {
-                            Style::default().fg(Color::Cyan)
-                        } else {
-                            Style::default()
-                        },
-                    ),
-                    Span::styled(
-                        name.clone(),
-                        if is_selected {
-                            Style::default()
-                                .fg(Color::Cyan)
-                                .add_modifier(Modifier::BOLD)
-                        } else {
-                            Style::default().fg(Color::White)
-                        },
-                    ),
-                ]),
+                Line::from(vec![arrow, Span::styled(name.clone(), name_style)]),
                 Line::from(Span::styled(
                     format!("    {}", description),
-                    Style::default().fg(Color::Gray),
+                    Style::default().fg(palette::SUBTLE),
                 )),
+                Line::from(""),
             ];
             let style = if is_selected {
-                Style::default().bg(Color::Rgb(40, 40, 50))
+                Style::default().bg(palette::ROW_HIGHLIGHT)
             } else {
                 Style::default()
             };
@@ -204,86 +240,63 @@ fn render(
         })
         .collect();
 
-    let list = List::new(items).block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::Gray))
-            .title(Span::styled(" Presets ", Style::default().fg(Color::White))),
-    );
+    let list = List::new(items);
+    frame.render_widget(list, chunks[1]);
+}
 
-    frame.render_widget(list, main_chunks[0]);
-
-    let right_chunks = Layout::default()
+fn render_preview_column(
+    frame: &mut Frame,
+    area: Rect,
+    preset_name: &str,
+    config_content: &str,
+    toggle: &mut TogglePanel,
+) {
+    let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
-        .split(main_chunks[1]);
+        .constraints([
+            Constraint::Length(2), // section header
+            Constraint::Length(3), // toggle bar
+            Constraint::Min(0),    // preview body
+        ])
+        .split(area);
 
-    let preset_name = state
-        .available_presets
-        .get(selected_idx)
-        .cloned()
-        .unwrap_or_else(|| "default".to_string());
-    toggle.render(frame, right_chunks[0], &preset_name);
+    let header = Paragraph::new(vec![
+        Line::from(chrome::section_label("PREVIEW")),
+        Line::from(Span::styled(
+            format!("{} → CHANGELOG.md", preset_name),
+            Style::default().fg(palette::MUTED),
+        )),
+    ]);
+    frame.render_widget(header, chunks[0]);
 
-    let config_content = if preset_name == "default" {
-        EmbeddedConfig::get_config_string().unwrap_or_else(|_| "Config not available".to_string())
-    } else {
-        EmbeddedPresets::get_preset_string(&preset_name)
-            .unwrap_or_else(|_| "Preset not available".to_string())
-    };
+    toggle.render(frame, chunks[1], preset_name);
 
     if toggle.is_right() {
         let source_text = config_content
             .lines()
-            .take(50)
+            .take(60)
             .collect::<Vec<_>>()
             .join("\n");
-
         let paragraph = Paragraph::new(source_text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Gray))
-                    .title(Span::styled(
-                        " TOML Source ",
-                        Style::default().fg(Color::Magenta),
-                    ))
-                    .padding(Padding::horizontal(1)),
-            )
             .wrap(Wrap { trim: false })
-            .style(Style::default().fg(Color::Rgb(180, 180, 180)));
-        frame.render_widget(paragraph, right_chunks[1]);
+            .style(Style::default().fg(palette::SUBTLE));
+        frame.render_widget(paragraph, chunks[2]);
     } else {
-        let example_changelog = generate_preset_example(&preset_name);
+        let example_changelog = generate_preset_example(preset_name);
         let markdown_text = crate::core::ui::markdown::render_markdown(&example_changelog);
-
-        let paragraph = Paragraph::new(markdown_text)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Gray))
-                    .title(Span::styled(
-                        " Changelog Preview ",
-                        Style::default().fg(Color::Cyan),
-                    ))
-                    .padding(Padding::horizontal(1)),
-            )
-            .wrap(Wrap { trim: false });
-        frame.render_widget(paragraph, right_chunks[1]);
+        let paragraph = Paragraph::new(markdown_text).wrap(Wrap { trim: false });
+        frame.render_widget(paragraph, chunks[2]);
     }
+}
 
-    let hints = Line::from(vec![
-        Span::styled("↑↓", Style::default().fg(Color::Cyan)),
-        Span::styled(" select  ", Style::default().fg(Color::Gray)),
-        Span::styled("m", Style::default().fg(Color::Cyan)),
-        Span::styled(" toggle view  ", Style::default().fg(Color::Gray)),
-        Span::styled("Enter", Style::default().fg(Color::Green)),
-        Span::styled(" continue  ", Style::default().fg(Color::Gray)),
-        Span::styled("q", Style::default().fg(Color::Red)),
-        Span::styled(" quit", Style::default().fg(Color::Gray)),
-    ]);
-    let hints_para = Paragraph::new(hints).alignment(Alignment::Center);
-    frame.render_widget(hints_para, outer_chunks[2]);
+fn preset_description(name: &str) -> &'static str {
+    match name {
+        "default" => "Conventional Commits grouped by type",
+        "keepachangelog" => "Keep a Changelog specification",
+        "flat" => "Simple flat list — What's Changed",
+        "minimal" => "Minimal — version and date only",
+        _ => "Custom preset",
+    }
 }
 
 fn generate_preset_example(preset_name: &str) -> String {

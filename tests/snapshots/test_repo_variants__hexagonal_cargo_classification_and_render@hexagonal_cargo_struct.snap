@@ -35,4 +35,5 @@ ReleaseUnitView {
     ],
     units: [],
     externally_managed: [],
+    groups: [],
 }
