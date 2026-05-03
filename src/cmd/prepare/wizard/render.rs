@@ -20,8 +20,8 @@ use crate::core::{
     ui::{
         markdown,
         release_unit_view::{
-            build_group_row_lines, render_unit_row_line, BumpHint, GroupMemberDisplay,
-            GroupRowDisplay, PrepareOverlay, RenderMode, UnitRow,
+            render_unit_row_line, BumpHint, GroupMemberDisplay, GroupRowDisplay, PrepareOverlay,
+            RenderMode, UnitRow,
         },
         utils::centered_rect,
     },
@@ -270,7 +270,7 @@ fn render_group_row(
         suggested_bump,
     };
 
-    let lines = build_group_row_lines(&row, is_current);
+    let lines = row.render_lines(is_current);
     let style = if is_current {
         Style::default().bg(Color::Rgb(40, 40, 50))
     } else {
