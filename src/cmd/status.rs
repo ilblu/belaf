@@ -1,0 +1,684 @@
+use std::io;
+
+use anyhow::{Context, Result};
+use crossterm::{
+    event::{self, Event, KeyCode, KeyModifiers},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Cell, Clear, Paragraph, Row},
+    Terminal,
+};
+use tracing::info;
+
+use crate::cli::ReleaseOutputFormat;
+use crate::core::ui::components::table::Table;
+use crate::core::{graph::GraphQueryBuilder, session::AppSession};
+
+struct ReleaseUnitStatus {
+    name: String,
+    version: Option<String>,
+    commits_count: usize,
+    age: Option<usize>,
+    commits: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SelectablePanel {
+    Projects,
+    Commits,
+}
+
+impl SelectablePanel {
+    fn next(self) -> Self {
+        match self {
+            Self::Projects => Self::Commits,
+            Self::Commits => Self::Projects,
+        }
+    }
+}
+
+struct TuiState {
+    selected_panel: SelectablePanel,
+    selected_unit_index: usize,
+    commit_scroll_offset: usize,
+    unit_data: Vec<ReleaseUnitStatus>,
+    should_quit: bool,
+    show_help: bool,
+}
+
+impl TuiState {
+    fn new(unit_data: Vec<ReleaseUnitStatus>) -> Self {
+        Self {
+            selected_panel: SelectablePanel::Projects,
+            selected_unit_index: 0,
+            commit_scroll_offset: 0,
+            unit_data,
+            should_quit: false,
+            show_help: false,
+        }
+    }
+
+    fn current_project_commits(&self) -> usize {
+        self.unit_data
+            .get(self.selected_unit_index)
+            .map(|p| p.commits.len())
+            .unwrap_or(0)
+    }
+
+    fn handle_key_event(&mut self, key: KeyCode, modifiers: KeyModifiers) {
+        if self.show_help {
+            match key {
+                KeyCode::Esc
+                | KeyCode::Char('h')
+                | KeyCode::Char('?')
+                | KeyCode::Char('q')
+                | KeyCode::Enter => {
+                    self.show_help = false;
+                }
+                _ => {}
+            }
+            return;
+        }
+
+        match (key, modifiers) {
+            (KeyCode::Char('q'), _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                self.should_quit = true;
+            }
+            (KeyCode::Char('h'), _) | (KeyCode::Char('?'), _) => {
+                self.show_help = true;
+            }
+            (KeyCode::Tab, _) | (KeyCode::BackTab, _) => {
+                self.selected_panel = self.selected_panel.next();
+            }
+            (KeyCode::Down | KeyCode::Char('j'), _) => match self.selected_panel {
+                SelectablePanel::Projects => {
+                    if !self.unit_data.is_empty() {
+                        self.selected_unit_index =
+                            (self.selected_unit_index + 1) % self.unit_data.len();
+                        self.commit_scroll_offset = 0;
+                    }
+                }
+                SelectablePanel::Commits => {
+                    let total_commits = self.current_project_commits();
+                    if total_commits > 0 {
+                        self.commit_scroll_offset =
+                            (self.commit_scroll_offset + 1).min(total_commits.saturating_sub(1));
+                    }
+                }
+            },
+            (KeyCode::Up | KeyCode::Char('k'), _) => match self.selected_panel {
+                SelectablePanel::Projects => {
+                    if !self.unit_data.is_empty() {
+                        self.selected_unit_index = if self.selected_unit_index == 0 {
+                            self.unit_data.len() - 1
+                        } else {
+                            self.selected_unit_index - 1
+                        };
+                        self.commit_scroll_offset = 0;
+                    }
+                }
+                SelectablePanel::Commits => {
+                    if self.commit_scroll_offset > 0 {
+                        self.commit_scroll_offset -= 1;
+                    }
+                }
+            },
+            (KeyCode::Home | KeyCode::Char('g'), _) => match self.selected_panel {
+                SelectablePanel::Projects => self.selected_unit_index = 0,
+                SelectablePanel::Commits => self.commit_scroll_offset = 0,
+            },
+            (KeyCode::End | KeyCode::Char('G'), KeyModifiers::SHIFT) => match self.selected_panel {
+                SelectablePanel::Projects => {
+                    if !self.unit_data.is_empty() {
+                        self.selected_unit_index = self.unit_data.len() - 1;
+                    }
+                }
+                SelectablePanel::Commits => {
+                    let total_commits = self.current_project_commits();
+                    if total_commits > 0 {
+                        self.commit_scroll_offset = total_commits.saturating_sub(1);
+                    }
+                }
+            },
+            (KeyCode::PageDown, _) => {
+                if self.selected_panel == SelectablePanel::Commits {
+                    let total_commits = self.current_project_commits();
+                    if total_commits > 0 {
+                        self.commit_scroll_offset =
+                            (self.commit_scroll_offset + 10).min(total_commits.saturating_sub(1));
+                    }
+                }
+            }
+            (KeyCode::PageUp, _) => {
+                if self.selected_panel == SelectablePanel::Commits {
+                    self.commit_scroll_offset = self.commit_scroll_offset.saturating_sub(10);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn render(&self, frame: &mut ratatui::Frame) {
+        let outer_block = Block::default()
+            .title(" 📊 Release Status ")
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan));
+
+        let inner_area = outer_block.inner(frame.area());
+        frame.render_widget(outer_block, frame.area());
+
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(0),
+                Constraint::Length(2),
+            ])
+            .split(inner_area);
+
+        let header_lines = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("📦 ", Style::default()),
+                Span::styled(
+                    "View project versions and release information",
+                    Style::default().fg(Color::White),
+                ),
+            ]),
+        ];
+        let header = Paragraph::new(header_lines).alignment(Alignment::Center);
+        frame.render_widget(header, chunks[0]);
+
+        self.render_projects(frame, chunks[1]);
+        self.render_hints(frame, chunks[2]);
+
+        if self.show_help {
+            self.render_help_popup(frame);
+        }
+    }
+
+    fn render_help_popup(&self, frame: &mut ratatui::Frame) {
+        let area = frame.area();
+        let popup_width = 65u16.min(area.width.saturating_sub(4));
+        let popup_height = 20u16.min(area.height.saturating_sub(4));
+
+        let popup_area = Rect {
+            x: (area.width.saturating_sub(popup_width)) / 2,
+            y: (area.height.saturating_sub(popup_height)) / 2,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        frame.render_widget(Clear, popup_area);
+
+        let block = Block::default()
+            .title(" Help ")
+            .title_alignment(Alignment::Center)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .style(Style::default().bg(Color::Rgb(20, 20, 30)));
+
+        let help_items = vec![
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  Tab / Shift+Tab  ", Style::default().fg(Color::Yellow)),
+                Span::styled("Switch between panels", Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("  ↑ / k            ", Style::default().fg(Color::Yellow)),
+                Span::styled("Move selection up", Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("  ↓ / j            ", Style::default().fg(Color::Yellow)),
+                Span::styled("Move selection down", Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("  g / Home         ", Style::default().fg(Color::Yellow)),
+                Span::styled("Jump to first item", Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("  G / End          ", Style::default().fg(Color::Yellow)),
+                Span::styled("Jump to last item", Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("  PgUp / PgDn      ", Style::default().fg(Color::Yellow)),
+                Span::styled("Scroll commits by 10", Style::default().fg(Color::White)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("  h / ?            ", Style::default().fg(Color::Cyan)),
+                Span::styled("Toggle this help", Style::default().fg(Color::White)),
+            ]),
+            Line::from(vec![
+                Span::styled("  q / Ctrl+C       ", Style::default().fg(Color::Red)),
+                Span::styled("Quit", Style::default().fg(Color::White)),
+            ]),
+            Line::from(""),
+            Span::styled(
+                "Press any key to close",
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::ITALIC),
+            )
+            .into_centered_line(),
+        ];
+
+        let help_text = Paragraph::new(help_items)
+            .block(block)
+            .alignment(Alignment::Left);
+
+        frame.render_widget(help_text, popup_area);
+    }
+
+    fn render_projects(&self, frame: &mut ratatui::Frame, area: Rect) {
+        if self.unit_data.is_empty() {
+            return;
+        }
+
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .margin(1)
+            .split(area);
+
+        self.render_project_list(frame, chunks[0]);
+        self.render_project_details(frame, chunks[1]);
+    }
+
+    fn render_project_list(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let header = Row::new(vec![
+            Cell::from("  ReleaseUnit"),
+            Cell::from("Version"),
+            Cell::from("Commits"),
+        ])
+        .style(
+            Style::default()
+                .fg(Color::Cyan)
+                .add_modifier(Modifier::BOLD),
+        );
+
+        let rows: Vec<Row> = self
+            .unit_data
+            .iter()
+            .enumerate()
+            .map(|(idx, unit)| {
+                let is_selected = idx == self.selected_unit_index;
+                let indicator = if is_selected { "▶ " } else { "  " };
+
+                let style = if is_selected {
+                    Style::default().bg(Color::Rgb(40, 40, 60)).fg(Color::White)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+
+                let version_style = if is_selected {
+                    Style::default().fg(Color::Green)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+
+                let commits_style = if unit.commits_count > 0 {
+                    Style::default().fg(Color::Yellow)
+                } else {
+                    Style::default().fg(Color::Gray)
+                };
+
+                Row::new(vec![
+                    Cell::from(format!("{}{}", indicator, unit.name)).style(style),
+                    Cell::from(unit.version.clone().unwrap_or_else(|| "—".to_string()))
+                        .style(version_style),
+                    Cell::from(unit.commits_count.to_string()).style(commits_style),
+                ])
+            })
+            .collect();
+
+        let widths = [
+            Constraint::Percentage(50),
+            Constraint::Percentage(30),
+            Constraint::Percentage(20),
+        ];
+
+        let border_color = if self.selected_panel == SelectablePanel::Projects {
+            Color::Cyan
+        } else {
+            Color::Gray
+        };
+
+        let title = format!(" 📦 Projects ({}) ", self.unit_data.len());
+
+        let block = Block::default()
+            .title(title)
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(border_color));
+
+        let table = Table::new(rows, &widths).header(header).block(block);
+
+        table.render(frame, area);
+    }
+
+    fn render_project_details(&self, frame: &mut ratatui::Frame, area: Rect) {
+        if let Some(unit) = self.unit_data.get(self.selected_unit_index) {
+            let header = Row::new(vec![Cell::from(" #"), Cell::from("Commit Summary")]).style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
+
+            let available_height = area.height.saturating_sub(3);
+            let visible_start = self.commit_scroll_offset;
+            let visible_end = (visible_start + available_height as usize).min(unit.commits.len());
+
+            let rows: Vec<Row> = unit
+                .commits
+                .iter()
+                .enumerate()
+                .skip(visible_start)
+                .take(available_height as usize)
+                .map(|(idx, commit)| {
+                    let is_current = idx == self.commit_scroll_offset;
+                    let style = if is_current && self.selected_panel == SelectablePanel::Commits {
+                        Style::default().fg(Color::White)
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    };
+
+                    Row::new(vec![
+                        Cell::from(format!(" {}", idx + 1)).style(Style::default().fg(Color::Gray)),
+                        Cell::from(commit.clone()).style(style),
+                    ])
+                })
+                .collect();
+
+            let widths = [Constraint::Length(5), Constraint::Percentage(95)];
+
+            let scroll_indicator = if unit.commits.len() > available_height as usize {
+                format!(
+                    " [{}-{}/{}]",
+                    visible_start + 1,
+                    visible_end,
+                    unit.commits.len()
+                )
+            } else {
+                String::new()
+            };
+
+            let version_info = if let Some(version) = &unit.version {
+                if unit.age.unwrap_or(0) == 0 {
+                    format!("since {}", version)
+                } else {
+                    format!("since {} (inexact)", version)
+                }
+            } else {
+                "no releases".to_string()
+            };
+
+            let title = format!(
+                " 📝 {} — {} commit(s) {} {}",
+                unit.name, unit.commits_count, version_info, scroll_indicator
+            );
+
+            let border_color = if self.selected_panel == SelectablePanel::Commits {
+                Color::Cyan
+            } else {
+                Color::Gray
+            };
+
+            let block = Block::default()
+                .title(title)
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border_color));
+
+            if rows.is_empty() {
+                let empty_msg = Paragraph::new(Line::from(vec![
+                    Span::styled("  ✨ ", Style::default().fg(Color::Green)),
+                    Span::styled("No pending commits", Style::default().fg(Color::Gray)),
+                ]))
+                .block(block);
+                frame.render_widget(empty_msg, area);
+            } else {
+                let table = Table::new(rows, &widths).header(header).block(block);
+                table.render(frame, area);
+            }
+        }
+    }
+
+    fn render_hints(&self, frame: &mut ratatui::Frame, area: Rect) {
+        let (panel_name, count_text) = if self.unit_data.is_empty() {
+            ("Projects", "No projects".to_string())
+        } else {
+            match self.selected_panel {
+                SelectablePanel::Projects => (
+                    "📦 Projects",
+                    format!("{}/{}", self.selected_unit_index + 1, self.unit_data.len()),
+                ),
+                SelectablePanel::Commits => {
+                    let total_commits = self.current_project_commits();
+                    if total_commits > 0 {
+                        (
+                            "📝 Commits",
+                            format!("{}/{}", self.commit_scroll_offset + 1, total_commits),
+                        )
+                    } else {
+                        ("📝 Commits", "0".to_string())
+                    }
+                }
+            }
+        };
+
+        let hints = Line::from(vec![
+            Span::styled(" Tab", Style::default().fg(Color::Cyan)),
+            Span::styled(" Switch  ", Style::default().fg(Color::Gray)),
+            Span::styled("↑↓/jk", Style::default().fg(Color::Cyan)),
+            Span::styled(" Navigate  ", Style::default().fg(Color::Gray)),
+            Span::styled("g/G", Style::default().fg(Color::Cyan)),
+            Span::styled(" Top/Bottom  ", Style::default().fg(Color::Gray)),
+            Span::styled("h", Style::default().fg(Color::Yellow)),
+            Span::styled(" Help  ", Style::default().fg(Color::Gray)),
+            Span::styled("q", Style::default().fg(Color::Red)),
+            Span::styled(" Quit", Style::default().fg(Color::Gray)),
+            Span::raw("  │  "),
+            Span::styled(
+                panel_name,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" [{}]", count_text),
+                Style::default().fg(Color::White),
+            ),
+        ]);
+
+        let hints_widget = Paragraph::new(hints).alignment(Alignment::Center);
+        frame.render_widget(hints_widget, area);
+    }
+}
+
+fn run_tui(sess: &AppSession, idents: &[usize]) -> Result<()> {
+    let histories = sess.analyze_histories()?;
+    let mut unit_data = Vec::new();
+
+    for ident in idents {
+        let unit = sess.graph().lookup(*ident);
+        let history = histories.lookup(*ident);
+        let n = history.n_commits();
+        let rel_info = history.release_info(&sess.repo)?;
+
+        let mut commits = Vec::new();
+        for cid in history.commits() {
+            let summary = sess.repo.get_commit_summary(*cid)?;
+            commits.push(summary);
+        }
+
+        let (version, age) = if let Some(this_info) = rel_info.lookup_project(unit) {
+            (Some(this_info.version.to_string()), Some(this_info.age))
+        } else {
+            (None, None)
+        };
+
+        unit_data.push(ReleaseUnitStatus {
+            name: unit.user_facing_name.clone(),
+            version,
+            commits_count: n,
+            age,
+            commits,
+        });
+    }
+
+    enable_raw_mode()?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
+
+    let mut state = TuiState::new(unit_data);
+
+    loop {
+        terminal.draw(|frame| state.render(frame))?;
+
+        if state.should_quit {
+            break;
+        }
+
+        if event::poll(std::time::Duration::from_millis(100))? {
+            if let Event::Key(key) = event::read()? {
+                state.handle_key_event(key.code, key.modifiers);
+            }
+        }
+    }
+
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+
+    Ok(())
+}
+
+pub fn run(format: Option<ReleaseOutputFormat>, ci: bool) -> Result<i32> {
+    use crate::core::ui::utils::should_use_tui;
+
+    info!(
+        "checking release status with belaf version {}",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    let sess = AppSession::initialize_default()?;
+
+    let q = GraphQueryBuilder::default();
+    let idents = sess
+        .graph()
+        .query(q)
+        .context("cannot get requested statuses")?;
+
+    let histories = sess.analyze_histories()?;
+
+    let use_tui = should_use_tui(ci, &format);
+
+    let output_format = if ci {
+        ReleaseOutputFormat::Json
+    } else {
+        format.unwrap_or(ReleaseOutputFormat::Text)
+    };
+
+    if use_tui {
+        run_tui(&sess, &idents)?;
+        return Ok(0);
+    }
+
+    match output_format {
+        ReleaseOutputFormat::Json => {
+            use serde_json::json;
+
+            let mut projects = Vec::new();
+
+            for ident in &idents {
+                let unit = sess.graph().lookup(*ident);
+                let history = histories.lookup(*ident);
+                let n = history.n_commits();
+                let rel_info = history.release_info(&sess.repo)?;
+
+                let mut commits = Vec::new();
+                for cid in history.commits() {
+                    let summary = sess.repo.get_commit_summary(*cid)?;
+                    commits.push(summary);
+                }
+
+                let unit_data = if let Some(this_info) = rel_info.lookup_project(unit) {
+                    json!({
+                        "name": unit.user_facing_name,
+                        "current_version": this_info.version.to_string(),
+                        "commits_count": n,
+                        "commits": commits,
+                        "age": this_info.age,
+                    })
+                } else {
+                    json!({
+                        "name": unit.user_facing_name,
+                        "current_version": null,
+                        "commits_count": n,
+                        "commits": commits,
+                        "age": null,
+                    })
+                };
+
+                projects.push(unit_data);
+            }
+
+            let output = json!({
+                "projects": projects
+            });
+
+            println!("{}", serde_json::to_string_pretty(&output)?);
+        }
+        _ => {
+            for ident in idents {
+                let unit = sess.graph().lookup(ident);
+                let history = histories.lookup(ident);
+                let n = history.n_commits();
+                let rel_info = history.release_info(&sess.repo)?;
+
+                if let Some(this_info) = rel_info.lookup_project(unit) {
+                    if this_info.age == 0 {
+                        if n == 0 {
+                            println!(
+                                "{}: no relevant commits since {}",
+                                unit.user_facing_name, this_info.version
+                            );
+                        } else {
+                            println!(
+                                "{}: {} relevant commit(s) since {}",
+                                unit.user_facing_name, n, this_info.version
+                            );
+                        }
+                    } else {
+                        println!(
+                            "{}: no more than {} relevant commit(s) since {} (unable to track in detail)",
+                            unit.user_facing_name, n, this_info.version
+                        );
+                    }
+                } else {
+                    println!(
+                        "{}: {} relevant commit(s) since start of history (no releases on record)",
+                        unit.user_facing_name, n
+                    );
+                }
+
+                for (idx, cid) in history.commits().into_iter().enumerate() {
+                    let summary = sess.repo.get_commit_summary(*cid)?;
+                    println!("    {}. {}", idx + 1, summary);
+                }
+
+                if n > 0 {
+                    println!();
+                }
+            }
+        }
+    }
+
+    Ok(0)
+}

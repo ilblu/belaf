@@ -1,0 +1,30 @@
+---
+source: tests/test_repo_variants.rs
+expression: "& view"
+---
+ReleaseUnitView {
+    bundles: [
+        BundleRow {
+            label: "libs/main",
+            kind_label: "jvm-library/gradle.properties",
+            ecosystem: "kotlin",
+            path: RepoPathBuf(
+                [
+                    108,
+                    105,
+                    98,
+                    115,
+                    47,
+                    109,
+                    97,
+                    105,
+                    110,
+                ],
+            ),
+            selected: true,
+        },
+    ],
+    units: [],
+    externally_managed: [],
+    groups: [],
+}

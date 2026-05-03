@@ -1,0 +1,1131 @@
+// Copyright 2020 Peter Williams <peter@newton.cx> and collaborators
+// Licensed under the MIT License.
+
+//! Python Packaging Authority (PyPA) projects.
+
+use anyhow::anyhow;
+use clap::Parser;
+use configparser::ini::Ini;
+use serde::Deserialize;
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    fs::{File, OpenOptions},
+    io::{BufRead, BufReader, Read, Write},
+};
+use tracing::warn;
+
+use crate::core::version::pep440::Pep440Version;
+use crate::utils::file_io::check_file_size;
+use crate::{
+    a_ok_or, atry,
+    core::{
+        ecosystem::format_handler::{DiscoveredUnit, FormatHandler, RawInternalDep},
+        errors::{Error, Result},
+        git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
+        release_unit::VersionFieldSpec,
+        resolved_release_unit::{DepRequirement, ReleaseUnitId},
+        rewriters::Rewriter,
+        session::AppSession,
+        version::Version,
+    },
+};
+
+#[derive(Debug, Default)]
+pub struct PypaLoader;
+
+struct PypaProjectInfo {
+    unit_index: usize,
+    name: String,
+    internal_reqs: HashSet<String>,
+    config: Option<PyProjectBelaf>,
+    toml_repopath: RepoPathBuf,
+}
+
+impl PypaLoader {
+    fn build_units(
+        &self,
+        repo: &Repository,
+        dirs_of_interest: HashSet<RepoPathBuf>,
+    ) -> Result<Vec<DiscoveredUnit>> {
+        let mut units: Vec<DiscoveredUnit> = Vec::new();
+        let mut pypa_projects: HashMap<String, PypaProjectInfo> = HashMap::new();
+
+        for dirname in &dirs_of_interest {
+            let mut name = None;
+            let mut version = None;
+            let mut main_version_file: Option<String> = None;
+            let mut version_from_pep621 = false;
+
+            let dir_desc = if dirname.is_empty() {
+                "the toplevel directory".to_owned()
+            } else {
+                format!("directory `{}`", dirname.escaped())
+            };
+
+            // Try pyproject.toml first. If it exists, it might contain metadata
+            // that help us gather info from the other project files.
+
+            let mut toml_repopath = dirname.clone();
+            toml_repopath.push("pyproject.toml");
+
+            let config = {
+                let toml_path = repo.resolve_workdir(&toml_repopath);
+                let f = match File::open(&toml_path) {
+                    Ok(f) => Some(f),
+                    Err(e) => {
+                        if e.kind() == std::io::ErrorKind::NotFound {
+                            None
+                        } else {
+                            return Err(Error::new(e).context(format!(
+                                "failed to open file `{}`",
+                                toml_path.display()
+                            )));
+                        }
+                    }
+                };
+
+                let data = f
+                    .map(|mut f| -> Result<PyProjectFile> {
+                        check_file_size(&f, &toml_path)?;
+                        let mut text = String::new();
+                        atry!(
+                            f.read_to_string(&mut text);
+                            ["failed to read file `{}`", toml_path.display()]
+                        );
+
+                        Ok(atry!(
+                            toml::from_str(&text);
+                            ["could not parse file `{}` as TOML", toml_path.display()]
+                        ))
+                    })
+                    .transpose()?;
+
+                if let Some(ref f) = data {
+                    name = f.project_name();
+                    main_version_file = f.tool_belaf().and_then(|b| b.main_version_file.clone());
+
+                    if let Some(v) = f.project_version() {
+                        version = Some(atry!(
+                            v.parse();
+                            ["failed to parse `[project] version = \"{}\"` in `{}`",
+                             v, toml_repopath.escaped()]
+                            (note "PEP 621 versions must be PEP 440-compliant (e.g. `1.2.3`, `1.0.0a1`, `2.0.dev0`)")
+                        ));
+                        version_from_pep621 = true;
+                    }
+                }
+
+                data.and_then(|d| d.tool).and_then(|t| t.belaf)
+            };
+
+            // Parse setup.cfg for metadata if available.
+
+            {
+                let mut cfg_path = dirname.clone();
+                cfg_path.push("setup.cfg");
+                let cfg_path = repo.resolve_workdir(&cfg_path);
+
+                let f = match File::open(&cfg_path) {
+                    Ok(f) => Some(f),
+                    Err(e) => {
+                        if e.kind() == std::io::ErrorKind::NotFound {
+                            None
+                        } else {
+                            return Err(Error::new(e)
+                                .context(format!("failed to open file `{}`", cfg_path.display())));
+                        }
+                    }
+                };
+
+                let data = f
+                    .map(|mut f| -> Result<Ini> {
+                        check_file_size(&f, &cfg_path)?;
+                        let mut text = String::new();
+                        atry!(
+                            f.read_to_string(&mut text);
+                            ["failed to read file `{}`", cfg_path.display()]
+                        );
+
+                        let mut cfg = Ini::new();
+                        atry!(
+                            cfg.read(text).map_err(|msg| anyhow!("{}", msg));
+                            ["could not parse file `{}` as \"ini\"-style configuration", cfg_path.display()]
+                        );
+
+                        Ok(cfg)
+                    })
+                    .transpose()?;
+
+                if let Some(data) = data {
+                    if name.is_none() {
+                        name = data.get("metadata", "name");
+                    }
+                    if version.is_none() {
+                        if let Some(v) = data.get("metadata", "version") {
+                            version = Some(atry!(
+                                v.parse();
+                                ["failed to parse version `{}` from setup.cfg", v]
+                            ));
+                        }
+                    }
+                }
+            }
+
+            // Decide where this project's version is going to live for both
+            // *reading* (during scan, when no explicit value was found) and
+            // *writing* (which Rewriter to register on the project). Priority:
+            //
+            //   1. `[tool.belaf] main_version_file` — explicit override.
+            //   2. PEP 621 `[project] version` — modern default.
+            //   3. `setup.py` — legacy default for old-style projects.
+            //
+            // The first form keeps version in some `*.py` file (handled by
+            // `PythonRewriter`); the second writes back to `pyproject.toml`
+            // (handled by `PyProjectVersionRewriter`).
+            let version_loc = match (main_version_file.take(), version_from_pep621) {
+                (Some(path), _) => PypaVersionLocation::PyFile(path),
+                (None, true) => PypaVersionLocation::PyProjectToml,
+                (None, false) => PypaVersionLocation::PyFile("setup.py".to_owned()),
+            };
+            let py_version_file = match &version_loc {
+                PypaVersionLocation::PyFile(p) => Some(p.clone()),
+                PypaVersionLocation::PyProjectToml => None,
+            };
+            let main_version_in_setup = matches!(&py_version_file, Some(p) if p == "setup.py");
+
+            // Finally, how about setup.py?
+
+            {
+                let mut setup_path = dirname.clone();
+                setup_path.push("setup.py");
+                let setup_path = repo.resolve_workdir(&setup_path);
+
+                let f = match File::open(&setup_path) {
+                    Ok(f) => Some(f),
+                    Err(e) => {
+                        if e.kind() == std::io::ErrorKind::NotFound {
+                            None
+                        } else {
+                            return Err(Error::new(e).context(format!(
+                                "failed to open file `{}`",
+                                setup_path.display()
+                            )));
+                        }
+                    }
+                };
+
+                if let Some(f) = f {
+                    let reader = BufReader::new(f);
+
+                    for line in reader.lines() {
+                        let line = atry!(
+                            line;
+                            ["error reading data from file `{}`", setup_path.display()]
+                        );
+
+                        if simple_py_parse::has_commented_marker(&line, "belaf project-name")
+                            && name.is_none()
+                        {
+                            name = Some(atry!(
+                                simple_py_parse::extract_text_from_string_literal(&line);
+                                ["failed to determine Python project name from `{}`", setup_path.display()]
+                            ));
+                        }
+
+                        if main_version_in_setup
+                            && simple_py_parse::has_commented_marker(&line, "belaf project-version")
+                        {
+                            version = Some(atry!(
+                                version_from_line(&line);
+                                ["failed to parse project version out source text line `{}` in `{}`",
+                                 line, setup_path.display()]
+                            ));
+                        }
+                    }
+                }
+            }
+
+            fn version_from_line(line: &str) -> Result<Pep440Version> {
+                if simple_py_parse::has_commented_marker(line, "belaf project-version tuple") {
+                    Pep440Version::parse_from_tuple_literal(line)
+                } else {
+                    Ok(simple_py_parse::extract_text_from_string_literal(line)?.parse()?)
+                }
+            }
+
+            // Do we need to look in yet another file to pull out the version?
+            // Only relevant for `PypaVersionLocation::PyFile(non-setup.py)` —
+            // setup.py was already handled above, and PEP 621 versions live
+            // inline in pyproject.toml (already read).
+
+            if !main_version_in_setup && py_version_file.is_some() {
+                let main_version_file = py_version_file.as_deref().unwrap();
+                let mut version_path = dirname.clone();
+                version_path.push(main_version_file);
+                let version_path = repo.resolve_workdir(&version_path);
+
+                let f = atry!(
+                    File::open(&version_path);
+                    ["failed to open file `{}`", version_path.display()]
+                );
+
+                let reader = BufReader::new(f);
+
+                for line in reader.lines() {
+                    let line = atry!(
+                        line;
+                        ["error reading data from file `{}`", version_path.display()]
+                    );
+
+                    if simple_py_parse::has_commented_marker(&line, "belaf project-version") {
+                        version = Some(atry!(
+                            version_from_line(&line);
+                            ["failed to parse project version out source text line `{}` in `{}`",
+                                line, version_path.display()]
+                        ));
+                    }
+                }
+            }
+
+            // OK, did we get the core information?
+
+            let name = a_ok_or!(name;
+                ["could not identify the name of the Python project in {}", dir_desc]
+                (note "try adding (1) a `name = ...` field in the `[metadata]` section of its `setup.cfg` \
+                      or (2) a `# belaf project-name` comment at the end of a line containing the project \
+                      name as a simple string literal in `setup.py` or (3) or a `name = ...` field in a \
+                      `[tool.belaf]` section of its `pyproject.toml`")
+            );
+
+            let version = a_ok_or!(version;
+                ["could not identify the version of the Python project in {}", dir_desc]
+                (note "try adding a `# belaf project-version` comment at the end of a line containing \
+                      the project version as a simple string literal in `setup.py`; see the documentation \
+                      for other supported approaches")
+            );
+
+            // Build rewriter factories for the primary version-bearing
+            // file plus any extra `annotated_files` entries.
+            let mut rewriter_factories: Vec<
+                crate::core::ecosystem::format_handler::RewriterFactory,
+            > = Vec::new();
+
+            let primary_rw_path: RepoPathBuf = match &version_loc {
+                PypaVersionLocation::PyFile(p) => {
+                    let mut rw_path = dirname.clone();
+                    rw_path.push(p.as_bytes());
+                    let rw_path_clone = rw_path.clone();
+                    rewriter_factories.push(Box::new(move |id| {
+                        Box::new(PythonRewriter::new(id, rw_path_clone))
+                    }));
+                    rw_path
+                }
+                PypaVersionLocation::PyProjectToml => {
+                    let mut rw_path = dirname.clone();
+                    rw_path.push(b"pyproject.toml");
+                    let rw_path_clone = rw_path.clone();
+                    rewriter_factories.push(Box::new(move |id| {
+                        Box::new(PyProjectVersionRewriter::new(id, rw_path_clone))
+                    }));
+                    rw_path
+                }
+            };
+
+            // Annotated files: extra `# belaf project-version` markers
+            // we scan now to discover non-Python deps and rewrite at
+            // release time.
+            let mut internal_reqs = HashSet::new();
+            for path in config
+                .as_ref()
+                .map(|c| &c.annotated_files[..])
+                .unwrap_or(&[])
+            {
+                let mut rw_path = dirname.clone();
+                rw_path.push(path.as_bytes());
+
+                atry!(
+                    scan_rewritten_file(repo, &rw_path, &mut internal_reqs);
+                    ["in Python project {}, could not scan the `annotated_files` entry {}",
+                    dir_desc, rw_path.escaped()]
+                );
+
+                let rw_path_clone = rw_path.clone();
+                rewriter_factories.push(Box::new(move |id| {
+                    Box::new(PythonRewriter::new(id, rw_path_clone))
+                }));
+            }
+
+            let unit_index = units.len();
+            units.push(DiscoveredUnit {
+                qnames: vec![name.clone(), "pypa".to_owned()],
+                version: Version::Pep440(version),
+                prefix: dirname.to_owned(),
+                anchor_manifest: primary_rw_path,
+                rewriter_factories,
+                internal_deps: Vec::new(),
+            });
+
+            pypa_projects.insert(
+                name.clone(),
+                PypaProjectInfo {
+                    unit_index,
+                    name,
+                    internal_reqs,
+                    config,
+                    toml_repopath,
+                },
+            );
+        }
+
+        // Resolve internal-deps now that every project is in `units`.
+        let project_names: HashSet<String> = pypa_projects.keys().cloned().collect();
+        for info in pypa_projects.values() {
+            for req_name in &info.internal_reqs {
+                let is_internal = project_names.contains(req_name);
+
+                let req = info
+                    .config
+                    .as_ref()
+                    .and_then(|c| c.internal_dep_versions.get(req_name))
+                    .map(|text| repo.parse_history_ref(text))
+                    .transpose()?
+                    .map(|cref| repo.resolve_history_ref(&cref, &info.toml_repopath))
+                    .transpose()?;
+
+                if is_internal && req.is_none() {
+                    warn!(
+                        "missing or invalid key `tool.belaf.internal_dep_versions.{}` in `{}`",
+                        &req_name,
+                        info.toml_repopath.escaped()
+                    );
+                    warn!(
+                        "... this is needed to specify the oldest version of `{}` compatible with `{}`",
+                        &req_name, &info.name
+                    );
+                }
+
+                let req = req.unwrap_or(DepRequirement::Unavailable);
+
+                let (literal, target_name) = if is_internal {
+                    ("(internal)".to_owned(), req_name.clone())
+                } else {
+                    ("(unavailable)".to_owned(), req_name.clone())
+                };
+
+                units[info.unit_index].internal_deps.push(RawInternalDep {
+                    target_package_name: target_name,
+                    literal,
+                    requirement: req,
+                });
+            }
+        }
+
+        Ok(units)
+    }
+}
+
+impl FormatHandler for PypaLoader {
+    fn name(&self) -> &'static str {
+        "pypa"
+    }
+
+    fn display_name(&self) -> &'static str {
+        "Python (PyPA)"
+    }
+
+    fn is_manifest_file(&self, path: &RepoPath) -> bool {
+        let (_, basename) = path.split_basename();
+        let b = basename.as_ref();
+        b == b"pyproject.toml" || b == b"setup.py" || b == b"setup.cfg"
+    }
+
+    fn parse_version(&self, content: &str) -> Result<String> {
+        // Best-effort: parse as PEP 621 pyproject.toml first.
+        if let Ok(parsed) = toml::from_str::<PyProjectFile>(content) {
+            if let Some(v) = parsed.project_version() {
+                return Ok(v.to_string());
+            }
+        }
+        // setup.cfg fallback.
+        let mut cfg = configparser::ini::Ini::new();
+        if cfg.read(content.to_string()).is_ok() {
+            if let Some(v) = cfg.get("metadata", "version") {
+                return Ok(v);
+            }
+        }
+        Err(anyhow!(
+            "no `[project] version` (PEP 621) or `[metadata] version` (setup.cfg) found"
+        ))
+    }
+
+    fn tag_format_default(&self) -> &'static str {
+        "{name}-{version}"
+    }
+
+    fn default_version_field(&self) -> VersionFieldSpec {
+        VersionFieldSpec::GenericRegex {
+            pattern: r#"version\s*=\s*"([^"]+)""#.to_string(),
+            replace: r#"version = "{version}""#.to_string(),
+        }
+    }
+
+    fn make_rewriter(
+        &self,
+        unit_id: ReleaseUnitId,
+        manifest_path: RepoPathBuf,
+    ) -> Box<dyn Rewriter> {
+        Box::new(PyProjectVersionRewriter::new(unit_id, manifest_path))
+    }
+
+    fn discover_single(
+        &self,
+        repo: &Repository,
+        manifest_path: &RepoPath,
+    ) -> Result<Option<DiscoveredUnit>> {
+        let (dirname, _) = manifest_path.split_basename();
+        let mut dirs: HashSet<RepoPathBuf> = HashSet::new();
+        dirs.insert(dirname.to_owned());
+        let mut units = self.build_units(repo, dirs)?;
+        Ok(units.pop())
+    }
+}
+
+fn scan_rewritten_file(
+    repo: &Repository,
+    path: &RepoPathBuf,
+    reqs: &mut HashSet<String>,
+) -> Result<()> {
+    let file_path = repo.resolve_workdir(path);
+
+    let f = atry!(
+        File::open(&file_path);
+        ["failed to open file `{}` for reading", file_path.display()]
+    );
+    let reader = BufReader::new(f);
+
+    for (line_num0, line) in reader.lines().enumerate() {
+        let line = atry!(
+            line;
+            ["error reading data from file `{}`", file_path.display()]
+        );
+
+        if simple_py_parse::has_commented_marker(&line, "belaf internal-req") {
+            let idx = line
+                .find("belaf internal-req")
+                .expect("BUG: marker should exist after has_commented_marker check");
+            let mut pieces = line[idx..].split_whitespace();
+            pieces.next(); // skip "belaf"
+            pieces.next(); // skip "internal-req"
+            let name = a_ok_or!(
+                pieces.next();
+                ["in `{}` line {}, `belaf internal-req` comment must provide a project name",
+                 file_path.display(), line_num0 + 1]
+            );
+
+            reqs.insert(name.to_owned());
+        }
+    }
+
+    Ok(())
+}
+
+pub(crate) mod simple_py_parse {
+    use crate::{a_ok_or, core::errors::Result};
+    use anyhow::{anyhow, bail};
+
+    pub fn has_commented_marker(line: &str, marker: &str) -> bool {
+        match line.find('#') {
+            None => false,
+
+            Some(cidx) => match line.find(marker) {
+                None => false,
+                Some(midx) => midx > cidx,
+            },
+        }
+    }
+
+    pub fn extract_text_from_string_literal(line: &str) -> Result<String> {
+        let mut sq_loc = line.find('\'');
+        let mut dq_loc = line.find('"');
+
+        // if both kinds of quotes, go with whichever we saw first.
+        if let (Some(sq_idx), Some(dq_idx)) = (sq_loc, dq_loc) {
+            if sq_idx < dq_idx {
+                dq_loc = None;
+            } else {
+                sq_loc = None;
+            }
+        }
+
+        let inside = if let Some(sq_left) = sq_loc {
+            let sq_right = line.rfind('\'').ok_or_else(|| {
+                anyhow!(
+                    "expected a closing quote in Python line `{}`, but found none",
+                    line
+                )
+            })?;
+            if sq_right <= sq_left {
+                bail!(
+                    "expected a string literal in Python line `{}`, but only found one quote?",
+                    line
+                );
+            }
+
+            &line[sq_left + 1..sq_right]
+        } else if let Some(dq_left) = dq_loc {
+            let dq_right = line.rfind('"').ok_or_else(|| {
+                anyhow!(
+                    "expected a closing quote in Python line `{}`, but found none",
+                    line
+                )
+            })?;
+            if dq_right <= dq_left {
+                bail!(
+                    "expected a string literal in Python line `{}`, but only found one quote?",
+                    line
+                );
+            }
+
+            &line[dq_left + 1..dq_right]
+        } else {
+            bail!(
+                "expected a string literal in Python line `{}`, but didn't find any quotation marks",
+                line
+            );
+        };
+
+        if inside.find('\\').is_some() {
+            bail!("the string literal in Python line `{}` seems to contain \\ escapes, which I can't handle", line);
+        }
+
+        Ok(inside.to_owned())
+    }
+
+    pub fn replace_text_in_string_literal(line: &str, new_val: &str) -> Result<String> {
+        let mut sq_loc = line.find('\'');
+        let mut dq_loc = line.find('"');
+
+        // if both kinds of quotes, go with whichever we saw first.
+        if let (Some(sq_idx), Some(dq_idx)) = (sq_loc, dq_loc) {
+            if sq_idx < dq_idx {
+                dq_loc = None;
+            } else {
+                sq_loc = None;
+            }
+        }
+
+        let (left_idx, right_idx) = if let Some(sq_left) = sq_loc {
+            let sq_right = line.rfind('\'').ok_or_else(|| {
+                anyhow!(
+                    "expected a closing quote in Python line `{}`, but found none",
+                    line
+                )
+            })?;
+            if sq_right <= sq_left {
+                bail!(
+                    "expected a string literal in Python line `{}`, but only found one quote?",
+                    line
+                );
+            }
+
+            (sq_left, sq_right)
+        } else if let Some(dq_left) = dq_loc {
+            let dq_right = line.rfind('"').ok_or_else(|| {
+                anyhow!(
+                    "expected a closing quote in Python line `{}`, but found none",
+                    line
+                )
+            })?;
+            if dq_right <= dq_left {
+                bail!(
+                    "expected a string literal in Python line `{}`, but only found one quote?",
+                    line
+                );
+            }
+
+            (dq_left, dq_right)
+        } else {
+            bail!(
+                "expected a string literal in Python line `{}`, but didn't find any quotation marks",
+                line
+            );
+        };
+
+        let mut replaced = line[..left_idx + 1].to_owned();
+        replaced.push_str(new_val);
+        replaced.push_str(&line[right_idx..]);
+        Ok(replaced)
+    }
+
+    pub fn replace_tuple_literal(line: &str, new_val: &str) -> Result<String> {
+        let left_idx = a_ok_or!(
+            line.find('(');
+            ["expected a tuple literal in Python line `{}`, but no left parenthesis", line]
+        );
+
+        let right_idx = a_ok_or!(
+            line.rfind(')');
+            ["expected a tuple literal in Python line `{}`, but no right parenthesis", line]
+        );
+
+        if right_idx <= left_idx {
+            bail!(
+                "expected a tuple literal in Python line `{}`, but parentheses don't line up",
+                line
+            );
+        }
+
+        let mut replaced = line[..left_idx].to_owned();
+        replaced.push_str(new_val);
+        replaced.push_str(&line[right_idx + 1..]);
+        Ok(replaced)
+    }
+}
+
+/// Toplevel `pyproject.toml` deserialization container.
+#[derive(Debug, Deserialize)]
+struct PyProjectFile {
+    /// Standard PEP 621 project metadata (`[project]` section). Used as the
+    /// canonical source for `name` and `version`; `[tool.belaf]` may
+    /// override either if explicitly set.
+    pub project: Option<PyProjectMetadata>,
+    pub tool: Option<PyProjectTool>,
+}
+
+impl PyProjectFile {
+    /// Resolved project name, with `[tool.belaf] name` taking precedence
+    /// over PEP 621 `[project] name`.
+    fn project_name(&self) -> Option<String> {
+        self.tool_belaf()
+            .and_then(|b| b.name.clone())
+            .or_else(|| self.project.as_ref().and_then(|p| p.name.clone()))
+    }
+
+    /// ResolvedReleaseUnit version as it appears in PEP 621 `[project] version`.
+    /// `[tool.belaf]` has no `version` field — versions live in source
+    /// files for the rewriters to manage, or here in `[project]`.
+    fn project_version(&self) -> Option<&str> {
+        self.project.as_ref().and_then(|p| p.version.as_deref())
+    }
+
+    fn tool_belaf(&self) -> Option<&PyProjectBelaf> {
+        self.tool.as_ref().and_then(|t| t.belaf.as_ref())
+    }
+}
+
+/// PEP 621 `[project]` table — the modern, build-system-agnostic location
+/// for Python project metadata. Both `name` and `version` are optional in
+/// PEP 621 (a build backend may compute them dynamically), so we keep them
+/// as `Option`s and only use static, present values as a source.
+#[derive(Debug, Deserialize)]
+struct PyProjectMetadata {
+    pub name: Option<String>,
+    pub version: Option<String>,
+}
+
+/// `pyproject.toml` section `tool` deserialization container.
+#[derive(Debug, Deserialize)]
+struct PyProjectTool {
+    pub belaf: Option<PyProjectBelaf>,
+}
+
+/// Belaf metadata in `pyproject.toml`.
+#[derive(Debug, Deserialize)]
+struct PyProjectBelaf {
+    /// The project name. It isn't always straightforward to determine this,
+    /// since we basically can't assume anything about setup.py.
+    pub name: Option<String>,
+
+    /// The file that we should read to discover the current project version.
+    /// Note that there might be other files that also contain the version that
+    /// will need to be rewritten when we apply a new version.
+    pub main_version_file: Option<String>,
+
+    /// Additional Python files that should be rewritten on metadata changes.
+    #[serde(default)]
+    pub annotated_files: Vec<String>,
+
+    /// Version requirements for internal dependencies.
+    #[serde(default)]
+    pub internal_dep_versions: HashMap<String, String>,
+}
+
+/// Rewrite a Python file to include real version numbers.
+#[derive(Debug)]
+pub struct PythonRewriter {
+    unit_id: ReleaseUnitId,
+    file_path: RepoPathBuf,
+}
+
+impl PythonRewriter {
+    /// Create a new Python file rewriter.
+    pub fn new(unit_id: ReleaseUnitId, file_path: RepoPathBuf) -> Self {
+        PythonRewriter { unit_id, file_path }
+    }
+}
+
+impl Rewriter for PythonRewriter {
+    fn rewrite(&self, app: &AppSession, changes: &mut ChangeList) -> Result<()> {
+        let mut did_anything = false;
+        let file_path = app.repo.resolve_workdir(&self.file_path);
+
+        let cur_f = atry!(
+            File::open(&file_path);
+            ["failed to open file `{}` for reading", file_path.display()]
+        );
+        let cur_reader = BufReader::new(cur_f);
+
+        // Helper table for applying internal deps if needed.
+
+        let unit = app.graph().lookup(self.unit_id);
+        let mut internal_reqs = HashMap::new();
+
+        for dep in &unit.internal_deps[..] {
+            let req_text = match dep.belaf_requirement {
+                DepRequirement::Manual(ref t) => t.clone(),
+
+                DepRequirement::Commit(_) => {
+                    if let Some(ref v) = dep.resolved_version {
+                        format!("^{v}")
+                    } else {
+                        continue;
+                    }
+                }
+
+                DepRequirement::Unavailable => continue,
+            };
+
+            internal_reqs.insert(
+                app.graph().lookup(dep.ident).user_facing_name.clone(),
+                req_text,
+            );
+        }
+
+        // OK, now rewrite the file.
+
+        let new_af = atomicwrites::AtomicFile::new(
+            &file_path,
+            atomicwrites::OverwriteBehavior::AllowOverwrite,
+        );
+
+        let unit = app.graph().lookup(self.unit_id);
+
+        let r = new_af.write(|new_f| {
+
+            for (line_num0, line) in cur_reader.lines().enumerate() {
+                let line = atry!(
+                    line;
+                    ["error reading data from file `{}`", file_path.display()]
+                );
+
+                let line = if simple_py_parse::has_commented_marker(&line, "belaf project-version")
+                {
+                    did_anything = true;
+
+                    if simple_py_parse::has_commented_marker(&line, "belaf project-version tuple") {
+                        let new_text = atry!(
+                            unit.version.as_pep440_tuple_literal();
+                            ["couldn't convert the project version to a `sys.version_info` tuple"]
+                        );
+                        atry!(
+                            simple_py_parse::replace_tuple_literal(&line, &new_text);
+                            ["couldn't rewrite version-tuple source line `{}`", line]
+                        )
+                    } else {
+                        atry!(
+                            simple_py_parse::replace_text_in_string_literal(&line, &unit.version.to_string());
+                            ["couldn't rewrite version-string source line `{}`", line]
+                        )
+                    }
+                } else if  simple_py_parse::has_commented_marker(&line, "belaf internal-req") {
+                    did_anything = true;
+
+                    let idx = line
+                        .find("belaf internal-req")
+                        .expect("BUG: marker should exist after has_commented_marker check");
+                    let mut pieces = line[idx..].split_whitespace();
+                    pieces.next(); // skip "belaf"
+                    pieces.next(); // skip "internal-req"
+                    let name = a_ok_or!(
+                        pieces.next();
+                        ["in `{}` line {}, `belaf internal-req` comment must provide a project name",
+                        file_path.display(), line_num0 + 1]
+                    );
+
+                    // This "shouldn't happen", but could if someone edits a
+                    // file between the time that the app session starts and
+                    // when we get to rewriting it. That indicates something
+                    // racey happening so make it a hard error.
+                    let req_text = a_ok_or!(
+                        internal_reqs.get(name);
+                        ["found internal requirement of `{}` not traced by belaf", name]
+                    );
+
+                    atry!(
+                        simple_py_parse::replace_text_in_string_literal(&line, req_text);
+                        ["couldn't rewrite internal-req source line `{}`", line]
+                    )
+                } else {
+                    line
+                };
+
+                atry!(
+                    writeln!(new_f, "{}", line);
+                    ["error writing data to `{}`", new_af.path().display()]
+                );
+            }
+
+            Ok(())
+        });
+
+        match r {
+            Err(atomicwrites::Error::Internal(e)) => Err(e.into()),
+            Err(atomicwrites::Error::User(e)) => Err(e),
+            Ok(()) => {
+                if !did_anything {
+                    warn!(
+                        "rewriter for Python file `{}` didn't make any modifications",
+                        file_path.display()
+                    );
+                }
+
+                changes.add_path(&self.file_path);
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Python-specific CLI utilities.
+#[derive(Debug, Eq, PartialEq, Parser)]
+pub enum PythonCommands {
+    /// Install $PYPI_TOKEN in the user's .pypirc.
+    InstallToken(InstallTokenCommand),
+}
+
+#[derive(Debug, Eq, PartialEq, Parser)]
+pub struct PythonCommand {
+    #[command(subcommand)]
+    command: PythonCommands,
+}
+
+impl PythonCommand {
+    pub fn execute(self) -> Result<i32> {
+        match self.command {
+            PythonCommands::InstallToken(o) => o.execute(),
+        }
+    }
+}
+
+/// `belaf python install-token`
+#[derive(Debug, Eq, PartialEq, Parser)]
+pub struct InstallTokenCommand {
+    #[arg(
+        long = "repository",
+        default_value = "pypi",
+        help = "The repository name."
+    )]
+    repository: String,
+}
+
+impl InstallTokenCommand {
+    fn execute(self) -> Result<i32> {
+        let token = atry!(
+            env::var("PYPI_TOKEN");
+            ["missing or non-textual environment variable PYPI_TOKEN"]
+            (note "set PYPI_TOKEN in your CI environment to publish to PyPI")
+        );
+
+        let mut p =
+            dirs::home_dir().ok_or_else(|| anyhow!("cannot determine user's home directory"))?;
+        p.push(".pypirc");
+
+        let mut file = atry!(
+            OpenOptions::new().create(true).append(true).open(&p);
+            ["failed to open file `{}` for appending", p.display()]
+        );
+
+        let mut write = || -> Result<()> {
+            writeln!(file, "[{}]", self.repository)?;
+            writeln!(file, "username = __token__")?;
+            writeln!(file, "password = {}", token)?;
+            Ok(())
+        };
+
+        atry!(
+            write();
+            ["failed to write token data to file `{}`", p.display()]
+        );
+
+        Ok(0)
+    }
+}
+
+/// Where this PyPA project's authoritative version string lives — both for
+/// reading during scan and for writing during a release.
+#[derive(Debug)]
+enum PypaVersionLocation {
+    /// A `.py` file (e.g. `setup.py`, or a `_version.py` set explicitly via
+    /// `[tool.belaf] main_version_file`). Handled by `PythonRewriter`.
+    PyFile(String),
+    /// PEP 621 `[project] version` in `pyproject.toml`. Handled by
+    /// `PyProjectVersionRewriter`.
+    PyProjectToml,
+}
+
+/// Rewrite `[project] version = "..."` in a PEP 621 `pyproject.toml`.
+///
+/// Used for projects that declare their version via the modern PEP 621
+/// `[project]` table and have no setup.py / `*_version.py` file. Mirrors
+/// the structure of `CargoRewriter` for `Cargo.toml`.
+#[derive(Debug)]
+pub struct PyProjectVersionRewriter {
+    unit_id: ReleaseUnitId,
+    toml_path: RepoPathBuf,
+}
+
+impl PyProjectVersionRewriter {
+    pub fn new(unit_id: ReleaseUnitId, toml_path: RepoPathBuf) -> Self {
+        PyProjectVersionRewriter { unit_id, toml_path }
+    }
+}
+
+impl Rewriter for PyProjectVersionRewriter {
+    fn rewrite(&self, app: &AppSession, changes: &mut ChangeList) -> Result<()> {
+        use toml_edit::{value, DocumentMut};
+
+        let toml_path = app.repo.resolve_workdir(&self.toml_path);
+
+        let mut text = String::new();
+        let mut f = atry!(
+            File::open(&toml_path);
+            ["failed to open file `{}` for reading", toml_path.display()]
+        );
+        atry!(
+            f.read_to_string(&mut text);
+            ["failed to read file `{}`", toml_path.display()]
+        );
+
+        let mut doc: DocumentMut = atry!(
+            text.parse();
+            ["could not parse file `{}` as TOML", toml_path.display()]
+        );
+
+        let unit = app.graph().lookup(self.unit_id);
+        let new_version = unit.version.to_string();
+
+        let project_table = a_ok_or!(
+            doc.get_mut("project").and_then(|p| p.as_table_mut());
+            ["expected a `[project]` section in `{}`", self.toml_path.escaped()]
+            (note "PEP 621 requires `[project]` for project metadata; if you've removed it, set `[tool.belaf] main_version_file` to a different file instead")
+        );
+        project_table["version"] = value(new_version);
+
+        // Atomic write back.
+        let new_af = atomicwrites::AtomicFile::new(
+            &toml_path,
+            atomicwrites::OverwriteBehavior::AllowOverwrite,
+        );
+        atry!(
+            new_af.write(|f| f.write_all(doc.to_string().as_bytes()));
+            ["failed to rewrite file `{}`", toml_path.display()]
+        );
+
+        changes.add_path(&self.toml_path);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::core::version::pep440::Pep440Version;
+    use toml::Value;
+
+    #[test]
+    fn test_parse_setup_py_version_simple() {
+        let content = r#"setup(
+    name="my-package",
+    version="1.2.3",
+)"#;
+
+        let has_version = content.contains("version=");
+        assert!(has_version);
+    }
+
+    #[test]
+    fn test_parse_pyproject_toml_simple() {
+        let content = r#"
+[project]
+name = "example-package"
+version = "0.1.0"
+"#;
+
+        let parsed: std::result::Result<Value, toml::de::Error> = toml::from_str(content);
+        assert!(parsed.is_ok());
+
+        let table = parsed.expect("BUG: parsed should be Ok after assertion");
+        let project = table.get("project");
+        assert!(project.is_some());
+    }
+
+    #[test]
+    fn test_parse_pyproject_toml_dynamic_version() {
+        let content = r#"
+[project]
+name = "dynamic-package"
+dynamic = ["version"]
+
+[tool.setuptools.dynamic]
+version = {attr = "package.__version__"}
+"#;
+
+        let parsed: std::result::Result<Value, toml::de::Error> = toml::from_str(content);
+        assert!(parsed.is_ok());
+
+        let table = parsed.expect("BUG: parsed should be Ok after assertion");
+        let dynamic = table
+            .get("project")
+            .and_then(|p| p.get("dynamic"))
+            .and_then(|d| d.as_array());
+
+        assert!(dynamic.is_some());
+    }
+
+    #[test]
+    fn test_pep440_version_parsing() {
+        let version = "1.2.3";
+        let parsed = version.parse::<Pep440Version>();
+        assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn test_pep440_version_with_dev() {
+        let version = "1.0.dev0";
+        let parsed = version.parse::<Pep440Version>();
+        assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn test_pep440_version_with_post() {
+        let version = "1.0.post1";
+        let parsed = version.parse::<Pep440Version>();
+        assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn test_simple_py_parse_string_literal() {
+        let line = r#"    version = "1.2.3""#;
+        let has_string = line.contains('"');
+        assert!(has_string);
+    }
+
+    #[test]
+    fn test_simple_py_parse_different_quotes() {
+        let double = r#"version = "1.0.0""#;
+        let single = r"version = '1.0.0'";
+
+        assert!(double.contains('"'));
+        assert!(single.contains('\''));
+    }
+}

@@ -1,0 +1,10 @@
+---
+source: tests/test_repo_variants.rs
+expression: "& view"
+---
+ReleaseUnitView {
+    bundles: [],
+    units: [],
+    externally_managed: [],
+    groups: [],
+}

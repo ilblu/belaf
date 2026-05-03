@@ -1,0 +1,68 @@
+name: Update Scoop Bucket
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag (e.g., v0.2.3)'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  update-scoop:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout scoop-bucket
+        uses: actions/checkout@v6
+        with:
+          repository: ilblu/scoop-bucket
+          token: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+
+      - name: Update Scoop manifest
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
+        run: |
+          git config --global user.name "ilblu-bot"
+          git config --global user.email "bot@ilblu.dev"
+
+          VERSION="${RELEASE_TAG#v}"
+          WINDOWS_ZIP="belaf-x86_64-pc-windows-msvc.zip"
+          URL="https://github.com/ilblu/belaf/releases/download/${RELEASE_TAG}/${WINDOWS_ZIP}"
+
+          CHECKSUM_URL="${URL}.sha256"
+          HASH=$(curl -sL "${CHECKSUM_URL}" | cut -d' ' -f1)
+
+          cat > belaf.json <<EOF
+          {
+            "version": "${VERSION}",
+            "description": "Release management CLI for monorepos",
+            "homepage": "https://github.com/ilblu/belaf",
+            "license": "MIT",
+            "architecture": {
+              "64bit": {
+                "url": "${URL}",
+                "hash": "${HASH}"
+              }
+            },
+            "bin": "belaf.exe",
+            "checkver": {
+              "github": "https://github.com/ilblu/belaf"
+            },
+            "autoupdate": {
+              "architecture": {
+                "64bit": {
+                  "url": "https://github.com/ilblu/belaf/releases/download/v\$version/belaf-x86_64-pc-windows-msvc.zip"
+                }
+              }
+            }
+          }
+          EOF
+
+          git add belaf.json
+          git commit -m "chore: update belaf to v${VERSION}"
+          git push

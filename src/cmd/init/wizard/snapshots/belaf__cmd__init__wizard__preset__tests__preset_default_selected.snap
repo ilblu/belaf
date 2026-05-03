@@ -1,0 +1,34 @@
+---
+source: src/cmd/init/wizard/preset.rs
+expression: out
+---
+"┌ Changelog Preset   ● ● ● ○ ○ ────────────────────────────────────────────────────────────────────┐"
+"│                                                                                                  │"
+"│  Choose a changelog format that fits your project                                                │"
+"│                                                                                                  │"
+"│  ──────────────────────────────────────────────────────────────────────────────────────────────  │"
+"│                                                                                                  │"
+"│  PRESETS                             PREVIEW                                                     │"
+"│  4 available                         default → CHANGELOG.md                                      │"
+"│  ▸ default                           ┌ default ───────────────────────────────────────────────┐  │"
+"│      Conventional Commits grouped by │                ◉ Preview    ◉ Source   (m)             │  │"
+"│                                      └────────────────────────────────────────────────────────┘  │"
+"│    flat                              [1.2.0] - 2025-01-15                                        │"
+"│      Simple flat list — What's Change                                                            │"
+"│                                      ✨ Features                                                 │" Hidden by multi-width symbols: [(40, " ")]
+"│    keepachangelog                                                                                │"
+"│      Keep a Changelog specification  • cli: Add --verbose flag for detailed output               │"
+"│                                      • api: Implement rate limiting for requests                 │"
+"│    minimal                                                                                       │"
+"│      Minimal — version and date only 🐛 Bug Fixes                                                │" Hidden by multi-width symbols: [(40, " ")]
+"│                                                                                                  │"
+"│                                      • auth: Resolve token refresh race condition                │"
+"│                                      • parser: Handle unicode characters in paths                │"
+"│                                                                                                  │"
+"│                                      ⚡ Performance                                              │" Hidden by multi-width symbols: [(40, " ")]
+"│                                                                                                  │"
+"│                                      • Optimize database queries                                 │"
+"│                                                                                                  │"
+"│             ↑↓ select  ·  m toggle preview  ·  Enter continue  ·  Esc back  ·  q quit            │"
+"│                                                                                                  │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

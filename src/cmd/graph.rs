@@ -1,0 +1,179 @@
+use anyhow::Result;
+use tracing::info;
+
+use crate::{
+    cli::GraphOutputFormat,
+    core::{graph::GraphQueryBuilder, session::AppSession},
+};
+
+#[path = "graph/wizard.rs"]
+mod wizard;
+
+#[path = "graph/browser.rs"]
+mod browser;
+
+pub fn run(
+    format: Option<GraphOutputFormat>,
+    ci: bool,
+    web: bool,
+    out: Option<String>,
+) -> Result<i32> {
+    use crate::core::ui::utils::should_use_tui;
+
+    if web || out.is_some() {
+        return browser::open_browser(out.as_deref());
+    }
+
+    if should_use_tui(ci, &format) {
+        return wizard::run();
+    }
+
+    info!(
+        "showing dependency graph with belaf version {}",
+        env!("CARGO_PKG_VERSION")
+    );
+
+    let sess = AppSession::initialize_default()?;
+
+    let q = GraphQueryBuilder::default();
+    let idents = sess.graph().query(q)?;
+
+    if idents.is_empty() {
+        println!("No projects found in repository");
+        return Ok(0);
+    }
+
+    let output_format = if ci {
+        GraphOutputFormat::Json
+    } else {
+        format.unwrap_or(GraphOutputFormat::Ascii)
+    };
+
+    match output_format {
+        GraphOutputFormat::Ascii => render_ascii(&sess, &idents),
+        GraphOutputFormat::Dot => render_dot(&sess, &idents),
+        GraphOutputFormat::Json => render_json(&sess, &idents)?,
+    }
+
+    Ok(0)
+}
+
+fn render_ascii(sess: &AppSession, idents: &[usize]) {
+    println!();
+    println!("╭─────────────────────────────────────────────────────────╮");
+    println!("│              ReleaseUnit Dependency Graph              │");
+    println!("╰─────────────────────────────────────────────────────────╯");
+    println!();
+
+    let mut has_deps = false;
+
+    for ident in idents {
+        let unit = sess.graph().lookup(*ident);
+        let deps = &unit.internal_deps;
+
+        if deps.is_empty() {
+            println!("  ○ {} @ {}", unit.user_facing_name, unit.version);
+        } else {
+            has_deps = true;
+            println!("  ● {} @ {}", unit.user_facing_name, unit.version);
+            for (i, dep) in deps.iter().enumerate() {
+                let dep_proj = sess.graph().lookup(dep.ident);
+                let prefix = if i == deps.len() - 1 {
+                    "└──"
+                } else {
+                    "├──"
+                };
+                println!(
+                    "    {} → {} @ {}",
+                    prefix, dep_proj.user_facing_name, dep_proj.version
+                );
+            }
+        }
+        println!();
+    }
+
+    println!("╭─────────────────────────────────────────────────────────╮");
+    println!("│  Legend: ○ = no deps  ● = has deps  → = depends on     │");
+    println!("╰─────────────────────────────────────────────────────────╯");
+
+    if !has_deps {
+        println!();
+        println!("  No internal dependencies found between projects.");
+    }
+
+    println!();
+    println!("  Release order (topological):");
+    let toposorted: Vec<_> = sess.graph().toposorted().collect();
+    for (i, ident) in toposorted.iter().enumerate() {
+        let unit = sess.graph().lookup(*ident);
+        println!("    {}. {}", i + 1, unit.user_facing_name);
+    }
+    println!();
+}
+
+fn render_dot(sess: &AppSession, idents: &[usize]) {
+    println!("digraph dependencies {{");
+    println!("    rankdir=TB;");
+    println!("    node [shape=box, style=rounded];");
+    println!();
+
+    for ident in idents {
+        let unit = sess.graph().lookup(*ident);
+        let label = format!("{}\\n{}", unit.user_facing_name, unit.version);
+        println!("    \"{}\" [label=\"{}\"];", unit.user_facing_name, label);
+    }
+
+    println!();
+
+    for ident in idents {
+        let unit = sess.graph().lookup(*ident);
+        for dep in &unit.internal_deps {
+            let dep_proj = sess.graph().lookup(dep.ident);
+            println!(
+                "    \"{}\" -> \"{}\";",
+                unit.user_facing_name, dep_proj.user_facing_name
+            );
+        }
+    }
+
+    println!("}}");
+}
+
+fn render_json(sess: &AppSession, idents: &[usize]) -> Result<()> {
+    use serde_json::json;
+
+    let mut projects = Vec::new();
+
+    for ident in idents {
+        let unit = sess.graph().lookup(*ident);
+        let deps: Vec<String> = unit
+            .internal_deps
+            .iter()
+            .map(|d| {
+                let dep_proj = sess.graph().lookup(d.ident);
+                dep_proj.user_facing_name.clone()
+            })
+            .collect();
+
+        projects.push(json!({
+            "name": unit.user_facing_name,
+            "version": unit.version.to_string(),
+            "prefix": unit.prefix().escaped(),
+            "dependencies": deps,
+        }));
+    }
+
+    let toposorted: Vec<String> = sess
+        .graph()
+        .toposorted()
+        .map(|id| sess.graph().lookup(id).user_facing_name.clone())
+        .collect();
+
+    let output = json!({
+        "projects": projects,
+        "release_order": toposorted,
+    });
+
+    println!("{}", serde_json::to_string_pretty(&output)?);
+    Ok(())
+}

@@ -1,0 +1,28 @@
+---
+source: src/cmd/init/wizard/confirmation.rs
+expression: out
+---
+"┌ Confirmation   ● ● ● ● ● ────────────────────────────────────────────────────────────────────────┐"
+"│                                                                                                  │"
+"│  REPOSITORY                                                                                      │"
+"│  https://github.com/example/repo                                                                 │"
+"│                                                                                                  │"
+"│  ──────────────────────────────────────────────────────────────────────────────────────────────  │"
+"│                                                                                                  │"
+"│  PROJECTS  2 total                                                                               │"
+"│  cargo 2                                                                                         │"
+"│                                                                                                  │"
+"│    alpha   cargo   0.1.0                                                                         │"
+"│    beta    cargo   0.2.3                                                                         │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│  ──────────────────────────────────────────────────────────────────────────────────────────────  │"
+"│                                                                                                  │"
+"│  ON CONFIRM                                                                                      │"
+"│    ▸ Write belaf/config.toml                                                                     │"
+"│    ▸ Update version files in 2 projects                                                          │"
+"│    ▸ Create baseline tags for all release units                                                  │"
+"│                                                                                                  │"
+"│                        ↑↓ scroll  ·  Enter confirm  ·  Esc back  ·  q quit                       │"
+"│                                                                                                  │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

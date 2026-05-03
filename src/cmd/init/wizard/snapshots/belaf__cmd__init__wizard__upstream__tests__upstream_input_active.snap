@@ -1,0 +1,28 @@
+---
+source: src/cmd/init/wizard/upstream.rs
+expression: out
+---
+"┌ Repository URL   ● ● ● ● ○ ──────────────────────────────────────────────────┐"
+"│                                                                              │"
+"│  Used for changelog links and release references                             │"
+"│                                                                              │"
+"│  ──────────────────────────────────────────────────────────────────────────  │"
+"│                                                                              │"
+"│  URL                                                                         │"
+"│  Enter the upstream Git remote — typing edits in place                       │"
+"│                                                                              │"
+"│    git@github.com:example/repo.git▌                                          │"
+"│    ──────────────────────────────────────────────────────────────────────    │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│                                                                              │"
+"│        type edit  ·  Backspace delete  ·  Enter continue  ·  Esc back        │"
+"│                                                                              │"
+"└──────────────────────────────────────────────────────────────────────────────┘"

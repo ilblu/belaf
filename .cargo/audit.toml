@@ -1,0 +1,11 @@
+[advisories]
+ignore = [
+    # rsa: Marvin Attack timing sidechannel (transitive: octocrab → jsonwebtoken → rsa)
+    # No fix available - RustCrypto team working on it: https://github.com/RustCrypto/RSA/issues/412
+    "RUSTSEC-2023-0071",
+
+    # paste: unmaintained (transitive: spinoff, ratatui)
+    # Alternative "pastey" exists but requires upstream updates
+    # https://rustsec.org/advisories/RUSTSEC-2024-0436
+    "RUSTSEC-2024-0436",
+]

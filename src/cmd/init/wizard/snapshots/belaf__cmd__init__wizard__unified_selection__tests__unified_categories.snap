@@ -1,0 +1,28 @@
+---
+source: src/cmd/init/wizard/unified_selection.rs
+expression: out
+---
+"┌ ReleaseUnit Selection ───────────────────────────────────────────────────────────────────────────┐"
+"│                                                                                                  │"
+"│                   ❖ Review and toggle each ReleaseUnit you want belaf to manage                  │"
+"│                         2 / 3 selected · 3 togglable · 1 externally-managed                      │"
+"│                                                                                                  │"
+"│ ⬢  Bundles                                                                                       │"
+"│    ● apps/desktop  tauri (single-source)                                                         │"
+"│                                                                                                  │"
+"│ ◆  Standalone                                                                                    │"
+"│    ● alpha         @ 0.1.0 (crates/alpha)                                                        │"
+"│    ○ beta          @ 0.2.3 (crates/beta)                                                         │"
+"│                                                                                                  │"
+"│ ◇  Externally-managed                                                                            │"
+"│    — apps/ios      iOS app — auto [allow_uncovered]                                              │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│                                                                                                  │"
+"│     ↑↓ navigate  Space toggle  c cascade-from  a/n all/none  Enter continue  Esc back  q quit    │"
+"│                                                                                                  │"
+"└──────────────────────────────────────────────────────────────────────────────────────────────────┘"

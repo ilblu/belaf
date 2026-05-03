@@ -1,0 +1,12 @@
+file:///
+%7Busername%7D
+https://datatracker.ietf.org
+protonmail
+https://github.com/cocogitto/cocogitto
+pypi.org
+https://console.substack.com
+git-cliff/commit/
+patreon
+# Currently commented out; kept as a reference in case we want to skip npm in the future.
+# See: https://github.com/orgs/community/discussions/174098
+#https://www.npmjs.com
