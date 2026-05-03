@@ -6,10 +6,49 @@
 //! lives on each step's struct in `welcome.rs` / `preset.rs` /
 //! `project.rs` / `upstream.rs` / `confirmation.rs`.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::core::git::repository::RepoPathBuf;
 use crate::core::release_unit::detector::DetectionReport;
+
+/// User-chosen cascade rule for one Standalone unit, picked
+/// interactively via the `[c]` keybinding in
+/// [`UnifiedSelectionStep`](super::unified_selection::UnifiedSelectionStep).
+/// Persisted into the emitted `[release_unit.<name>]` block as
+/// `cascade_from = { source = "<source>", bump = "<strategy>" }`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CascadeOverride {
+    pub source: String,
+    pub strategy: CascadeStrategy,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CascadeStrategy {
+    Mirror,
+    FloorPatch,
+    FloorMinor,
+    FloorMajor,
+}
+
+impl CascadeStrategy {
+    pub fn as_wire(&self) -> &'static str {
+        match self {
+            Self::Mirror => "mirror",
+            Self::FloorPatch => "floor_patch",
+            Self::FloorMinor => "floor_minor",
+            Self::FloorMajor => "floor_major",
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            Self::Mirror => "mirror — exact same version as source",
+            Self::FloorPatch => "floor_patch — at least patch when source bumps",
+            Self::FloorMinor => "floor_minor — at least minor when source bumps",
+            Self::FloorMajor => "floor_major — at least major when source bumps",
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct DetectedUnit {
@@ -67,6 +106,13 @@ pub struct WizardState {
     /// a `[projects."<name>"]` block to `belaf/config.toml` after
     /// bootstrap.
     pub tag_format_override: Option<String>,
+
+    /// Per-unit cascade rules chosen interactively via the `[c]`
+    /// keybinding in [`UnifiedSelectionStep`]. Keyed by the
+    /// standalone-unit's display name (matches `DetectedUnit::name`).
+    /// Appended to the emitted `[release_unit.<name>]` block as a
+    /// `cascade_from = ...` field.
+    pub cascade_overrides: HashMap<String, CascadeOverride>,
 }
 
 impl WizardState {
@@ -91,6 +137,7 @@ impl WizardState {
             detector_accepted: false,
             detector_excluded: HashSet::new(),
             tag_format_override: None,
+            cascade_overrides: HashMap::new(),
         }
     }
 

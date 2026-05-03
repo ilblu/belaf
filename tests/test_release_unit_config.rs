@@ -1,10 +1,10 @@
-//! End-to-end TOML round-trip for the 1.0 release_unit config syntax.
-//! Verifies that `[release_unit.<name>]` (named-entry, with optional
-//! `glob` field), `[ignore_paths]`, `[allow_uncovered]`, and
-//! `[ecosystems.*]` all parse, every field is preserved through
-//! `ConfigurationFile::get` → `into_toml` → re-parse, and all 5
-//! `VersionFieldSpec` variants plus both source-form variants
-//! (manifests / external) survive the round-trip.
+//! End-to-end TOML round-trip for the named-entry release_unit config.
+//! Verifies that `[release_unit.<name>]` (with optional `glob` field),
+//! `[ignore_paths]`, `[allow_uncovered]`, and `[ecosystems.*]` all
+//! parse, every field is preserved through `ConfigurationFile::get`
+//! → `into_toml` → re-parse, and all 5 `VersionFieldSpec` variants
+//! plus both source-form variants (manifests / external) survive the
+//! round-trip.
 
 use std::fs;
 
@@ -12,7 +12,7 @@ use belaf::core::config::ConfigurationFile;
 use belaf::core::release_unit::syntax::ManifestList;
 use tempfile::TempDir;
 
-/// User-supplied overlay covering every section we ship in 1.0.
+/// User-supplied overlay covering every config section the CLI accepts.
 /// `ConfigurationFile::get` merges this on top of the embedded baseline,
 /// so the existing `repo`/`changelog`/`bump`/`commit_attribution` fields
 /// don't need to be set here.

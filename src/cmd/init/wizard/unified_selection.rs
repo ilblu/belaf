@@ -24,6 +24,7 @@ use crate::core::ui::release_unit_view::{
 };
 
 use super::{
+    cascade_from::CascadeFromStep,
     preset::PresetSelectionStep,
     state::WizardState,
     step::{Step, StepResult, WizardOutcome},
@@ -48,6 +49,8 @@ impl UnifiedSelectionStep {
     }
 
     fn rebuild(&mut self, state: &WizardState) {
+        use crate::core::ui::release_unit_view::CascadeOverrideBadge;
+
         let standalones: Vec<StandaloneEntry> = state
             .standalone_units
             .iter()
@@ -64,6 +67,18 @@ impl UnifiedSelectionStep {
             &standalones,
             &state.detector_excluded,
         );
+        // Project user-confirmed cascade overrides onto matching unit
+        // rows so the `⇄ source · strategy` badge surfaces in the
+        // selection list. WizardState is the source-of-truth; the view
+        // mirrors it on every rebuild.
+        for unit in &mut self.view.units {
+            if let Some(ov) = state.cascade_overrides.get(&unit.name) {
+                unit.cascade_override = Some(CascadeOverrideBadge {
+                    source: ov.source.clone(),
+                    strategy_label: ov.strategy.as_wire().to_string(),
+                });
+            }
+        }
         if self.cursor >= self.view.flat_indices().len() {
             self.cursor = 0;
         }
@@ -143,6 +158,19 @@ impl Step for UnifiedSelectionStep {
             }
             (KeyCode::Char('n'), _) => {
                 self.view.set_all_togglable(false);
+                StepResult::Continue
+            }
+            (KeyCode::Char('c'), _) => {
+                // Open the cascade-from sub-step for the unit currently
+                // under the cursor. Bundles aggregate manifests under
+                // one tag (no per-member cascade) and Ext rows are
+                // read-only — both ignore `c`.
+                if let Some(RowIdx::Unit(i)) = self.current_idx() {
+                    if let Some(unit_row) = self.view.units.get(i) {
+                        let target = unit_row.name.clone();
+                        return StepResult::Next(Box::new(CascadeFromStep::new(target, state)));
+                    }
+                }
                 StepResult::Continue
             }
             (KeyCode::Enter | KeyCode::Char('y'), _) => {
@@ -245,6 +273,8 @@ fn render(frame: &mut Frame, area: Rect, view: &ReleaseUnitView, cursor: usize) 
         Span::styled(" navigate  ", Style::default().fg(Color::Gray)),
         Span::styled("Space", Style::default().fg(Color::Cyan)),
         Span::styled(" toggle  ", Style::default().fg(Color::Gray)),
+        Span::styled("c", Style::default().fg(Color::Magenta)),
+        Span::styled(" cascade-from  ", Style::default().fg(Color::Gray)),
         Span::styled("a/n", Style::default().fg(Color::Green)),
         Span::styled(" all/none  ", Style::default().fg(Color::Gray)),
         Span::styled("Enter", Style::default().fg(Color::Green)),

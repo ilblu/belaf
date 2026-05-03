@@ -658,7 +658,7 @@ fn validate_ecosystem_field_compat(
     Ok(())
 }
 
-fn default_version_field_for_ecosystem(ecosystem: &str) -> &'static str {
+pub fn default_version_field_for_ecosystem(ecosystem: &str) -> &'static str {
     match ecosystem {
         "cargo" => "cargo_toml",
         "npm" => "npm_package_json",
@@ -666,6 +666,25 @@ fn default_version_field_for_ecosystem(ecosystem: &str) -> &'static str {
         "jvm-library" => "gradle_properties",
         _ => "cargo_toml", // fallback; resolver validation catches mismatches
     }
+}
+
+/// Standard manifest filename for a given ecosystem identifier. Used
+/// by `auto_detect` when emitting decorator blocks (e.g. cascade_from
+/// overrides) for auto-discovered standalone units — the loader knows
+/// the exact path internally but the wire-form decorator block needs
+/// the path explicit. Returns `None` for unknown ecosystems.
+pub fn default_manifest_filename_for_ecosystem(ecosystem: &str) -> Option<&'static str> {
+    Some(match ecosystem {
+        "cargo" => "Cargo.toml",
+        "npm" => "package.json",
+        "pypa" => "pyproject.toml",
+        "go" => "go.mod",
+        "maven" => "pom.xml",
+        "swift" => "Package.swift",
+        "elixir" => "mix.exs",
+        "csproj" => "*.csproj",
+        _ => return None,
+    })
 }
 
 // ===========================================================================

@@ -71,6 +71,21 @@ pub struct UnitRow {
     pub bump_hint: Option<BumpHint>,
     /// Optional commit count since the last tag — prepare-only.
     pub commit_count: Option<usize>,
+    /// User-chosen cascade-from override (if any). Distinct from the
+    /// `sdk-cascade` *hint* annotation: the hint says "this looks
+    /// cascade-able"; the override is the wizard-user's actual
+    /// `cascade_from = { source, bump }` choice. Renders as
+    /// `⇄ <source> · <strategy>` after annotations.
+    pub cascade_override: Option<CascadeOverrideBadge>,
+}
+
+/// Visual badge for a wizard-confirmed cascade-from rule. Mirrors
+/// `cmd::init::wizard::state::CascadeOverride` without taking a
+/// dependency on the wizard module (the view stays UI-pure).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CascadeOverrideBadge {
+    pub source: String,
+    pub strategy_label: String,
 }
 
 /// Bump recommendation label rendered after the unit's secondary
@@ -269,6 +284,7 @@ impl ReleaseUnitView {
                 backref: idx,
                 bump_hint: None,
                 commit_count: None,
+                cascade_override: None,
             });
         }
 
@@ -418,6 +434,13 @@ pub fn build_unit_row_line(
         spans.push(Span::styled(
             format!("↳ {}", ann.label()),
             Style::default().fg(Color::Yellow),
+        ));
+    }
+    if let Some(badge) = &row.cascade_override {
+        spans.push(Span::styled("  ".to_string(), Style::default()));
+        spans.push(Span::styled(
+            format!("⇄ {} · {}", badge.source, badge.strategy_label),
+            Style::default().fg(Color::Magenta),
         ));
     }
     if matches!(mode, RenderMode::Prepare) {
@@ -593,6 +616,13 @@ impl ReleaseUnitView {
                     spans.push(Span::styled(
                         format!("↳ {}", ann.label()),
                         Style::default().fg(Color::Yellow),
+                    ));
+                }
+                if let Some(badge) = &u.cascade_override {
+                    spans.push(Span::styled("  ", Style::default()));
+                    spans.push(Span::styled(
+                        format!("⇄ {} · {}", badge.source, badge.strategy_label),
+                        Style::default().fg(Color::Magenta),
                     ));
                 }
                 if matches!(mode, RenderMode::Prepare) {

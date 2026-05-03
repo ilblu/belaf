@@ -19,13 +19,34 @@
 //! `SdkCascadeMember` (a hint) was accidentally reachable from a
 //! Bundle-emit path.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use super::toml_util::toml_quote;
 use crate::core::git::repository::{RepoPathBuf, Repository};
 use crate::core::release_unit::bundle;
 use crate::core::release_unit::detector::{self, DetectedShape, DetectorMatch, ExtKind, HintKind};
+use crate::core::release_unit::resolver::{
+    default_manifest_filename_for_ecosystem, default_version_field_for_ecosystem,
+};
+
+/// Identifies a loader-discovered standalone unit by name + ecosystem +
+/// repo prefix. Auto-detect uses this to emit decorator blocks for units
+/// the user attached a `cascade_from` override to via the wizard.
+#[derive(Clone, Debug)]
+pub struct StandaloneRef {
+    pub name: String,
+    pub ecosystem: String,
+    pub prefix: String,
+}
+
+/// Wizard-confirmed `cascade_from` rule for one unit, keyed by unit
+/// name. Wire form mirrors `cascade_from = { source = ..., bump = ... }`.
+#[derive(Clone, Debug)]
+pub struct CascadeOverrideEmit {
+    pub source: String,
+    pub strategy: String,
+}
 
 /// Result of an auto-detect pass: TOML snippet to append, plus
 /// counters per detector kind for the wizard summary.
@@ -77,15 +98,22 @@ impl DetectionCounters {
 const AUTO_DETECT_MARKER: &str =
     "# belaf:auto-detect-marker (do not remove — used for idempotency)";
 
-/// Old single-shot entry point — equivalent to `run_filtered(repo, &empty)`.
-/// Kept as a stable public surface for `--ci --auto-detect` and existing
-/// integration tests; the wizard's interactive path uses `run_filtered`
-/// so the user's per-item exclusions can flow through.
+/// Old single-shot entry point — equivalent to running with no
+/// exclusions and no cascade overrides. Kept as a stable public
+/// surface for `--ci --auto-detect` and existing integration tests.
 pub fn run(repo: &Repository) -> AutoDetectResult {
-    run_filtered(repo, &HashSet::new())
+    run_with_cascade(repo, &HashSet::new(), &[], &HashMap::new())
 }
 
-/// Auto-detect with per-match exclusions. Each excluded match path:
+/// Backwards-compatible entry that takes only path exclusions; the
+/// wizard's interactive path now calls [`run_with_cascade`] directly
+/// so user-confirmed cascade-from overrides flow into the emitted
+/// snippet alongside the bundle blocks.
+pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> AutoDetectResult {
+    run_with_cascade(repo, exclusions, &[], &HashMap::new())
+}
+
+/// Full auto-detect entry. Each excluded match path:
 ///   - gets **no** `[release_unit.<name>]` block emitted
 ///   - lands in the `[ignore_paths]` block of the snippet so the
 ///     resolver skips it AND the drift detector stays silent on it
@@ -94,7 +122,20 @@ pub fn run(repo: &Repository) -> AutoDetectResult {
 /// still becomes one `[release_unit.<name>]` block with `glob = ...`;
 /// a group reduced to a single non-excluded member by exclusions falls
 /// through to the singleton-explicit-block path automatically.
-pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> AutoDetectResult {
+///
+/// `standalones` + `cascade_overrides` together drive emission of
+/// decorator blocks for loader-discovered standalone units the user
+/// attached a `cascade_from` rule to. Each override produces one
+/// `[release_unit.<name>]` block carrying the unit's ecosystem, the
+/// canonical manifest path (derived from the loader-known prefix +
+/// ecosystem default filename), and the wire-form `cascade_from`
+/// inline table.
+pub fn run_with_cascade(
+    repo: &Repository,
+    exclusions: &HashSet<RepoPathBuf>,
+    standalones: &[StandaloneRef],
+    cascade_overrides: &HashMap<String, CascadeOverrideEmit>,
+) -> AutoDetectResult {
     let mut report = detector::detect_all(repo);
     if !exclusions.is_empty() {
         report.matches.retain(|m| !exclusions.contains(&m.path));
@@ -136,10 +177,58 @@ pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> Aut
         snippet.push_str(&format!("paths = [{}]\n", quoted.join(", ")));
     }
 
-    if counters.sdk_cascade_member > 0 {
+    if counters.sdk_cascade_member > 0 && cascade_overrides.is_empty() {
+        // Only print the "consider adding cascade_from" hint when the
+        // user hasn't already wired one up via the wizard's `[c]` flow.
+        // If they have, the actual cascade-blocks below replace this
+        // generic suggestion.
         snippet.push_str(&format!(
             "\n# {} SDK packages detected under sdks/* — consider adding\n# `cascade_from = {{ source = \"<schema-unit>\", bump = \"floor_minor\" }}`\n# to each so they bump in lockstep when the schema bumps.\n",
             counters.sdk_cascade_member
+        ));
+    }
+
+    // Wizard-confirmed cascade-from overrides become decorator blocks
+    // for the matching auto-discovered standalone units. Each block
+    // carries ecosystem + the canonical manifest path (derived from
+    // the loader-known prefix + ecosystem default filename) so the
+    // resolver accepts the entry; cascade_from is the actual added
+    // semantic.
+    let mut override_names: Vec<&String> = cascade_overrides.keys().collect();
+    override_names.sort();
+    for name in override_names {
+        let Some(unit_ref) = standalones.iter().find(|s| s.name == *name) else {
+            // Override targets a unit no longer in the loader output —
+            // skip silently. The user can re-run init.
+            continue;
+        };
+        let Some(filename) = default_manifest_filename_for_ecosystem(&unit_ref.ecosystem) else {
+            // Unknown ecosystem — emit an explanatory comment instead
+            // so the user can hand-edit the block.
+            snippet.push_str(&format!(
+                "\n# cascade_from override for `{name}` was selected interactively but ecosystem\n# `{}` has no canonical manifest filename — add a manifests entry by hand:\n",
+                unit_ref.ecosystem,
+            ));
+            continue;
+        };
+        let Some(ov) = cascade_overrides.get(name) else {
+            continue;
+        };
+        // prefix == "root" or empty means the unit lives at the repo
+        // root. Synthesise the manifest path accordingly.
+        let manifest_raw = if unit_ref.prefix.is_empty() || unit_ref.prefix == "root" {
+            filename.to_string()
+        } else {
+            format!("{}/{}", unit_ref.prefix, filename)
+        };
+        let key_q = toml_quote(name);
+        let manifest_q = toml_quote(&manifest_raw);
+        let source_q = toml_quote(&ov.source);
+        let strategy_q = toml_quote(&ov.strategy);
+        let version_field = default_version_field_for_ecosystem(&unit_ref.ecosystem);
+        snippet.push_str(&format!(
+            "\n# cascade_from override picked interactively in `belaf init` for {name}.\n[release_unit.{key_q}]\necosystem = \"{eco}\"\nmanifests = [{{ path = {manifest_q}, version_field = \"{version_field}\" }}]\ncascade_from = {{ source = {source_q}, bump = {strategy_q} }}\n",
+            eco = unit_ref.ecosystem,
         ));
     }
 
@@ -262,6 +351,88 @@ mod tests {
             r.toml_snippet
         );
         assert_eq!(r.counters.total_release_unit_candidates(), 0);
+    }
+
+    #[test]
+    fn cascade_override_emits_parseable_block() {
+        use crate::core::release_unit::syntax::ReleaseUnitConfig;
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output();
+        let repo = Repository::open(dir.path()).expect("open");
+
+        let standalones = vec![StandaloneRef {
+            name: "@org/sdk-ts".to_string(),
+            ecosystem: "npm".to_string(),
+            prefix: "sdks/typescript".to_string(),
+        }];
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "@org/sdk-ts".to_string(),
+            CascadeOverrideEmit {
+                source: "schema".to_string(),
+                strategy: "floor_minor".to_string(),
+            },
+        );
+
+        let result = run_with_cascade(&repo, &HashSet::new(), &standalones, &overrides);
+        assert!(
+            result
+                .toml_snippet
+                .contains("[release_unit.\"@org/sdk-ts\"]"),
+            "expected cascade decorator block, got:\n{}",
+            result.toml_snippet
+        );
+        assert!(
+            result.toml_snippet.contains("cascade_from = { source ="),
+            "expected cascade_from inline table, got:\n{}",
+            result.toml_snippet
+        );
+
+        // Strip the leading marker comment + extract just the
+        // `[release_unit.<name>]` block, then ensure it parses through
+        // the syntax loader.
+        let block_start = result
+            .toml_snippet
+            .find("[release_unit.\"@org/sdk-ts\"]")
+            .expect("block present");
+        let block_text = &result.toml_snippet[block_start..];
+        let parsed: std::collections::HashMap<
+            String,
+            std::collections::HashMap<String, ReleaseUnitConfig>,
+        > = toml::from_str(&format!(
+            "[release_unit]\n[release_unit.\"@org/sdk-ts\"]\n{}",
+            &block_text["[release_unit.\"@org/sdk-ts\"]\n".len()..]
+        ))
+        .or_else(|_| {
+            // Simpler form: parse the block as-is wrapped under
+            // a release_unit table.
+            toml::from_str::<
+                std::collections::HashMap<
+                    String,
+                    std::collections::HashMap<String, ReleaseUnitConfig>,
+                >,
+            >(&format!(
+                "{}\n",
+                block_text
+                    .lines()
+                    .take_while(|l| !l.is_empty())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            ))
+        })
+        .expect("emitted cascade block must parse via syntax loader");
+        let cfg = parsed
+            .get("release_unit")
+            .and_then(|m| m.get("@org/sdk-ts"))
+            .expect("release_unit.@org/sdk-ts entry");
+        assert_eq!(cfg.ecosystem, "npm");
+        let cascade = cfg.cascade_from.as_ref().expect("cascade_from set");
+        assert_eq!(cascade.source, "schema");
+        assert_eq!(cascade.bump, "floor_minor");
     }
 
     #[test]

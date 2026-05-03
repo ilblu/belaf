@@ -25,8 +25,8 @@ pub mod syntax {
         pub commit_attribution: CommitAttributionConfiguration,
 
         /// `[group.<id>]` — bundles projects that release together with
-        /// synchronised versions. Only the named-entry form is accepted
-        /// in 1.0; the legacy array-of-tables `[[group]]` is gone.
+        /// synchronised versions. Named-entry form only; the parser
+        /// rejects an array-of-tables `[[group]]` shape.
         ///
         /// ```toml
         /// [group.schema]
@@ -42,9 +42,9 @@ pub mod syntax {
         /// `[release_unit.<name>]` — named-entry release units. Each
         /// entry is either explicit (no `glob` field) or glob-form
         /// (with `glob` set, expanding at resolve-time into N units
-        /// per matching directory). The legacy array-of-tables
-        /// `[[release_unit]]` and the separate `[[release_unit_glob]]`
-        /// top-level key are both gone in 1.0.
+        /// per matching directory). Named-entry only; the parser
+        /// rejects array-of-tables `[[release_unit]]` and the separate
+        /// `[[release_unit_glob]]` top-level key.
         #[serde(
             default,
             rename = "release_unit",

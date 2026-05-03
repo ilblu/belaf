@@ -126,7 +126,7 @@ fn test_bump_features_always_bump_minor_false() {
     );
     assert!(
         stdout.contains("0.5.1") || stdout.contains("patch"),
-        "Expected patch bump (0.5.0 -> 0.5.1) with features_always_bump_minor=false for pre-1.0, got: {stdout}"
+        "Expected patch bump (0.5.0 -> 0.5.1) with features_always_bump_minor=false on a 0.x.y crate, got: {stdout}"
     );
 }
 
@@ -178,7 +178,7 @@ fn test_bump_breaking_always_bump_major_false() {
     );
     assert!(
         stdout.contains("0.6.0") || stdout.contains("minor"),
-        "Expected minor bump (0.5.0 -> 0.6.0) with breaking_always_bump_major=false for pre-1.0, got: {stdout}"
+        "Expected minor bump (0.5.0 -> 0.6.0) with breaking_always_bump_major=false on a 0.x.y crate, got: {stdout}"
     );
 }
 
@@ -204,7 +204,7 @@ fn test_bump_config_ignored_post_1_0() {
     );
     assert!(
         stdout.contains("3.0.0") || stdout.contains("major"),
-        "Expected major bump (2.0.0 -> 3.0.0) for post-1.0 breaking change (config ignored), got: {stdout}"
+        "Expected major bump (2.0.0 -> 3.0.0) for breaking change post-stable (>=1.0.0), got: {stdout}"
     );
 }
 

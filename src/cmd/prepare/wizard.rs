@@ -1016,6 +1016,7 @@ fn solo_to_unit_row(project: &ReleaseUnitItem) -> UnitRow {
         backref: 0, // prepare doesn't route through view-toggles; uses ListState directly
         bump_hint,
         commit_count: Some(project.commit_count()),
+        cascade_override: None,
     }
 }
 

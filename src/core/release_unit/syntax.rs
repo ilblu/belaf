@@ -1,11 +1,10 @@
 //! TOML-facing syntax for `[release_unit.<name>]`, `[ignore_paths]`,
 //! `[allow_uncovered]`, and `[ecosystems.*]`.
 //!
-//! Released as the 1.0 wire shape: one named-entry form. The legacy
-//! pre-1.0 array-of-tables surface (`[[release_unit]]`,
-//! `[[release_unit_glob]]`) and the dual `[[group]]` form are gone.
-//! Glob-expansion is opt-in via the `glob` field on a regular
-//! `[release_unit.<name>]` entry; the resolver dispatches.
+//! One named-entry form per concept; the parser rejects
+//! array-of-tables `[[release_unit]]`, `[[release_unit_glob]]`, and
+//! `[[group]]`. Glob-expansion is opt-in via the `glob` field on a
+//! regular `[release_unit.<name>]` entry; the resolver dispatches.
 //!
 //! ## Example
 //!

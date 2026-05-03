@@ -19,7 +19,7 @@ use serde_json::Value;
 const SCHEMA_PATH: &str = "schemas/manifest.v1.schema.json";
 
 /// Build a minimal valid manifest with one release entry per
-/// (ecosystem, version_field) shape we ship in 1.0.
+/// (ecosystem, version_field) shape the CLI emits.
 fn build_manifest_for(ecosystem: &str, name: &str, prefix: &str) -> ReleaseManifest {
     let mut m = ReleaseManifest::new("main".to_string(), "ci-bot".to_string());
     m.add_release(ReleaseEntry::new(

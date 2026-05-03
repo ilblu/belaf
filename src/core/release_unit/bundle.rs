@@ -26,10 +26,11 @@ use super::shape::DetectorMatch;
 use crate::cmd::init::auto_detect::DetectionCounters;
 
 /// Run every bundle scanner against `workdir` and concatenate the
-/// matches. Detection ordering matches the legacy `detector::detect_all`
-/// pre-1.0 — hexagonal first, then tauri, then jvm — so the dedup
-/// logic in `unified_selection.rs::rebuild_rows` keeps the same
-/// outcome.
+/// matches. Order matters: more specific scanners run first
+/// (hexagonal — multiple crates under one parent; tauri — three-file
+/// triplet; jvm-library — single root) so the per-path dedup in
+/// `unified_selection.rs::rebuild_rows` keeps the most informative
+/// label when two scanners both match.
 pub fn detect_all(workdir: &Path) -> Vec<DetectorMatch> {
     let mut out = Vec::new();
     out.extend(hexagonal::detect(workdir));

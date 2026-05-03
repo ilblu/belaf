@@ -5,6 +5,7 @@
 //! top-of-stack, dispatch input, react to the [`StepResult`]
 //! returned. Concrete steps live in their own modules.
 
+pub mod cascade_from;
 pub mod confirmation;
 pub mod preset;
 pub mod single_mobile;
@@ -227,7 +228,37 @@ fn execute_bootstrap_with_output(state: &WizardState, repo: &Repository) -> Resu
             let mut cfg_path = repo.resolve_config_dir();
             cfg_path.push("config.toml");
             if state.detector_accepted {
-                let result = auto_detect::run_filtered(repo, &state.detector_excluded);
+                // Translate wizard-state cascade choices into the
+                // emit-side type so auto_detect can serialise them
+                // alongside the detector-driven blocks.
+                let standalones: Vec<auto_detect::StandaloneRef> = state
+                    .standalone_units
+                    .iter()
+                    .map(|u| auto_detect::StandaloneRef {
+                        name: u.name.clone(),
+                        ecosystem: u.ecosystem.clone().unwrap_or_default(),
+                        prefix: u.prefix.clone(),
+                    })
+                    .collect();
+                let cascade_overrides: HashMap<String, auto_detect::CascadeOverrideEmit> = state
+                    .cascade_overrides
+                    .iter()
+                    .map(|(name, ov)| {
+                        (
+                            name.clone(),
+                            auto_detect::CascadeOverrideEmit {
+                                source: ov.source.clone(),
+                                strategy: ov.strategy.as_wire().to_string(),
+                            },
+                        )
+                    })
+                    .collect();
+                let result = auto_detect::run_with_cascade(
+                    repo,
+                    &state.detector_excluded,
+                    &standalones,
+                    &cascade_overrides,
+                );
                 if let Err(e) = auto_detect::append_to_config(&cfg_path, &result.toml_snippet) {
                     eprintln!(
                         "warning: detected bundles but failed to append to {}: {}",

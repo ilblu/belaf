@@ -23,6 +23,6 @@ expression: out
 "│                                                                                                  │"
 "│                                                                                                  │"
 "│                                                                                                  │"
-"│             ↑↓ navigate  Space toggle  a/n all/none  Enter continue  Esc back  q quit            │"
+"│     ↑↓ navigate  Space toggle  c cascade-from  a/n all/none  Enter continue  Esc back  q quit    │"
 "│                                                                                                  │"
 "└──────────────────────────────────────────────────────────────────────────────────────────────────┘"
