@@ -232,10 +232,10 @@ pub fn seed_cargo_monorepo_independent<R: Seedable>(repo: &R) {
     repo.commit("seed cargo-monorepo-independent fixture");
 }
 
-/// L.5 — `polyglot-cross-eco-group`. A `[[group]]` shape where the
+/// L.5 — `polyglot-cross-eco-group`. A `[group.<id>]` shape where the
 /// same logical artefact ships as both an npm package AND a Maven
 /// package — the canonical motivation for the Group primitive.
-/// Versions in lockstep; one `[[group]]` member set in config.toml
+/// Versions in lockstep; one `[group.<id>]` member set in config.toml
 /// drives both bumps.
 pub fn seed_polyglot_cross_eco_group<R: Seedable>(repo: &R) {
     repo.write_file(

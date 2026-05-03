@@ -148,9 +148,9 @@ fn pre_prepare_drift_check_paths_silent_when_covered() {
 
 #[test]
 fn hexagonal_cargo_drift_can_be_silenced() {
-    // Common case: a hexagonal-cargo service exists, was added to
-    // `[[release_unit]]`. Its parent dir lands in the resolved
-    // unit's coverage list and the drift check is happy.
+    // Common case: a hexagonal-cargo service exists, was added as a
+    // `[release_unit.<name>]` block. Its parent dir lands in the
+    // resolved unit's coverage list and the drift check is happy.
     let repo = TestRepo::new();
     seed_hexagonal_cargo(&repo, "apps/services/foo");
 

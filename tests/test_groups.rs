@@ -1,10 +1,10 @@
-//! `[[group]]` config-table integration tests.
+//! `[group.<id>]` config-table integration tests.
 //!
-//! Verifies the wire contract end-to-end: a config with `[[group]]` entries
-//! produces a manifest with both `groups[]` (containing the group's
-//! user-facing member names) and `releases[].group_id` set on each member.
-//! That contract is what the github-app reads to drive atomic group
-//! releases (plan §7).
+//! Verifies the wire contract end-to-end: a config with `[group.<id>]`
+//! entries produces a manifest with both `groups[]` (containing the
+//! group's user-facing member names) and `releases[].group_id` set on
+//! each member. That contract is what the github-app reads to drive
+//! atomic group releases.
 
 mod common;
 
@@ -52,7 +52,7 @@ edition = "2021"
         String::from_utf8_lossy(&init_out.stderr)
     );
 
-    // Append a [[group]] section binding both projects together.
+    // Append a [group.<id>] section binding both projects together.
     let cfg = repo.read_file("belaf/config.toml");
     let cfg_with_group =
         format!("{cfg}\n[group.schema]\nmembers = [\"@org/schema\", \"schema-rs\"]\n");
@@ -125,7 +125,7 @@ edition = "2021"
     if let Some(groups) = manifest["groups"].as_array() {
         assert!(
             groups.is_empty(),
-            "no [[group]] entries should yield an empty groups array, got {groups:?}"
+            "no [group.<id>] entries should yield an empty groups array, got {groups:?}"
         );
     }
 
@@ -165,7 +165,7 @@ edition = "2021"
     let out = repo.run_belaf_command(&["prepare", "--ci"]);
     assert!(
         !out.status.success(),
-        "prepare should fail when [[group]] id is invalid"
+        "prepare should fail when [group.<id>] id is invalid"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
@@ -409,7 +409,7 @@ edition = "2021"
     let out = repo.run_belaf_command(&["prepare", "--ci"]);
     assert!(
         !out.status.success(),
-        "prepare should fail when [[group]] references an unknown project"
+        "prepare should fail when [group.<id>] references an unknown project"
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(

@@ -397,7 +397,7 @@ fn maven_tag_format_uses_slash_not_colon() {
     );
 }
 
-/// `[[release_unit]].tag_format` flows from the resolver into
+/// `[release_unit.<name>].tag_format` flows from the resolver into
 /// `ResolvedReleaseUnit` so the workflow's tag builder can look it up
 /// by user-facing name.
 #[test]

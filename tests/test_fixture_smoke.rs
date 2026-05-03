@@ -124,7 +124,7 @@ fn cargo_monorepo_independent_no_hexagonal_match() {
 #[test]
 fn polyglot_cross_eco_group_no_detector_hits() {
     // Detectors don't fire on plain npm + plain Maven layouts; the
-    // group is configured manually via `[[group]]` in config.toml.
+    // group is configured manually via `[group.<id>]` in config.toml.
     // This test pins that the fixture's shape itself doesn't trigger
     // any heuristic — anyone reading config.toml later sees a clean,
     // explicit group definition rather than a noisy auto-detect path.
