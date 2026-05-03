@@ -13,7 +13,6 @@ use crate::core::{
     workflow::{BumpChoice, PrepareContext, ReleaseUnitSelection},
 };
 
-#[path = "prepare/wizard.rs"]
 mod wizard;
 
 /// POST the current drift state to the dashboard. Best-effort:
