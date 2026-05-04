@@ -11,7 +11,7 @@ use time::OffsetDateTime;
 pub use crate::core::api::generated::types::{
     ApiCommit, ApiPullRequest, CheckInstallationResponse, CommitAuthor, CommitsResponse,
     CreatePullRequestRequest, CreatePullRequestResponse, ErrorResponse, GitCredentialsResponse,
-    PullRequestsResponse, UserInfo,
+    OidcExchangeRequest, OidcExchangeResponse, PullRequestsResponse, UserInfo,
 };
 
 impl UserInfo {

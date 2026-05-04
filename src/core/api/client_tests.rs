@@ -292,3 +292,81 @@ async fn test_api_error_is_transient() {
     assert!(!ApiError::Unauthorized.is_transient());
     assert!(!ApiError::DeviceCodeExpired.is_transient());
 }
+
+#[tokio::test]
+async fn test_exchange_oidc_token_success() {
+    let mock_server = MockServer::start().await;
+    let expires_at = time::OffsetDateTime::now_utc() + time::Duration::minutes(30);
+    let expires_at_str = expires_at
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+
+    Mock::given(method("POST"))
+        .and(path("/api/cli/auth/oidc/exchange"))
+        .and(body_json(serde_json::json!({
+            "token": "fake-oidc-jwt"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "access_token": "ci-jwt-abc",
+            "token_type": "Bearer",
+            "expires_at": expires_at_str,
+            "installation_id": 12345,
+            "repository_id": 67890,
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
+    let token = client
+        .exchange_oidc_token("fake-oidc-jwt".to_string())
+        .await
+        .expect("should succeed");
+
+    assert_eq!(token.access_token, "ci-jwt-abc");
+    assert!(token.expires_at.is_some());
+    assert!(
+        !token.is_expired(),
+        "fresh 30-min token must not look expired"
+    );
+}
+
+#[tokio::test]
+async fn test_exchange_oidc_token_403_when_app_not_installed() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/cli/auth/oidc/exchange"))
+        .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+            "error": "belaf GitHub App not installed on this repository"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
+    let err = client
+        .exchange_oidc_token("fake-oidc-jwt".to_string())
+        .await
+        .expect_err("403 should fail");
+    assert!(matches!(err, ApiError::ApiResponse { status: 403, .. }));
+}
+
+#[tokio::test]
+async fn test_exchange_oidc_token_401_on_bad_jwt() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/api/cli/auth/oidc/exchange"))
+        .respond_with(
+            ResponseTemplate::new(401)
+                .set_body_json(serde_json::json!({ "error": "Invalid OIDC token" })),
+        )
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
+    let err = client
+        .exchange_oidc_token("rogue-jwt".to_string())
+        .await
+        .expect_err("401 should fail");
+    assert!(matches!(err, ApiError::Unauthorized));
+}

@@ -3,11 +3,12 @@ use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 use super::error::ApiError;
+use super::oidc::fetch_actions_oidc_jwt;
 use super::types::{
     ApiCommit, ApiPullRequest, CheckInstallationResponse, CommitsResponse, CreatePullRequestParams,
     CreatePullRequestRequest, CreatePullRequestResponse, DeviceCodeRequest, DeviceCodeResponse,
-    GitCredentialsResponse, PullRequestsResponse, StoredToken, TokenPollRequest, TokenPollResponse,
-    UserInfo,
+    GitCredentialsResponse, OidcExchangeRequest, OidcExchangeResponse, PullRequestsResponse,
+    StoredToken, TokenPollRequest, TokenPollResponse, UserInfo,
 };
 
 const API_BASE_URL: &str = "https://api.belaf.dev";
@@ -143,6 +144,59 @@ impl ApiClient {
             .await?;
 
         Ok(response.json().await?)
+    }
+
+    /// Exchanges a GitHub Actions OIDC JWT for a short-lived belaf CI token.
+    ///
+    /// This is the CI authentication path: the runner mints an OIDC JWT
+    /// (audience = belaf API URL), the API verifies it against GitHub's
+    /// JWKS and matches the `repository` claim to an installed GitHub App
+    /// installation. The returned token is a self-signed HS256 JWT (30 min
+    /// TTL) that the CLI uses as a normal Bearer for `/api/cli/*` calls.
+    ///
+    /// The returned `StoredToken` should not be persisted to the keyring —
+    /// it is short-lived and tied to the specific repo/run.
+    pub async fn exchange_oidc_token(&self, oidc_jwt: String) -> Result<StoredToken, ApiError> {
+        let response = self
+            .client
+            .post(format!("{}/api/cli/auth/oidc/exchange", self.base_url))
+            .json(&OidcExchangeRequest { token: oidc_jwt })
+            .send()
+            .await?;
+
+        let parsed: OidcExchangeResponse = Self::handle_response(response).await?;
+
+        // The API returns an absolute RFC3339 `expires_at`. Convert it to
+        // the `OffsetDateTime` shape `StoredToken` carries.
+        let expires_at = match time::OffsetDateTime::parse(
+            &parsed.expires_at,
+            &time::format_description::well_known::Rfc3339,
+        ) {
+            Ok(dt) => Some(dt),
+            Err(e) => {
+                tracing::warn!(
+                    "exchange_oidc_token: could not parse expires_at \"{}\": {}",
+                    parsed.expires_at,
+                    e
+                );
+                None
+            }
+        };
+
+        Ok(StoredToken {
+            access_token: parsed.access_token,
+            expires_at,
+        })
+    }
+
+    /// Convenience wrapper: fetches the GitHub Actions OIDC JWT from the
+    /// runner and exchanges it for a belaf CI token in one shot.
+    ///
+    /// Returns `ApiError::InvalidConfiguration` if the runner env vars
+    /// (`ACTIONS_ID_TOKEN_REQUEST_*`) are not set.
+    pub async fn fetch_and_exchange_actions_oidc(&self) -> Result<StoredToken, ApiError> {
+        let jwt = fetch_actions_oidc_jwt(&self.client, &self.base_url).await?;
+        self.exchange_oidc_token(jwt).await
     }
 
     /// Checks if the GitHub App is installed for a repository.

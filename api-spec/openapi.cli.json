@@ -2,7 +2,7 @@
   "openapi": "3.0.0",
   "info": {
     "title": "belaf CLI API",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "API surface consumed by the belaf CLI (Rust). Wire format is snake_case. Source schemas live in apps/api/src/routes/cli/schemas.ts and are re-generated into Rust types via progenitor in the belaf repo. OpenAPI 3.0 (not 3.1) for progenitor compatibility."
   },
   "components": {
@@ -255,6 +255,47 @@
         },
         "required": [
           "uncovered_paths"
+        ]
+      },
+      "OidcExchangeResponse": {
+        "type": "object",
+        "properties": {
+          "access_token": {
+            "type": "string"
+          },
+          "token_type": {
+            "type": "string",
+            "enum": [
+              "Bearer"
+            ]
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "installation_id": {
+            "type": "integer"
+          },
+          "repository_id": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "access_token",
+          "token_type",
+          "expires_at",
+          "installation_id",
+          "repository_id"
+        ]
+      },
+      "OidcExchangeRequest": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "token"
         ]
       }
     },
@@ -800,6 +841,67 @@
           },
           "404": {
             "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/auth/oidc/exchange": {
+      "post": {
+        "operationId": "exchangeOidcToken",
+        "tags": [
+          "CLI"
+        ],
+        "summary": "Exchange a GitHub Actions OIDC JWT for a short-lived belaf CI token",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OidcExchangeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "CI token issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OidcExchangeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid OIDC token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "belaf GitHub App not installed on this repository",
             "content": {
               "application/json": {
                 "schema": {

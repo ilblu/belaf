@@ -18,7 +18,7 @@ use tracing::{debug, info};
 
 use crate::core::{
     api::{ApiClient, ApiError},
-    auth::token::load_token,
+    auth::token::load_or_exchange_token,
     bump::{self, BumpConfig, BumpRecommendation},
     changelog::{ChangelogConfig, Commit, GitConfig},
     config::syntax::{BumpConfiguration, ChangelogConfiguration},
@@ -663,10 +663,6 @@ impl<'a> ReleasePipeline<'a> {
     }
 
     fn fetch_git_credentials(&self) -> Result<String> {
-        let token = load_token()
-            .context("failed to load token")?
-            .context("not authenticated - run 'belaf install' first")?;
-
         let upstream_url = self
             .sess
             .repo
@@ -679,6 +675,14 @@ impl<'a> ReleasePipeline<'a> {
         let api_client = ApiClient::new();
 
         let future = async {
+            let token = load_or_exchange_token(&api_client)
+                .await
+                .context("failed to load token")?
+                .context(
+                    "not authenticated — run 'belaf install' (interactive) or run from a \
+                     GitHub Actions job with `permissions: id-token: write` set",
+                )?;
+
             api_client
                 .get_git_credentials(&token, &owner, &repo)
                 .await

@@ -178,6 +178,7 @@ Every user-facing command supports both an interactive Ratatui TUI and a `--ci` 
 - `BELAF_WEB_URL` — override the dashboard URL opened from the TUI.
 - `RUST_LOG` — standard tracing filter; CLI verbosity flags (`-v`, `-vv`, `-vvv`) override the level.
 - `CI` / `GITHUB_ACTIONS` / `GITLAB_CI` etc. — auto-detected by `session::detect_ci_environment` to switch off interactive prompts.
+- `ACTIONS_ID_TOKEN_REQUEST_URL` / `ACTIONS_ID_TOKEN_REQUEST_TOKEN` — set automatically by GitHub Actions when the job has `permissions: id-token: write`. `core::auth::token::load_or_exchange_token` falls back to these to mint a CI token via `POST /api/cli/auth/oidc/exchange` whenever the keyring is empty. See `examples/github-actions/belaf-prepare.yml` for the recipe.
 
 ### Tests
 

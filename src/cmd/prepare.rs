@@ -4,7 +4,7 @@ use tracing::{info, warn};
 
 use crate::core::{
     api::ApiClient,
-    auth::token::load_token,
+    auth::token::load_or_exchange_token,
     bump_source::{self, BumpSourceInput, DEFAULT_TIMEOUT_SEC},
     config::syntax::BumpSourceConfig,
     github::client::parse_github_url,
@@ -36,42 +36,42 @@ fn report_drift_telemetry(sess: &AppSession, uncovered_paths: &[String]) {
         Ok(pair) => pair,
         Err(_) => return,
     };
-    let token = match load_token() {
-        Ok(Some(t)) => t,
-        _ => return,
-    };
 
     let paths = uncovered_paths.to_vec();
+    let drift_future = async move {
+        let api_client = ApiClient::new();
+        let token = match load_or_exchange_token(&api_client).await {
+            Ok(Some(t)) => t,
+            // No keyring token and no Actions OIDC env — pre-install state.
+            // Drift telemetry is best-effort, so just skip silently.
+            Ok(None) => return Ok::<(), String>(()),
+            Err(e) => return Err(format!("{e}")),
+        };
+        api_client
+            .report_drift(&token, &owner, &repo, paths)
+            .await
+            .map(|_| ())
+            .map_err(|e| format!("{e}"))
+    };
+
     let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
         // Already inside a runtime — running `block_on` on the same
         // runtime would panic ("Cannot start a runtime from within
         // a runtime"). Bounce the future onto a dedicated thread
         // that can safely block on the captured Handle.
         std::thread::scope(|s| {
-            s.spawn(|| {
-                handle.block_on(async {
-                    ApiClient::new()
-                        .report_drift(&token, &owner, &repo, paths)
-                        .await
-                })
-            })
-            .join()
-            .map_err(|_| "drift telemetry thread panicked".to_string())
+            s.spawn(|| handle.block_on(drift_future))
+                .join()
+                .map_err(|_| "drift telemetry thread panicked".to_string())
         })
-        .and_then(|res| res.map_err(|e| format!("{e}")))
+        .and_then(|res| res)
     } else {
         // No runtime in scope — build a single-purpose one.
         match tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
         {
-            Ok(rt) => rt
-                .block_on(async {
-                    ApiClient::new()
-                        .report_drift(&token, &owner, &repo, paths)
-                        .await
-                })
-                .map_err(|e| format!("{e}")),
+            Ok(rt) => rt.block_on(drift_future),
             Err(e) => {
                 warn!("could not init tokio runtime for drift telemetry: {e}");
                 return;

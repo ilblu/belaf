@@ -1,0 +1,47 @@
+# GitHub Actions workflow template for `belaf prepare --ci`.
+#
+# Authenticates against the belaf API via OpenID Connect token exchange:
+# the runner mints a short-lived JWT (audience = api.belaf.dev), the API
+# verifies it against GitHub's JWKS and looks up the GitHub-App
+# installation for the calling repo, then issues a 30-minute belaf CI
+# token. No long-lived secrets needed.
+#
+# Prerequisites:
+#   - The belaf GitHub App is installed on this repo (run `belaf install`
+#     locally once, or install from https://github.com/apps/belaf-app).
+#
+# Drop this file at .github/workflows/belaf-prepare.yml in your repo.
+
+name: belaf prepare
+
+on:
+  workflow_dispatch:        # manual: "Run workflow" button in the UI
+  schedule:
+    - cron: '0 9 * * 1'     # every Monday 09:00 UTC
+
+permissions:
+  id-token: write           # mint OIDC JWTs (required for the exchange)
+  contents: read            # checkout this repo; the App mints its own
+                            # push token via /api/cli/repos/.../git/credentials
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # belaf needs full history to compute bumps
+
+      - name: Install belaf
+        # Uses the cargo-dist-published installer script which auto-detects
+        # the runner's target triple and drops the binary into ~/.cargo/bin.
+        # Pin a specific version (e.g. v1.0.0/...) for reproducible builds.
+        run: |
+          set -euo pipefail
+          curl -fsSL https://github.com/ilblu/belaf/releases/latest/download/belaf-installer.sh | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Run belaf prepare
+        run: belaf prepare --ci
+        env:
+          BELAF_NO_KEYRING: '1'   # CI runners have no usable OS keyring
