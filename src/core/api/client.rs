@@ -1,5 +1,6 @@
 use reqwest::{Client, Response, StatusCode};
 use serde::de::DeserializeOwned;
+use serde::Deserialize;
 use std::time::Duration;
 
 use super::error::ApiError;
@@ -10,6 +11,15 @@ use super::types::{
     GitCredentialsResponse, OidcExchangeRequest, OidcExchangeResponse, PullRequestsResponse,
     StoredToken, TokenPollRequest, TokenPollResponse, UserInfo,
 };
+
+#[derive(Deserialize)]
+struct LimitExceededPayload {
+    code: Option<String>,
+    tier: Option<String>,
+    current: Option<i64>,
+    limit: Option<String>,
+    upgrade_url: Option<String>,
+}
 
 const API_BASE_URL: &str = "https://api.belaf.dev";
 const CLIENT_ID: &str = "belaf-cli";
@@ -85,6 +95,28 @@ impl ApiClient {
                 .unwrap_or(60);
             return Err(ApiError::RateLimited {
                 retry_after_secs: retry_after,
+            });
+        }
+
+        // 402 Payment Required is reserved for tier-limit signalling on
+        // action-edge endpoints (createPull, git/credentials). The server
+        // emits the same `ErrorResponse` envelope but with `code` and the
+        // structured tier/current/limit/upgrade_url fields populated.
+        if response.status() == StatusCode::PAYMENT_REQUIRED {
+            let body = response.text().await.unwrap_or_default();
+            if let Ok(payload) = serde_json::from_str::<LimitExceededPayload>(&body) {
+                if payload.code.as_deref() == Some("repository_limit_exceeded") {
+                    return Err(ApiError::LimitExceeded {
+                        tier: payload.tier.unwrap_or_default(),
+                        current: payload.current.unwrap_or(0),
+                        limit: payload.limit.unwrap_or_else(|| "?".to_string()),
+                        upgrade_url: payload.upgrade_url.unwrap_or_default(),
+                    });
+                }
+            }
+            return Err(ApiError::ApiResponse {
+                status: 402,
+                message: body,
             });
         }
 

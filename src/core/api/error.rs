@@ -30,6 +30,14 @@ pub enum ApiError {
     #[error("Rate limited (429). Retry after {retry_after_secs} seconds.")]
     RateLimited { retry_after_secs: u64 },
 
+    #[error("Workspace exceeds the {tier} tier repository limit ({current}/{limit}). Upgrade your plan to continue.")]
+    LimitExceeded {
+        tier: String,
+        current: i64,
+        limit: String,
+        upgrade_url: String,
+    },
+
     #[error("Token storage error: {0}")]
     TokenStorage(String),
 

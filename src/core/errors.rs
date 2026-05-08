@@ -221,6 +221,12 @@ fn derive_typed_hints(error: &Error) -> Vec<String> {
             ApiError::DeviceCodeExpired | ApiError::DeviceCodeDenied => {
                 Some("re-run `belaf install` to start a fresh device-flow".to_string())
             }
+            ApiError::LimitExceeded { upgrade_url, .. } if !upgrade_url.is_empty() => {
+                Some(format!("upgrade your plan: {}", upgrade_url))
+            }
+            ApiError::LimitExceeded { .. } => {
+                Some("upgrade your plan to remove the repository limit".to_string())
+            }
             _ => None,
         }
     }

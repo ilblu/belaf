@@ -5,6 +5,31 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.2.0 — 2026-05-08
+
+Companion release to github-app `api@1.2.0`. Surfaces tier-limit
+responses from the action edge as a structured CLI diagnostic instead
+of a raw HTTP error string.
+
+### Added
+
+- `ApiError::LimitExceeded { tier, current, limit, upgrade_url }`
+  variant. The HTTP client now recognises `402 Payment Required` with
+  the `repository_limit_exceeded` code and parses the structured
+  payload from `/api/cli/repos/.../pulls` and
+  `/api/cli/repos/.../git/credentials`.
+- Diagnostic renderer emits a `help: upgrade your plan: <url>` line
+  when `LimitExceeded` is encountered, so a `belaf prepare` run that
+  hits the limit displays an actionable message and direct upgrade
+  link instead of the raw response body.
+
+### Wire format
+
+- `api-spec/openapi.cli.json` mirrors github-app `api@1.2.0`. The
+  `ErrorResponse` envelope gained optional `code`, `tier`, `current`,
+  `limit`, `upgrade_url` fields; old binaries ignore them via serde
+  defaults.
+
 ## 1.0.0 — 2026-05-03
 
 Initial stable release.
