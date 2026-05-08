@@ -195,7 +195,7 @@ fn manifests_source_aura() {
         .iter()
         .find(|u| u.name == "aura")
         .expect("aura must be present");
-    assert_eq!(aura.config.ecosystem, "cargo");
+    assert_eq!(aura.config.ecosystem.as_deref(), Some("cargo"));
     let manifests = explicit_manifests(aura.config.manifests.as_ref());
     assert_eq!(manifests.len(), 1);
     assert!(aura.config.external.is_none());
@@ -220,7 +220,7 @@ fn multi_manifest_tauri_legacy() {
         .iter()
         .find(|u| u.name == "desktop")
         .expect("desktop must be present");
-    assert_eq!(desktop.config.ecosystem, "tauri");
+    assert_eq!(desktop.config.ecosystem.as_deref(), Some("tauri"));
     let manifests = explicit_manifests(desktop.config.manifests.as_ref());
     assert_eq!(
         manifests.len(),

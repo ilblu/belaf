@@ -48,6 +48,9 @@ enum ExplainOrigin {
         glob_index: usize,
         matched_path: String,
     },
+    PartialOverride {
+        config_index: usize,
+    },
     Detected {
         detector: String,
     },
@@ -80,8 +83,15 @@ pub fn run(format: Option<ExplainOutputFormat>) -> Result<i32> {
     let cfg = ConfigurationFile::get(&cfg_path)
         .with_context(|| format!("failed to load config at {}", cfg_path.display()))?;
 
-    let resolved = resolve(&repo, &cfg.release_units)
+    // `belaf explain` only shows resolved units sourced from the config
+    // (explicit + glob). Partial overrides require a discovery pass to
+    // synthesize their resolved forms; that's session-level work and
+    // would change this command's semantics. We surface only what the
+    // resolver could produce statically — the partial-override count
+    // is reported separately.
+    let resolve_output = resolve(&repo, &cfg.release_units)
         .map_err(|e| anyhow::anyhow!("release_unit resolution: {e}"))?;
+    let resolved = resolve_output.resolved;
 
     let json_mode = matches!(format, Some(ExplainOutputFormat::Json));
 
@@ -131,6 +141,12 @@ pub fn run(format: Option<ExplainOutputFormat>) -> Result<i32> {
                 matched_path.escaped()
             )
             .magenta()
+            .to_string(),
+            ResolveOrigin::PartialOverride { config_index } => format!(
+                "partial-override [release_unit] #{} (decorates auto-detected)",
+                config_index
+            )
+            .yellow()
             .to_string(),
             ResolveOrigin::Detected { detector } => {
                 format!("auto-detected by `{detector}`").blue().to_string()
@@ -222,6 +238,9 @@ fn build_json_payload(
                 } => ExplainOrigin::Glob {
                     glob_index: *glob_index,
                     matched_path: matched_path.escaped().to_string(),
+                },
+                ResolveOrigin::PartialOverride { config_index } => ExplainOrigin::PartialOverride {
+                    config_index: *config_index,
                 },
                 ResolveOrigin::Detected { detector } => ExplainOrigin::Detected {
                     detector: detector.to_string(),

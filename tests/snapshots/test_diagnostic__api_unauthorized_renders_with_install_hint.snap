@@ -1,7 +1,8 @@
 ---
 source: tests/test_diagnostic.rs
+assertion_line: 42
 expression: display_diagnostic_to_string(&err)
 ---
 error: Authentication required. Run 'belaf install' first.
   |
-help: run `belaf install` to re-authenticate
+help: run `belaf install` to re-authenticate (or `belaf doctor --json` to inspect the full state)

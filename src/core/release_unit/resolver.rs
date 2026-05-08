@@ -13,6 +13,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use crate::core::config::NamedReleaseUnitConfig;
+use crate::core::ecosystem::format_handler::DiscoveredUnit;
 use crate::core::git::repository::{RepoPathBuf, Repository};
 use crate::core::wire::known::Ecosystem;
 
@@ -23,22 +24,68 @@ use super::{
     ResolvedReleaseUnit, VersionFieldSpec, VersionSource, Visibility,
 };
 
+/// Output of [`resolve`]. Carries the fully-resolved units (explicit
+/// blocks + glob expansions) and any **partial-override** specs that
+/// still need to be matched against auto-detected units later in the
+/// pipeline (see [`resolve_partial_against_discovered`]).
+#[derive(Debug)]
+pub struct ResolveOutput {
+    pub resolved: Vec<ResolvedReleaseUnit>,
+    pub partial_overrides: Vec<PartialOverrideSpec>,
+}
+
+/// A `[release_unit.<name>]` block with no `ecosystem` field — it
+/// decorates an auto-detected unit with the same name. Validated at
+/// [`resolve`] time (no structural fields, at least one override
+/// field present); resolved against the discovered set later.
+#[derive(Clone, Debug)]
+pub struct PartialOverrideSpec {
+    pub name: String,
+    pub config_index: usize,
+    pub tag_format: Option<String>,
+    pub visibility: Option<Visibility>,
+    pub satellites: Vec<RepoPathBuf>,
+    pub cascade_from: Option<CascadeRule>,
+}
+
 /// Public API: resolve the parsed config into a list of
 /// `ResolvedReleaseUnit`s, validating along the way. Each input entry
-/// is either explicit (no `glob` field) or glob-form (with `glob`
-/// expanding into N units).
+/// is one of:
+///
+/// - **explicit** (no `glob`, has `ecosystem`) — converted directly
+/// - **glob-form** (`glob` set) — expands to N units
+/// - **partial override** (no `glob`, no `ecosystem`) — collected as
+///   a [`PartialOverrideSpec`] in the returned [`ResolveOutput`]; the
+///   session then matches it against the auto-detected unit set via
+///   [`resolve_partial_against_discovered`].
 pub fn resolve(
     repo: &Repository,
     units: &[NamedReleaseUnitConfig],
-) -> Result<Vec<ResolvedReleaseUnit>, ResolverError> {
+) -> Result<ResolveOutput, ResolverError> {
     let mut resolved: Vec<ResolvedReleaseUnit> = Vec::new();
+    let mut partial_overrides: Vec<PartialOverrideSpec> = Vec::new();
 
-    // Step 1: explicit entries — straight conversion.
+    // Step 1: explicit entries — straight conversion. Partial-override
+    // blocks (no `ecosystem`, not glob) are validated and collected
+    // separately.
     for (idx, named) in units.iter().enumerate() {
         if named.config.is_glob() {
             continue;
         }
-        let unit = convert_explicit(&named.name, &named.config, repo)?;
+        if named.config.is_partial_override() {
+            let spec = validate_partial_override(idx, &named.name, &named.config)?;
+            partial_overrides.push(spec);
+            continue;
+        }
+        let ecosystem_str =
+            named
+                .config
+                .ecosystem
+                .as_deref()
+                .ok_or_else(|| ResolverError::SourceNotSet {
+                    unit: named.name.clone(),
+                })?;
+        let unit = convert_explicit(&named.name, ecosystem_str, &named.config, repo)?;
         resolved.push(ResolvedReleaseUnit {
             unit,
             origin: ResolveOrigin::Explicit { config_index: idx },
@@ -124,7 +171,147 @@ pub fn resolve(
     detect_nested_bundles(&resolved)?;
     validate_cascade_sources(&resolved)?;
 
-    Ok(resolved)
+    Ok(ResolveOutput {
+        resolved,
+        partial_overrides,
+    })
+}
+
+// ===========================================================================
+// Partial-override validation + late resolution against discovered units.
+// ===========================================================================
+
+/// Validate a partial-override block: it must not set any structural
+/// field (`manifests`, `external`, `version_field`, `fallback_manifests`,
+/// `name`) and must set at least one override field.
+fn validate_partial_override(
+    config_index: usize,
+    name: &str,
+    cfg: &ReleaseUnitConfig,
+) -> Result<PartialOverrideSpec, ResolverError> {
+    debug_assert!(cfg.ecosystem.is_none() && !cfg.is_glob());
+
+    let structural_field: Option<&'static str> = if cfg.manifests.is_some() {
+        Some("manifests")
+    } else if cfg.external.is_some() {
+        Some("external")
+    } else if cfg.version_field.is_some() {
+        Some("version_field")
+    } else if !cfg.fallback_manifests.is_empty() {
+        Some("fallback_manifests")
+    } else if cfg.name.is_some() {
+        Some("name")
+    } else {
+        None
+    };
+    if let Some(field) = structural_field {
+        return Err(ResolverError::PartialOverrideStructuralField {
+            unit: name.to_string(),
+            field,
+        });
+    }
+
+    let visibility = parse_visibility(name, cfg.visibility.as_deref())?;
+    let cascade_from = match &cfg.cascade_from {
+        Some(c) => Some(parse_cascade_rule(name, c)?),
+        None => None,
+    };
+    let satellites = cfg
+        .satellites
+        .iter()
+        .map(|s| parse_repo_path(name, s))
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let has_any_override = cfg.tag_format.is_some()
+        || cfg.visibility.is_some()
+        || !cfg.satellites.is_empty()
+        || cfg.cascade_from.is_some();
+    if !has_any_override {
+        return Err(ResolverError::PartialOverrideEmpty {
+            unit: name.to_string(),
+        });
+    }
+
+    Ok(PartialOverrideSpec {
+        name: name.to_string(),
+        config_index,
+        tag_format: cfg.tag_format.clone(),
+        // `visibility: Option` so default-vs-set is distinguishable.
+        // `parse_visibility` returns `Visibility::default()` when raw is
+        // None, which we map back to `None` here.
+        visibility: cfg.visibility.as_deref().map(|_| visibility),
+        satellites,
+        cascade_from,
+    })
+}
+
+/// Match each [`PartialOverrideSpec`] against the auto-detected unit
+/// with the same name and synthesize a [`ResolvedReleaseUnit`] whose
+/// override fields take effect at workflow time. The synthesized
+/// unit's `source` is informational — graph registration goes through
+/// the discovered unit's already-built rewriters; the session must
+/// **not** call `add_configured_unit_to_graph` for these (origin is
+/// `PartialOverride`, which is the signal).
+pub fn resolve_partial_against_discovered(
+    overrides: &[PartialOverrideSpec],
+    discovered: &[DiscoveredUnit],
+) -> Result<Vec<ResolvedReleaseUnit>, ResolverError> {
+    let mut out = Vec::with_capacity(overrides.len());
+    for spec in overrides {
+        let matched = discovered
+            .iter()
+            .find(|d| d.qnames.first().is_some_and(|n| n == &spec.name))
+            .ok_or_else(|| ResolverError::PartialOverrideNoMatch {
+                unit: spec.name.clone(),
+            })?;
+
+        let ecosystem_str = matched
+            .qnames
+            .get(1)
+            .map(String::as_str)
+            .unwrap_or("external");
+        let ecosystem = parse_ecosystem(ecosystem_str);
+        let version_field_key = default_version_field_for_ecosystem(ecosystem_str);
+        let version_field = match version_field_key {
+            "cargo_toml" => VersionFieldSpec::CargoToml,
+            "npm_package_json" => VersionFieldSpec::NpmPackageJson,
+            "tauri_conf_json" => VersionFieldSpec::TauriConfJson,
+            "gradle_properties" => VersionFieldSpec::GradleProperties,
+            "pep_621" => VersionFieldSpec::Pep621,
+            // Fallback — for ecosystems whose default key isn't a
+            // first-class spec (e.g. unknown). Use a no-op regex so
+            // the informational source is well-formed; it's never
+            // actually read because graph registration uses the
+            // discovered rewriters.
+            _ => VersionFieldSpec::GenericRegex {
+                pattern: "(.+)".to_string(),
+                replace: "{version}".to_string(),
+            },
+        };
+        let manifest = ManifestFile {
+            path: matched.anchor_manifest.clone(),
+            ecosystem: ecosystem.clone(),
+            version_field,
+        };
+
+        let unit = ReleaseUnit {
+            name: spec.name.clone(),
+            ecosystem,
+            source: VersionSource::Manifests(vec![manifest]),
+            satellites: spec.satellites.clone(),
+            tag_format: spec.tag_format.clone(),
+            visibility: spec.visibility.unwrap_or_default(),
+            cascade_from: spec.cascade_from.clone(),
+        };
+
+        out.push(ResolvedReleaseUnit {
+            unit,
+            origin: ResolveOrigin::PartialOverride {
+                config_index: spec.config_index,
+            },
+        });
+    }
+    Ok(out)
 }
 
 // ===========================================================================
@@ -133,6 +320,7 @@ pub fn resolve(
 
 fn convert_explicit(
     name: &str,
+    ecosystem_str: &str,
     cfg: &ReleaseUnitConfig,
     repo: &Repository,
 ) -> Result<ReleaseUnit, ResolverError> {
@@ -155,7 +343,7 @@ fn convert_explicit(
         });
     }
 
-    let ecosystem = parse_ecosystem(&cfg.ecosystem);
+    let ecosystem = parse_ecosystem(ecosystem_str);
 
     // Source: exactly one of manifests / external must be set.
     let manifests_set =
@@ -187,7 +375,7 @@ fn convert_explicit(
             };
             let manifests = build_manifests(
                 name,
-                &cfg.ecosystem,
+                ecosystem_str,
                 manifests_cfg,
                 repo,
                 /* require_existence: */ true,
@@ -346,14 +534,20 @@ fn expand_glob(
             repo,
         )?;
 
+        let cfg_ecosystem =
+            cfg.ecosystem
+                .as_deref()
+                .ok_or_else(|| ResolverError::SourceNotSet {
+                    unit: config_key.to_string(),
+                })?;
         let version_field_key = match &cfg.version_field {
             Some(s) => s.clone(),
-            None => default_version_field_for_ecosystem(&cfg.ecosystem).to_string(),
+            None => default_version_field_for_ecosystem(cfg_ecosystem).to_string(),
         };
 
         let manifests = build_manifests(
             &unit_name,
-            &cfg.ecosystem,
+            cfg_ecosystem,
             &[ManifestFileConfig {
                 path: chosen_manifest,
                 ecosystem: None,
@@ -378,7 +572,7 @@ fn expand_glob(
 
         let unit = ReleaseUnit {
             name: unit_name,
-            ecosystem: parse_ecosystem(&cfg.ecosystem),
+            ecosystem: parse_ecosystem(cfg_ecosystem),
             source: VersionSource::Manifests(manifests),
             satellites,
             tag_format: cfg.tag_format.clone(),
@@ -554,6 +748,7 @@ fn parse_version_field(
         "npm_package_json" => VersionFieldSpec::NpmPackageJson,
         "tauri_conf_json" => VersionFieldSpec::TauriConfJson,
         "gradle_properties" => VersionFieldSpec::GradleProperties,
+        "pep_621" => VersionFieldSpec::Pep621,
         "generic_regex" => {
             let pattern = cfg.regex_pattern.clone().ok_or_else(|| {
                 ResolverError::GenericRegexMissingPatternOrReplace {
@@ -586,7 +781,7 @@ fn parse_version_field(
                 unit: unit_name.to_string(),
                 field: "version_field",
                 value: other.to_string(),
-                allowed: "cargo_toml, npm_package_json, tauri_conf_json, gradle_properties, generic_regex",
+                allowed: "cargo_toml, npm_package_json, tauri_conf_json, gradle_properties, pep_621, generic_regex",
             });
         }
     };
@@ -623,6 +818,7 @@ fn validate_ecosystem_field_compat(
         // Anything else with the matching key is allowed; only mismatches
         // we can name with confidence are rejected.
         ("jvm-library", "gradle_properties") => true,
+        ("pypa", "pep_621") => true,
         ("external", _) => true,
         // Unknown ecosystems get a free pass (forward-compat).
         _ if matches!(ecosystem, Ecosystem::Unknown(_)) => true,
@@ -633,12 +829,15 @@ fn validate_ecosystem_field_compat(
             ("npm", "cargo_toml")
                 | ("npm", "gradle_properties")
                 | ("npm", "tauri_conf_json")
+                | ("npm", "pep_621")
                 | ("cargo", "npm_package_json")
                 | ("cargo", "gradle_properties")
                 | ("cargo", "tauri_conf_json")
+                | ("cargo", "pep_621")
                 | ("jvm-library", "cargo_toml")
                 | ("jvm-library", "npm_package_json")
                 | ("jvm-library", "tauri_conf_json")
+                | ("jvm-library", "pep_621")
         ),
     };
 
@@ -664,6 +863,7 @@ pub fn default_version_field_for_ecosystem(ecosystem: &str) -> &'static str {
         "npm" => "npm_package_json",
         "tauri" => "npm_package_json", // single-source default
         "jvm-library" => "gradle_properties",
+        "pypa" => "pep_621",
         _ => "cargo_toml", // fallback; resolver validation catches mismatches
     }
 }
@@ -766,6 +966,9 @@ fn detect_name_collisions(units: &[ResolvedReleaseUnit]) -> Result<(), ResolverE
                 format!("[release_unit] #{config_index}")
             }
             ResolveOrigin::Glob { matched_path, .. } => matched_path.escaped().to_string(),
+            ResolveOrigin::PartialOverride { config_index } => {
+                format!("[release_unit] #{config_index} (partial)")
+            }
             ResolveOrigin::Detected { detector } => format!("detector {detector}"),
         };
         by_name.entry(name).or_default().push(path_label);

@@ -71,7 +71,7 @@ impl ExplicitBuilder {
         NamedReleaseUnitConfig {
             name: name.to_string(),
             config: ReleaseUnitConfig {
-                ecosystem: self.ecosystem,
+                ecosystem: Some(self.ecosystem),
                 name: None,
                 glob: None,
                 manifests: if self.manifests.is_empty() {
@@ -128,7 +128,7 @@ impl GlobBuilder {
         NamedReleaseUnitConfig {
             name: config_key.to_string(),
             config: ReleaseUnitConfig {
-                ecosystem: self.ecosystem,
+                ecosystem: Some(self.ecosystem),
                 name: Some(self.name_template),
                 glob: Some(self.glob),
                 manifests: Some(ManifestList::Templates(self.manifests)),
@@ -182,7 +182,9 @@ fn clikd_shape_glob_expands_with_fallback_manifests() {
         .with_satellite("{path}/crates")
         .build("services");
 
-    let resolved = resolve(&r, &[services]).expect("resolver must succeed");
+    let resolved = resolve(&r, &[services])
+        .expect("resolver must succeed")
+        .resolved;
 
     let mut names: Vec<&str> = resolved.iter().map(|u| u.unit.name.as_str()).collect();
     names.sort();
@@ -244,7 +246,9 @@ fn explicit_wins_over_glob_for_overlapping_path() {
         .with_manifest("{path}/crates/bin/Cargo.toml")
         .build("services");
 
-    let resolved = resolve(&r, &[aura_custom, services]).expect("must succeed");
+    let resolved = resolve(&r, &[aura_custom, services])
+        .expect("must succeed")
+        .resolved;
 
     let mut names: Vec<&str> = resolved.iter().map(|u| u.unit.name.as_str()).collect();
     names.sort();
@@ -364,7 +368,9 @@ fn external_source_no_filesystem_check() {
         })
         .build("schema");
 
-    let resolved = resolve(&r, &[ext]).expect("external-source must resolve");
+    let resolved = resolve(&r, &[ext])
+        .expect("external-source must resolve")
+        .resolved;
     assert_eq!(resolved.len(), 1);
     assert!(resolved[0].unit.source.is_external());
 }
@@ -407,6 +413,6 @@ fn glob_zero_matches_does_not_error() {
         .with_manifest("{path}/Cargo.toml")
         .build("services");
 
-    let resolved = resolve(&r, &[services]).expect("must succeed");
+    let resolved = resolve(&r, &[services]).expect("must succeed").resolved;
     assert!(resolved.is_empty());
 }

@@ -5,6 +5,87 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.3.0 — 2026-05-08
+
+Two themes: agent-friendly CLI surface (so AI assistants can drive
+belaf without parsing 12 `--help` outputs) and config UX (partial
+`[release_unit]` overrides + first-class pyproject support). No wire
+format changes — `manifest.v1.schema.json` and `/api/cli/*` are
+untouched, so this is drop-in for existing repos.
+
+### Added
+
+- **`belaf describe --json`** — single command that dumps the full CLI
+  surface (every command + arg, env vars, exit codes, embedded
+  schemas, example workflows). Walks the live `clap::Command` tree so
+  it can never drift from what the binary accepts. `--text` produces a
+  human-readable summary; `--json` is the default. Designed for AI
+  agents that landed in a repo with `belaf` on `$PATH` and have no
+  other context.
+- **`belaf schema <name>`** — print an embedded JSON Schema by name
+  (currently `manifest`). Lets agents validate manifests they parse
+  without round-tripping to the dashboard or vendoring the schema.
+- **`belaf doctor`** / **`belaf doctor --json`** — environment
+  diagnostic. Checks auth (keyring + API verify), config validity,
+  repository state, ecosystem auto-detect, and runs a real HTTP probe
+  against `<api_url>/health` (3s timeout, reports `latency_ms`). Each
+  check has a `status` field (`ok` / `warn` / `error` / `skipped`)
+  plus an overall `ok` boolean and a `precondition` exit code (4)
+  when not ready.
+- **Stable exit-code contract** in `core::exit_code::ExitCode` (8
+  codes: `0` ok, `1` generic, `2` usage, `3` nothing-to-do, `4`
+  precondition, `5` conflict, `6` network, `7` config-invalid).
+  Documented in `belaf describe --json` so agents can branch on them.
+- **Partial-override `[release_unit.<name>]` blocks.** Omit
+  `ecosystem` to inherit it (and `manifests`/`source`) from the
+  auto-detected unit with the same name. Only override fields are
+  permitted in this form (`tag_format`, `visibility`, `satellites`,
+  `cascade_from`); structural fields raise
+  `partial_override_structural_field`. Empty blocks raise
+  `partial_override_empty`. Names that don't match an auto-detected
+  unit raise `partial_override_no_match`. Replacive merge for lists
+  (matches Kubernetes / Vite / Tauri / Biome convention).
+- **`version_field = "pep_621"`** — first-class reader/writer for
+  `pyproject.toml` `[project].version` using `toml_edit`. Drops the
+  `generic_regex` workaround and preserves comments + ordering on
+  write. Auto-selected for explicit `pypa` blocks (and reachable as
+  the new ecosystem default).
+- **`prepare --ci` final JSON status** on stdout: `{ status:
+  "released" | "nothing_to_do" | "no_actionable_bumps", pr_url,
+  release_units: [{name, bump}] }`. Decorative messages routed to
+  stderr.
+- **`init --ci` final JSON status** on stdout: `{ status:
+  "initialized", config_path, release_units_detected, ecosystems }`.
+- **`changelog --ci` final JSON status**: `{ status, mode:
+  "disk"|"preview"|"stdout", projects, files_written }`. Routed to
+  stderr when `--stdout` is also set so the changelog content stays
+  uncontaminated on stdout.
+- **Top-level `--help` agent hint** points first-time agents at
+  `belaf describe --json` and notes the `--ci` / `--format=json`
+  conventions.
+
+### Changed
+
+- `[release_unit.X].ecosystem` is now `Option<String>` in the TOML
+  schema. Existing configs with `ecosystem = "..."` are unchanged;
+  blocks without it become partial overrides.
+- `belaf install` re-auth hint (emitted on `ApiError::Unauthorized`)
+  now also points to `belaf doctor --json` for full-environment
+  diagnosis.
+- `pypa` ecosystem's default `version_field` is now `pep_621` (was
+  `cargo_toml` fallback). Auto-detect path still uses the existing
+  `PyProjectVersionRewriter`, so behavior is unchanged for
+  auto-detected pypa projects.
+- `belaf explain --format=json` gained a new `kind: "partial_override"`
+  origin variant. Backward-additive — no consumer in github-app
+  reads this surface.
+
+### Wire format
+
+No changes. `belaf/schemas/manifest.v1.schema.json` is unchanged,
+`SCHEMA_VERSION` is unchanged, `api-spec/openapi.cli.json` is
+unchanged. github-app does not need a coordinated update.
+
 ## 1.2.0 — 2026-05-08
 
 Companion release to github-app `api@1.2.0`. Surfaces tier-limit

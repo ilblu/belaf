@@ -214,7 +214,10 @@ fn derive_typed_hints(error: &Error) -> Vec<String> {
                 retry_after_secs,
                 if *retry_after_secs == 1 { "" } else { "s" }
             )),
-            ApiError::Unauthorized => Some("run `belaf install` to re-authenticate".to_string()),
+            ApiError::Unauthorized => Some(
+                "run `belaf install` to re-authenticate (or `belaf doctor --json` to inspect the full state)"
+                    .to_string(),
+            ),
             ApiError::ApiResponse { status, .. } if (500..600).contains(status) => {
                 Some("transient server error — try again in a moment".to_string())
             }

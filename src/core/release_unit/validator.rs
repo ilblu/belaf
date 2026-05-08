@@ -193,6 +193,28 @@ pub enum ResolverError {
     /// Glob-form entry without a `name` template field.
     #[error("release_unit `{config_key}`: glob-form entries must set `name = \"{{basename}}\"` (or similar) so each match gets a distinct unit name.")]
     GlobUnitMissingNameTemplate { config_key: String },
+
+    /// Partial-override block (no `ecosystem` field) for a name that
+    /// auto-detection did not find. Most likely a typo on the TOML key
+    /// or the block was meant to be a full explicit entry — in which
+    /// case add `ecosystem = "..."` and a source.
+    #[error(
+        "release_unit `{unit}`: no auto-detected unit with this name was found, so the partial override has nothing to decorate. Either fix the name to match an auto-detected unit, or add `ecosystem = \"...\"` and a `manifests`/`external` source to make this a full explicit entry."
+    )]
+    PartialOverrideNoMatch { unit: String },
+
+    /// Partial-override block (no `ecosystem` field) sets a structural
+    /// field that is only valid on a full explicit entry.
+    #[error(
+        "release_unit `{unit}`: partial-override entries (no `ecosystem` field) cannot set `{field}` — that's a structural field. Either remove it, or add `ecosystem = \"...\"` to make this a full explicit entry."
+    )]
+    PartialOverrideStructuralField { unit: String, field: &'static str },
+
+    /// Partial-override block has no override fields set at all.
+    #[error(
+        "release_unit `{unit}`: partial-override entries must set at least one override field (`tag_format`, `visibility`, `satellites`, `cascade_from`). An empty block has no effect."
+    )]
+    PartialOverrideEmpty { unit: String },
 }
 
 impl ResolverError {
@@ -217,6 +239,9 @@ impl ResolverError {
             Self::SourceBothSet { .. } => "source_both_set",
             Self::SourceNotSet { .. } => "source_not_set",
             Self::UnknownEnumValue { .. } => "unknown_enum_value",
+            Self::PartialOverrideNoMatch { .. } => "partial_override_no_match",
+            Self::PartialOverrideStructuralField { .. } => "partial_override_structural_field",
+            Self::PartialOverrideEmpty { .. } => "partial_override_empty",
             Self::GenericRegexMissingPatternOrReplace { .. } => {
                 "generic_regex_missing_pattern_or_replace"
             }

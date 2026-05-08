@@ -425,7 +425,7 @@ fn release_unit_tag_format_lookup_by_name() {
     let unit = NamedReleaseUnitConfig {
         name: "my-crate".into(),
         config: ReleaseUnitConfig {
-            ecosystem: "cargo".into(),
+            ecosystem: Some("cargo".into()),
             name: None,
             glob: None,
             manifests: Some(ManifestList::Explicit(vec![ManifestFileConfig {
@@ -454,7 +454,7 @@ fn release_unit_tag_format_lookup_by_name() {
         },
     )
     .unwrap();
-    let resolved = resolve(&repo, &[unit]).unwrap();
+    let resolved = resolve(&repo, &[unit]).unwrap().resolved;
     assert_eq!(resolved.len(), 1);
     assert_eq!(
         resolved[0].unit.tag_format.as_deref(),

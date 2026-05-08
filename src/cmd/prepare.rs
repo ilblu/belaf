@@ -84,22 +84,55 @@ fn report_drift_telemetry(sess: &AppSession, uncovered_paths: &[String]) {
     }
 }
 
-fn print_no_changes_message() {
-    println!();
-    println!(
+/// Sibling of `wizard::print_no_changes_message` but on stderr — used
+/// in `--ci` mode so stdout stays clean for the final JSON status
+/// object emitted by [`emit_ci_status`].
+fn print_no_changes_message_ci() {
+    eprintln!();
+    eprintln!(
         "{} No projects with unreleased changes found.",
         "ℹ".cyan().bold()
     );
-    println!();
-    println!(
+    eprintln!();
+    eprintln!(
         "  {} All projects are up-to-date with their latest release tags.",
         "→".dimmed()
     );
-    println!(
+    eprintln!(
         "  {} Make commits with conventional format (feat:, fix:, etc.) to trigger a release.",
         "→".dimmed()
     );
-    println!();
+    eprintln!();
+}
+
+/// Final structured status for `belaf prepare --ci`. Always the only
+/// thing on stdout when `--ci` is set, so agents can `jq .` the
+/// command's output directly.
+#[derive(serde::Serialize)]
+struct CiStatus {
+    /// Stable, snake_case status label. One of: `nothing_to_do`,
+    /// `no_actionable_bumps`, `released`.
+    status: &'static str,
+    /// Best-effort PR URL when `status == "released"`. Null otherwise
+    /// (and when github auth is unavailable).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr_url: Option<String>,
+    /// One entry per release_unit that the run touched. Empty when
+    /// `status != "released"`.
+    release_units: Vec<CiStatusUnit>,
+}
+
+#[derive(serde::Serialize)]
+struct CiStatusUnit {
+    name: String,
+    bump: String,
+}
+
+fn emit_ci_status(status: CiStatus) {
+    match serde_json::to_string_pretty(&status) {
+        Ok(s) => println!("{s}"),
+        Err(e) => eprintln!("error: failed to serialise --ci status: {e}"),
+    }
 }
 
 pub fn run(
@@ -164,7 +197,12 @@ fn run_ci_mode(
 
     if !ctx.has_candidates() {
         ctx.cleanup();
-        print_no_changes_message();
+        print_no_changes_message_ci();
+        emit_ci_status(CiStatus {
+            status: "nothing_to_do",
+            pr_url: None,
+            release_units: vec![],
+        });
         return Ok(0);
     }
 
@@ -204,11 +242,36 @@ fn run_ci_mode(
 
     if !has_actionable_bumps {
         ctx.cleanup();
-        print_no_changes_message();
+        print_no_changes_message_ci();
+        emit_ci_status(CiStatus {
+            status: "no_actionable_bumps",
+            pr_url: None,
+            release_units: vec![],
+        });
         return Ok(0);
     }
 
-    ctx.finalize(selections)?;
+    // Snapshot the chosen release units BEFORE finalize consumes the
+    // selections — we want them in the JSON status regardless of
+    // whether finalize succeeds with a PR URL.
+    let units_for_status: Vec<CiStatusUnit> = selections
+        .iter()
+        .map(|s| CiStatusUnit {
+            name: s.candidate.name.clone(),
+            bump: s
+                .bump_choice
+                .resolve(s.candidate.suggested_bump)
+                .to_string(),
+        })
+        .collect();
+
+    let pr_url = ctx.finalize(selections)?;
+
+    emit_ci_status(CiStatus {
+        status: "released",
+        pr_url: Some(pr_url),
+        release_units: units_for_status,
+    });
 
     Ok(0)
 }

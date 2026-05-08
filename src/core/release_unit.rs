@@ -123,13 +123,12 @@ pub struct ManifestFile {
 
 /// One per supported in-file version-field shape.
 ///
-/// Plan §3 lists exactly five:
-///
 /// 1. `CargoToml`        — `[package].version` or `[workspace.package].version`
 /// 2. `NpmPackageJson`   — JSON `$.version`
 /// 3. `TauriConfJson`    — JSON5-tolerant `$.version` via regex
 /// 4. `GradleProperties` — `^version=(.+)$` line in `gradle.properties`
-/// 5. `GenericRegex`     — escape hatch with one capture group
+/// 5. `Pep621`           — `pyproject.toml` `[project].version` (PEP 621)
+/// 6. `GenericRegex`     — escape hatch with one capture group
 #[derive(Clone, Debug)]
 pub enum VersionFieldSpec {
     /// `Cargo.toml` `[package].version` or `[workspace.package].version`.
@@ -151,6 +150,11 @@ pub enum VersionFieldSpec {
     /// (edge case 21).
     GradleProperties,
 
+    /// `pyproject.toml` PEP 621 `[project].version`. Implementation:
+    /// `toml_edit` (preserves comments + ordering). Mirrors the
+    /// auto-detect path's `PyProjectVersionRewriter`.
+    Pep621,
+
     /// Escape hatch: custom regex with exactly one capture group plus
     /// a `{version}`-substituting replace template.
     GenericRegex {
@@ -171,6 +175,7 @@ impl VersionFieldSpec {
             Self::NpmPackageJson => "npm_package_json",
             Self::TauriConfJson => "tauri_conf_json",
             Self::GradleProperties => "gradle_properties",
+            Self::Pep621 => "pep_621",
             Self::GenericRegex { .. } => "generic_regex",
         }
     }
@@ -353,6 +358,13 @@ pub enum ResolveOrigin {
         matched_path: RepoPathBuf,
     },
 
+    /// Came from a **partial-override** `[release_unit.<name>]` block
+    /// (no `ecosystem`) at the given config index. The unit's source
+    /// is informational; graph registration goes through the
+    /// auto-detected unit's already-built rewriters. Sessions must
+    /// skip `add_configured_unit_to_graph` for this origin.
+    PartialOverride { config_index: usize },
+
     /// Came from an init detector (Phase F). Carries the detector's
     /// stable label.
     Detected { detector: &'static str },
@@ -373,6 +385,9 @@ impl ResolveOrigin {
                 glob_index,
                 matched_path.escaped()
             ),
+            Self::PartialOverride { config_index } => {
+                format!("partial-override [release_unit] #{config_index}")
+            }
             Self::Detected { detector } => format!("detector {detector}"),
         }
     }
@@ -394,6 +409,7 @@ mod tests {
             VersionFieldSpec::NpmPackageJson.wire_key(),
             VersionFieldSpec::TauriConfJson.wire_key(),
             VersionFieldSpec::GradleProperties.wire_key(),
+            VersionFieldSpec::Pep621.wire_key(),
             VersionFieldSpec::GenericRegex {
                 pattern: String::new(),
                 replace: String::new(),

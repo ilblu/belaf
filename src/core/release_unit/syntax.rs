@@ -23,6 +23,12 @@
 //! [release_unit.kotlin-sdk]
 //! ecosystem = "external"
 //! external = { tool = "gradle", read_command = "./gradlew :sdk:printVersion -q", write_command = "./gradlew :sdk:setVersion -PnewVersion={version}" }
+//!
+//! # Partial override — omit `ecosystem` / `manifests` to inherit them
+//! # from auto-detection. Only override fields are allowed in this form
+//! # (`tag_format`, `visibility`, `satellites`, `cascade_from`).
+//! [release_unit.discord-bot]
+//! tag_format = "v{version}"
 //! ```
 
 use std::collections::HashMap;
@@ -182,7 +188,13 @@ impl EcosystemsConfig {
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseUnitConfig {
-    pub ecosystem: String,
+    /// `cargo` | `npm` | `pypa` | `tauri` | `external` | … . Optional —
+    /// when omitted, the entry is a **partial override** that inherits
+    /// ecosystem + manifests from the auto-detected unit with the same
+    /// name. In that mode only override fields (`tag_format`,
+    /// `visibility`, `satellites`, `cascade_from`) may be set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ecosystem: Option<String>,
 
     /// **Glob form only** — name template (`{basename}` etc).
     /// When `glob` is set, this overrides the TOML key as the per-match
@@ -244,6 +256,13 @@ pub struct ReleaseUnitConfig {
 impl ReleaseUnitConfig {
     pub fn is_glob(&self) -> bool {
         self.glob.is_some()
+    }
+
+    /// A partial-override entry decorates an auto-detected unit with
+    /// override fields instead of declaring its own source. Detected
+    /// purely by the absence of `ecosystem` (and not being glob-form).
+    pub fn is_partial_override(&self) -> bool {
+        self.ecosystem.is_none() && !self.is_glob()
     }
 }
 
@@ -337,7 +356,7 @@ ecosystem = "cargo"
 manifests = [{ path = "apps/services/aura/crates/bin/Cargo.toml", version_field = "cargo_toml" }]
 "#;
         let cfg: ReleaseUnitConfig = toml::from_str(toml_in).expect("must deserialize");
-        assert_eq!(cfg.ecosystem, "cargo");
+        assert_eq!(cfg.ecosystem.as_deref(), Some("cargo"));
         assert!(!cfg.is_glob());
         let Some(ManifestList::Explicit(manifests)) = &cfg.manifests else {
             panic!("expected explicit manifests");
@@ -370,7 +389,7 @@ cwd = "proto/events"
 timeout_sec = 90
 "#;
         let cfg: ReleaseUnitConfig = toml::from_str(toml_in).unwrap();
-        assert_eq!(cfg.ecosystem, "external");
+        assert_eq!(cfg.ecosystem.as_deref(), Some("external"));
         assert!(cfg.manifests.is_none());
         let ext = cfg.external.expect("external must be set");
         assert_eq!(ext.tool, "buf");

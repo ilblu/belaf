@@ -53,6 +53,11 @@ pub fn run(
     let github_token = load_github_token();
 
     let mut processed_count = 0;
+    // Track per-project outcome for the `--ci` JSON status. Populated
+    // alongside the existing `processed_count` so we don't change the
+    // happy-path control flow.
+    let mut ci_files_written: Vec<String> = Vec::new();
+    let mut ci_projects: Vec<String> = Vec::new();
 
     for ident in &idents {
         let unit = sess.graph().lookup(*ident);
@@ -178,6 +183,10 @@ pub fn run(
         }
 
         processed_count += 1;
+        ci_projects.push(unit.user_facing_name.clone());
+        if let Some(p) = result.path.as_ref() {
+            ci_files_written.push(p.escaped().to_string());
+        }
     }
 
     if !ci {
@@ -203,9 +212,71 @@ pub fn run(
                 if processed_count == 1 { "" } else { "s" }
             );
         }
+    } else {
+        emit_changelog_ci_status(
+            processed_count,
+            preview,
+            stdout,
+            &ci_projects,
+            &ci_files_written,
+        );
     }
 
     Ok(0)
+}
+
+#[derive(serde::Serialize)]
+struct ChangelogCiStatus<'a> {
+    /// Stable label. `generated` when at least one project produced a
+    /// changelog, `nothing_to_do` otherwise.
+    status: &'static str,
+    /// `disk` (default), `preview` (--preview), `stdout` (--stdout).
+    /// Tells the agent where the actual changelog content went.
+    mode: &'static str,
+    projects: &'a [String],
+    files_written: &'a [String],
+}
+
+/// Emit the final `--ci` JSON status. If `--stdout` is set, the
+/// changelog content is what's on stdout so the JSON status goes to
+/// stderr; otherwise stdout is free for the JSON.
+fn emit_changelog_ci_status(
+    processed_count: usize,
+    preview: bool,
+    stdout: bool,
+    projects: &[String],
+    files_written: &[String],
+) {
+    let status = if processed_count == 0 {
+        "nothing_to_do"
+    } else {
+        "generated"
+    };
+    let mode = if stdout {
+        "stdout"
+    } else if preview {
+        "preview"
+    } else {
+        "disk"
+    };
+    let payload = ChangelogCiStatus {
+        status,
+        mode,
+        projects,
+        files_written,
+    };
+    let s = match serde_json::to_string_pretty(&payload) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: failed to serialise --ci status: {e}");
+            return;
+        }
+    };
+    if stdout {
+        eprintln!("{s}");
+    } else {
+        println!("{s}");
+    }
 }
 
 fn print_changelog_preview(

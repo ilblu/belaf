@@ -5,11 +5,14 @@ pub mod cmd {
     pub mod changelog;
     pub mod completions;
     pub mod dashboard;
+    pub mod describe;
+    pub mod doctor;
     pub mod explain;
     pub mod graph;
     pub mod init;
     pub mod install;
     pub mod prepare;
+    pub mod schema;
     pub mod status;
 }
 
@@ -23,6 +26,7 @@ pub mod core {
     pub mod embed;
     pub mod env;
     pub mod errors;
+    pub mod exit_code;
     pub mod graph;
     pub mod group;
     pub mod manifest;
@@ -178,6 +182,32 @@ pub async fn execute(cli: Cli) -> Result<()> {
         }
         Commands::Explain(args) => {
             let exit_code = cmd::explain::run(args.format)?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
+        Commands::Describe(args) => {
+            // `--json` is the default; both `belaf describe` and
+            // `belaf describe --json` produce JSON. `--text` opts into
+            // the human-readable rendering. The two flags conflict via
+            // clap, so at most one is set here.
+            let _ = args.json;
+            let exit_code = cmd::describe::run(args.text)?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
+        Commands::Schema(args) => {
+            let exit_code = cmd::schema::run(args.name)?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
+        Commands::Doctor(args) => {
+            let exit_code = cmd::doctor::run(args.json).await?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }

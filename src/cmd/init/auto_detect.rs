@@ -431,7 +431,7 @@ mod tests {
             .get("release_unit")
             .and_then(|m| m.get("@org/sdk-ts"))
             .expect("release_unit.@org/sdk-ts entry");
-        assert_eq!(cfg.ecosystem, "npm");
+        assert_eq!(cfg.ecosystem.as_deref(), Some("npm"));
         let cascade = cfg.cascade_from.as_ref().expect("cascade_from set");
         assert_eq!(cascade.source, "schema");
         assert_eq!(cascade.bump, "floor_minor");

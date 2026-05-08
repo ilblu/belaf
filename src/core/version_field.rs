@@ -23,6 +23,7 @@ pub mod cargo_toml;
 pub mod generic_regex;
 pub mod gradle_properties;
 pub mod npm_json;
+pub mod pyproject;
 pub mod tauri_conf;
 
 #[derive(Debug, Error)]
@@ -71,6 +72,7 @@ pub fn read(spec: &VersionFieldSpec, path: &Path) -> Result<String> {
         VersionFieldSpec::NpmPackageJson => npm_json::read(path),
         VersionFieldSpec::TauriConfJson => tauri_conf::read(path),
         VersionFieldSpec::GradleProperties => gradle_properties::read(path),
+        VersionFieldSpec::Pep621 => pyproject::read(path),
         VersionFieldSpec::GenericRegex {
             pattern,
             replace: _,
@@ -87,6 +89,7 @@ pub fn write(spec: &VersionFieldSpec, path: &Path, new_version: &str) -> Result<
         VersionFieldSpec::NpmPackageJson => npm_json::write(path, new_version),
         VersionFieldSpec::TauriConfJson => tauri_conf::write(path, new_version),
         VersionFieldSpec::GradleProperties => gradle_properties::write(path, new_version),
+        VersionFieldSpec::Pep621 => pyproject::write(path, new_version),
         VersionFieldSpec::GenericRegex { pattern, replace } => {
             generic_regex::write(path, pattern, replace, new_version)
         }

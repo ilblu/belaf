@@ -75,16 +75,52 @@ pub fn run(
         upstream_name: upstream,
         preset,
     };
-    let exit = cmd.execute()?;
+    let exit = cmd.execute(ci)?;
 
     let _ = auto_detect_flag; // accepted for backward compat; auto-detect is always on in --ci.
     if exit == 0 {
-        run_auto_detect()?;
+        let summary = run_auto_detect()?;
+        if ci {
+            emit_init_ci_status(&summary);
+        }
     }
     Ok(exit)
 }
 
-fn run_auto_detect() -> Result<()> {
+/// Counters captured from the post-bootstrap auto-detect pass. Threaded
+/// out of [`run_auto_detect`] so [`run`] can emit them in the `--ci`
+/// JSON status without re-opening the session.
+struct InitSummary {
+    config_path: String,
+    release_units_detected: usize,
+    ecosystems: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct InitCiStatus<'a> {
+    /// Stable label. Currently always `initialized` — `already_initialized`
+    /// would require detecting an existing config-file marker, which the
+    /// bootstrap does not check today (it appends instead).
+    status: &'static str,
+    config_path: &'a str,
+    release_units_detected: usize,
+    ecosystems: &'a [String],
+}
+
+fn emit_init_ci_status(summary: &InitSummary) {
+    let payload = InitCiStatus {
+        status: "initialized",
+        config_path: &summary.config_path,
+        release_units_detected: summary.release_units_detected,
+        ecosystems: &summary.ecosystems,
+    };
+    match serde_json::to_string_pretty(&payload) {
+        Ok(s) => println!("{s}"),
+        Err(e) => eprintln!("error: failed to serialise --ci status: {e}"),
+    }
+}
+
+fn run_auto_detect() -> Result<InitSummary> {
     let repo = crate::core::git::repository::Repository::open_from_env()
         .context("auto-detect: belaf is not in a Git working directory")?;
 
@@ -105,11 +141,44 @@ fn run_auto_detect() -> Result<()> {
         result.counters.total_mobile_warnings(),
     );
 
-    Ok(())
+    // Re-walk the discovery surface for the JSON-status caller.
+    // Cheap on small repos; on large monorepos this is the same walk
+    // the session already does, but we deliberately don't reuse the
+    // session here to keep the helper self-contained.
+    use crate::core::ecosystem::format_handler::{
+        FormatHandlerRegistry, WorkspaceDiscovererRegistry,
+    };
+    use crate::core::release_unit::discovery::discover_implicit_release_units;
+    let handlers = FormatHandlerRegistry::with_defaults();
+    let discoverers = WorkspaceDiscovererRegistry::with_defaults();
+    let units =
+        discover_implicit_release_units(&repo, &handlers, &discoverers, &[]).unwrap_or_default();
+    let mut ecosystems: Vec<String> = units
+        .iter()
+        .filter_map(|u| u.qnames.get(1).cloned())
+        .collect();
+    ecosystems.sort();
+    ecosystems.dedup();
+
+    Ok(InitSummary {
+        config_path: cfg_path.display().to_string(),
+        release_units_detected: units.len(),
+        ecosystems,
+    })
 }
 
 impl BootstrapCommand {
-    fn execute(self) -> Result<i32> {
+    fn execute(self, ci: bool) -> Result<i32> {
+        // In `--ci` mode, decorative human output goes to stderr so
+        // stdout is reserved for the final JSON status line emitted by
+        // [`emit_init_ci_status`]. Outside `--ci`, the same content
+        // lands on stdout (today's behavior — preserved for human
+        // users running `belaf init` non-interactively without `--ci`).
+        macro_rules! out {
+            () => { if ci { eprintln!() } else { println!() } };
+            ($($arg:tt)*) => { if ci { eprintln!($($arg)*) } else { println!($($arg)*) } };
+        }
+
         info!(
             "bootstrapping with belaf version {}",
             env!("CARGO_PKG_VERSION")
@@ -219,7 +288,7 @@ impl BootstrapCommand {
 
             if !seen_any {
                 info!("belaf detected the following projects in the repo:");
-                println!();
+                out!();
                 seen_any = true;
             }
 
@@ -233,14 +302,16 @@ impl BootstrapCommand {
                 }
             };
 
-            println!(
+            out!(
                 "    {} @ {} in {}",
-                unit.user_facing_name, unit.version, loc_desc
+                unit.user_facing_name,
+                unit.version,
+                loc_desc
             );
         }
 
         if seen_any {
-            println!();
+            out!();
             info!("consult the documentation if these results are unexpected");
             info!("autodetection letting you down? file an issue: https://github.com/ilblu/belaf/issues/new");
         } else {
@@ -277,15 +348,15 @@ impl BootstrapCommand {
         for path in changes.paths() {
             if !seen_any {
                 info!("modified:");
-                println!();
+                out!();
                 seen_any = true;
             }
 
-            println!("    {}", path.escaped());
+            out!("    {}", path.escaped());
         }
 
         if seen_any {
-            println!();
+            out!();
         } else {
             info!("... no files modified. This might be OK.")
         }
@@ -311,7 +382,7 @@ impl BootstrapCommand {
         );
 
         info!("modifications complete!");
-        println!();
+        out!();
         info!("Review changes, add `belaf/` to the repository, and commit.");
         info!("Then try `belaf status` for a history summary");
         info!("   (Note: commit tracking starts from package-specific tags or 'belaf-baseline')");

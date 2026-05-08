@@ -154,15 +154,17 @@ impl AppBuilder {
             let discoverers = WorkspaceDiscovererRegistry::with_defaults();
 
             // Resolve `[release_unit.<name>]` entries first so we can
-            // (a) add them to the graph as primary nodes and (b) feed
-            // their manifest+satellite paths to discovery as a
-            // skip-list, ensuring auto-discovery doesn't also claim
-            // those files.
-            resolved_units =
+            // (a) add full-explicit / glob units to the graph as primary
+            // nodes, (b) feed their manifest+satellite paths to discovery
+            // as a skip-list, and (c) match partial-override blocks
+            // (those without `ecosystem`) against the auto-detected set
+            // after discovery returns.
+            let resolve_output =
                 crate::core::release_unit::resolver::resolve(&self.repo, &config.release_units)
                     .map_err(|e| {
                         crate::core::errors::Error::msg(format!("release_unit resolution: {e}"))
                     })?;
+            resolved_units = resolve_output.resolved;
 
             let mut configured_skip_paths: Vec<crate::core::git::repository::RepoPathBuf> =
                 Vec::new();
@@ -205,6 +207,22 @@ impl AppBuilder {
                 &discoverers,
                 &configured_skip_paths,
             )?;
+
+            // Match partial-override specs against the discovered set
+            // and synthesize ResolvedReleaseUnits whose override fields
+            // (tag_format, visibility, satellites, cascade_from) take
+            // effect at workflow time. These are NOT registered via
+            // `add_configured_unit_to_graph` — graph registration goes
+            // through the discovered unit's already-built rewriters.
+            let partial_resolved =
+                crate::core::release_unit::resolver::resolve_partial_against_discovered(
+                    &resolve_output.partial_overrides,
+                    &discovered,
+                )
+                .map_err(|e| {
+                    crate::core::errors::Error::msg(format!("partial-override resolution: {e}"))
+                })?;
+            resolved_units.extend(partial_resolved);
 
             if self.show_progress {
                 let total = discovered.len();
@@ -252,7 +270,15 @@ impl AppBuilder {
         registry: &crate::core::ecosystem::format_handler::FormatHandlerRegistry,
         resolved: &crate::core::release_unit::ResolvedReleaseUnit,
     ) -> Result<()> {
-        use crate::core::release_unit::VersionSource;
+        use crate::core::release_unit::{ResolveOrigin, VersionSource};
+
+        // Partial-override units are synthesized AFTER discovery from the
+        // matching DiscoveredUnit. Graph registration (version read,
+        // rewriter setup) happens through `register_discovered_unit`;
+        // re-registering here would duplicate rewriters.
+        if matches!(resolved.origin, ResolveOrigin::PartialOverride { .. }) {
+            return Ok(());
+        }
 
         let unit = &resolved.unit;
         let qnames = vec![unit.name.clone(), unit.ecosystem.as_str().to_string()];

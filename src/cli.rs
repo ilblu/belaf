@@ -6,7 +6,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
     about = "Release management CLI for monorepos",
     long_about = "A powerful CLI tool for semantic versioning and release management.\nSupports Rust, Node.js, Python, Go, Elixir, Swift, and C# projects.",
     version,
-    after_help = "For detailed command help, run: belaf <COMMAND> --help"
+    after_help = "For detailed command help, run: belaf <COMMAND> --help.\n\nFor AI agents: run `belaf describe --json` for a machine-readable surface map (commands, exit codes, env vars, JSON output schemas). All commands support `--ci` for non-interactive use; `status`, `graph`, `explain`, `describe`, and `schema` support `--format=json`."
 )]
 #[command(disable_version_flag = true)]
 pub struct Cli {
@@ -84,6 +84,24 @@ pub enum Commands {
         long_about = "Print provenance for every resolved ReleaseUnit:\n  • Which detector matched (auto-detected)\n  • Which TOML key it came from (explicit `[release_unit.<name>]`)\n  • Which glob expansion produced it (`[release_unit.<name>]` with `glob` field)\n\nUseful when a unit appears in your config and you don't remember\nwhy, or to debug unexpected glob expansions / name collisions.\n\nUse --format=json for machine-readable output (consumed by the\ngithub-app dashboard's /api/cli/explain endpoint)."
     )]
     Explain(ExplainArgs),
+
+    #[command(
+        about = "Print a machine-readable map of the CLI surface (for AI agents)",
+        long_about = "Emit a structured description of every command, argument, environment\nvariable, exit code, and embedded schema. Designed for AI agents that\nlanded in a repo with `belaf` on $PATH and have no other context.\n\nDefault output is JSON. Pass --text for a human-friendly summary;\n--json is also accepted (and is a no-op since JSON is the default).\n\nSchema of the output (top-level keys):\n  • name, version           — binary identity\n  • commands[]              — every subcommand with args + help\n  • env_vars[]              — relevant environment variables\n  • exit_codes[]            — stable exit codes and their meanings\n  • schemas[]               — names of embedded JSON schemas\n  • example_workflows[]     — common multi-command sequences"
+    )]
+    Describe(DescribeArgs),
+
+    #[command(
+        about = "Print an embedded JSON Schema by name",
+        long_about = "Print a JSON Schema document embedded in the binary. Useful for\nagents that want to validate manifests, status output, or other\nstructured data that belaf produces.\n\nAvailable schemas:\n  • manifest — release manifest (v1, JSON Schema Draft 2020-12)\n\nUse `belaf describe --json` to discover the current list."
+    )]
+    Schema(SchemaArgs),
+
+    #[command(
+        about = "Diagnose belaf's environment and report what's wrong",
+        long_about = "Inspect the current state and report what's healthy / broken. Checks:\n  • Auth state (keyring token present? expired? still valid against the API?)\n  • Config (belaf/config.toml present? parses?)\n  • Repository (inside a git repo? clean tree?)\n  • Ecosystems (how many ReleaseUnits would auto-detect find?)\n  • API connectivity (api.belaf.dev reachable?)\n  • Environment (BELAF_* overrides, CI detection)\n\nDefault output is human-readable. Pass --json for an agent-friendly\nstructured payload (status field per check, plus an overall `ok` bool)."
+    )]
+    Doctor(DoctorArgs),
 }
 
 #[derive(Args)]
@@ -101,6 +119,40 @@ pub struct ExplainArgs {
 pub enum ExplainOutputFormat {
     Text,
     Json,
+}
+
+#[derive(Args)]
+pub struct DescribeArgs {
+    /// `--json` is the default; the flag exists so the documented
+    /// invocation `belaf describe --json` (which agents will type
+    /// verbatim from the top-level `--help` text) works literally.
+    #[arg(long, conflicts_with = "text", help = "Output as JSON (default).")]
+    pub json: bool,
+
+    #[arg(
+        long,
+        conflicts_with = "json",
+        help = "Output as a human-readable text summary instead of JSON."
+    )]
+    pub text: bool,
+}
+
+#[derive(Args)]
+pub struct SchemaArgs {
+    #[arg(
+        value_name = "NAME",
+        help = "Schema name (e.g. `manifest`). Use `belaf describe --json | jq '.schemas'` for the full list."
+    )]
+    pub name: String,
+}
+
+#[derive(Args)]
+pub struct DoctorArgs {
+    #[arg(
+        long,
+        help = "Emit a structured JSON payload instead of human-readable text."
+    )]
+    pub json: bool,
 }
 
 #[derive(Subcommand)]
