@@ -995,6 +995,68 @@ impl Repository {
         Ok(())
     }
 
+    /// Fetch tags from the configured upstream remote.
+    ///
+    /// Why this exists: tag-reading helpers like
+    /// [`Self::find_latest_tag_for_project`] only see *local* refs.
+    /// Release tags are typically created server-side (by the belaf
+    /// GitHub App when a release PR merges), and `git pull --ff-only`
+    /// does not fetch tags. Without an explicit fetch, the CLI
+    /// picks a stale baseline and inflates the bump.
+    ///
+    /// Uses refspec `+refs/tags/*:refs/tags/*` (force) so that
+    /// re-tagged versions (rare but legal) overwrite the local copy
+    /// instead of erroring out. Mirrors the credential pattern from
+    /// [`Self::push_branch`].
+    pub fn fetch_tags(&self, git_token: Option<&str>) -> Result<()> {
+        let mut remote = self
+            .repo
+            .find_remote(&self.upstream_name)
+            .with_context(|| {
+                format!("cannot find upstream remote `{}`", self.upstream_name)
+            })?;
+
+        let token_for_closure = git_token.map(str::to_owned);
+
+        let mut callbacks = git2::RemoteCallbacks::new();
+        callbacks.credentials(move |_url, username_from_url, allowed_types| {
+            if allowed_types.contains(git2::CredentialType::SSH_KEY) {
+                git2::Cred::ssh_key_from_agent(username_from_url.unwrap_or("git"))
+            } else if allowed_types.contains(git2::CredentialType::USER_PASS_PLAINTEXT) {
+                if let Some(ref token) = token_for_closure {
+                    git2::Cred::userpass_plaintext("x-access-token", token)
+                } else {
+                    git2::Cred::default()
+                }
+            } else {
+                git2::Cred::default()
+            }
+        });
+
+        let mut fetch_options = git2::FetchOptions::new();
+        fetch_options.remote_callbacks(callbacks);
+        fetch_options.download_tags(git2::AutotagOption::All);
+
+        remote
+            .fetch(
+                &["+refs/tags/*:refs/tags/*"],
+                Some(&mut fetch_options),
+                None,
+            )
+            .with_context(|| {
+                format!(
+                    "failed to fetch tags from `{}`. belaf needs an up-to-date \
+                     view of release tags to pick the right baseline — check \
+                     network connectivity and that you have credentials for the \
+                     remote (SSH agent or git token). Set BELAF_NO_FETCH=1 to skip.",
+                    self.upstream_name
+                )
+            })?;
+
+        info!("fetched tags from {}", self.upstream_name);
+        Ok(())
+    }
+
     pub fn push_branch(&self, branch_name: &str, git_token: Option<&str>) -> Result<()> {
         let mut remote = self.repo.find_remote(&self.upstream_name)?;
         let refspec = format!("refs/heads/{}:refs/heads/{}", branch_name, branch_name);

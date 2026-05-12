@@ -22,7 +22,7 @@ use crate::core::{
     changelog::{ChangelogConfig, Commit, GitConfig},
     config::syntax::{BumpConfiguration, ChangelogConfiguration},
     git::repository::RepoPathBuf,
-    session::AppSession,
+    session::AppBuilder,
     ui::components::toggle_panel::TogglePanel,
     wire::known::Ecosystem,
     workflow::{
@@ -581,8 +581,10 @@ pub fn run_with_overrides_and_decisions(
 ) -> Result<i32> {
     info!("starting interactive TUI wizard for release preparation");
 
-    let mut sess =
-        AppSession::initialize_default().context("could not initialize app and project graph")?;
+    let mut sess = AppBuilder::new()?
+        .fetch_tags_first(true)
+        .initialize()
+        .context("could not initialize app and project graph")?;
     // Snapshot groups before ctx takes a mutable borrow on sess.
     let groups = sess.graph().groups().clone();
 

@@ -129,6 +129,7 @@ pub struct AppBuilder {
     is_ci: bool,
     populate_graph: bool,
     show_progress: bool,
+    fetch_tags_first: bool,
 }
 
 fn detect_ci_environment() -> bool {
@@ -156,6 +157,7 @@ impl AppBuilder {
             is_ci,
             populate_graph: true,
             show_progress: false,
+            fetch_tags_first: false,
         })
     }
 
@@ -166,6 +168,18 @@ impl AppBuilder {
 
     pub fn populate_graph(mut self, do_populate: bool) -> Self {
         self.populate_graph = do_populate;
+        self
+    }
+
+    /// Opt into a `git fetch --tags` against the resolved upstream
+    /// before project discovery. Required for commands that read tag
+    /// state to make release decisions (`prepare`), because the
+    /// release tags are created server-side by the belaf GitHub App
+    /// after merging the manifest PR, and `git pull --ff-only` does
+    /// not pull tags. Set `BELAF_NO_FETCH=1` to bypass at runtime —
+    /// useful in tests and offline scenarios.
+    pub fn fetch_tags_first(mut self, do_fetch: bool) -> Self {
+        self.fetch_tags_first = do_fetch;
         self
     }
 
@@ -264,6 +278,12 @@ impl AppBuilder {
         self.repo
             .apply_config(config.repo)
             .with_context(|| "failed to finalize repository setup")?;
+
+        if self.fetch_tags_first && std::env::var_os("BELAF_NO_FETCH").is_none() {
+            self.repo
+                .fetch_tags(None)
+                .with_context(|| "failed to fetch upstream tags before release prep")?;
+        }
 
         let ignore_paths = config.ignore_paths.paths.clone();
         let allow_uncovered = config.allow_uncovered.paths.clone();

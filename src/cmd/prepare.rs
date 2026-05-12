@@ -9,7 +9,7 @@ use crate::core::{
     config::syntax::BumpSourceConfig,
     github::client::parse_github_url,
     group::GroupSet,
-    session::AppSession,
+    session::{AppBuilder, AppSession},
     workflow::{BumpChoice, PrepareContext, ReleaseUnitSelection},
 };
 
@@ -180,7 +180,7 @@ fn run_ci_mode(
 ) -> Result<i32> {
     info!("running in CI mode (PR-based workflow)");
 
-    let mut sess = AppSession::initialize_default()?;
+    let mut sess = AppBuilder::new()?.fetch_tags_first(true).initialize()?;
     let drift_paths = sess.drift_uncovered_paths();
     report_drift_telemetry(&sess, &drift_paths);
     if !drift_paths.is_empty() {
@@ -285,7 +285,7 @@ fn run_interactive_mode(
     // pre-collect external decisions here and propagate them so the
     // wizard's "suggested bump" column reflects the same precedence as
     // CI mode. See `wizard::run_with_overrides_and_decisions`.
-    let sess = AppSession::initialize_default()?;
+    let sess = AppBuilder::new()?.fetch_tags_first(true).initialize()?;
     let drift_paths = sess.drift_uncovered_paths();
     report_drift_telemetry(&sess, &drift_paths);
     if !drift_paths.is_empty() {

@@ -87,6 +87,7 @@ impl TestRepo {
             .args(args)
             .current_dir(&self.path)
             .env("GITHUB_TOKEN", "test-token-for-tests")
+            .env("BELAF_NO_FETCH", "1")
             .output()
             .expect("failed to run belaf command")
     }
@@ -131,7 +132,9 @@ impl TestRepo {
         let belaf_bin = env!("CARGO_BIN_EXE_belaf");
 
         let mut cmd = Command::new(belaf_bin);
-        cmd.args(args).current_dir(&self.path);
+        cmd.args(args)
+            .current_dir(&self.path)
+            .env("BELAF_NO_FETCH", "1");
 
         for (key, value) in env_vars {
             cmd.env(key, value);
