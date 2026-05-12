@@ -5,6 +5,51 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 1.3.1 — 2026-05-12
+
+Hotfix release. Two correctness bugs that inflated semver bumps for
+multi-ecosystem repos.
+
+### Fixed
+
+- **Tag-format lookup is now ecosystem-aware.** `find_latest_tag_for_project`
+  used to hardcode `{name}-v{version}` (cargo) plus a bare-`v{version}`
+  fallback for single-project repos. Every other ecosystem's default tag
+  template — npm `{name}@v{version}`, maven `{groupId}/{artifactId}@v{version}`,
+  pypa `{name}-{version}` (no `v`), go `{module}/v{version}` — silently
+  failed to match, so the lookup fell back to "analyze every commit since
+  repo start". That swept in old `feat:`s from previous releases and
+  inflated the recommended bump (the bug that took `@clikd/landing` from
+  v0.7.0 → v0.8.0 on a single `fix:` commit; expected v0.7.1).
+  The new `core::tag_format::TagMatcher` compiles the project's effective
+  `tag_format` (per-`[release_unit]` > per-`[group]` > ecosystem default)
+  into a regex with a `version` capture group — symmetric to how belaf
+  *writes* tags. All ecosystems with non-cargo default templates now find
+  their previous tags correctly.
+- **Hard-fail when tag-lookup misses but the repo has version tags.**
+  `analyze_histories` previously logged a `warn!` and walked the full
+  history when no tag matched. That was the bug amplifier. New behaviour:
+  if the repo has any version-shaped tags (`\d+\.\d+\.\d+` anywhere in
+  the tag name) but none matched the project's template, bail with a
+  diagnostic pointing at the likely `tag_format` mismatch. Truly-new
+  repos with zero version tags still fall through with a warning.
+- **`revert:` and `Revert "..."` now trigger a patch bump.**
+  `analyze_commits` ignored Conventional-Commit `revert:` (treated as
+  `other` → no bump) and git's auto-generated `Revert "<subject>"` (failed
+  to parse → no bump). Both shapes now drive a patch bump; `revert!:`
+  and `BREAKING CHANGE:` footers still lift to major. The TUI commit
+  summary and `default.toml` changelog template gain a "Reverts" group
+  (⏪).
+
+### Internal
+
+- `core::git::repository::find_latest_tag_for_project` signature changed
+  from `(project_name: &str, is_single_project: bool)` to
+  `(matcher: &TagMatcher)` and now returns the parsed version alongside
+  the OID/tag name. `Repository::analyze_histories` and
+  `find_earliest_release_containing` take the matcher slice / one matcher.
+  No effect on the binary surface or the manifest wire format.
+
 ## 1.3.0 — 2026-05-08
 
 Two themes: agent-friendly CLI surface (so AI assistants can drive

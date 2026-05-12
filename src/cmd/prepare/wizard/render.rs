@@ -497,7 +497,8 @@ fn build_detail_panel(
 
     lines.push(Line::from(""));
 
-    let (feat_count, fix_count, breaking_count, other_count) = count_commit_types(commits);
+    let (feat_count, fix_count, revert_count, breaking_count, other_count) =
+        count_commit_types(commits);
 
     lines.push(Line::from(Span::styled(
         "Commit Analysis:",
@@ -523,6 +524,12 @@ fn build_detail_panel(
         lines.push(Line::from(vec![
             Span::styled("  fix:       ", Style::default().fg(Color::Yellow)),
             Span::styled(format!("{}", fix_count), Style::default().fg(Color::Yellow)),
+        ]));
+    }
+    if revert_count > 0 {
+        lines.push(Line::from(vec![
+            Span::styled("  revert:    ", Style::default().fg(Color::Yellow)),
+            Span::styled(format!("{}", revert_count), Style::default().fg(Color::Yellow)),
         ]));
     }
     if other_count > 0 {
@@ -578,9 +585,10 @@ fn build_detail_panel(
     Text::from(lines)
 }
 
-fn count_commit_types(commits: &[Commit]) -> (usize, usize, usize, usize) {
+fn count_commit_types(commits: &[Commit]) -> (usize, usize, usize, usize, usize) {
     let mut feat = 0;
     let mut fix = 0;
+    let mut revert = 0;
     let mut breaking = 0;
     let mut other = 0;
 
@@ -593,12 +601,17 @@ fn count_commit_types(commits: &[Commit]) -> (usize, usize, usize, usize) {
             feat += 1;
         } else if lower.starts_with("fix") {
             fix += 1;
+        } else if lower.starts_with("revert") || msg.starts_with("Revert \"") {
+            // Both conventional `revert:` and git's auto-generated
+            // `Revert "<subject>"` count here — they both drive a
+            // patch bump in `core::bump::analyze_commits`.
+            revert += 1;
         } else {
             other += 1;
         }
     }
 
-    (feat, fix, breaking, other)
+    (feat, fix, revert, breaking, other)
 }
 
 fn render_project_changelog(f: &mut Frame, area: Rect, state: &mut WizardState) {

@@ -728,3 +728,137 @@ fn test_parse_version_from_tag_edge_cases() {
         semver::Version::parse("1.0.0-alpha").unwrap()
     );
 }
+
+// ----- find_latest_tag_for_project regression tests -------------
+//
+// These cover the npm/maven/pypa/go bug: the legacy lookup hardcoded
+// `{name}-v{version}` (cargo) and bare `v{version}` (single-project),
+// silently missing every other ecosystem's tag format and falling
+// back to "walk all commits since repo start" — which inflated bumps
+// (e.g. 0.7.0 → 0.8.0 instead of 0.7.1 for a single `fix:` commit).
+
+use crate::core::tag_format::{build_tag_matcher, TagPatternInputs};
+use tempfile::TempDir;
+
+/// Create a temp git repo, drop one commit, tag it, return (TempDir, oid).
+/// TempDir kept alive by caller to keep the path valid.
+fn seed_repo_with_tag(tag_name: &str) -> (TempDir, git2::Oid) {
+    let dir = TempDir::new().expect("tempdir");
+    let repo = git2::Repository::init(dir.path()).expect("git init");
+    {
+        let sig = git2::Signature::now("test", "test@example.com").unwrap();
+        let tree_id = {
+            let mut idx = repo.index().unwrap();
+            idx.write_tree().unwrap()
+        };
+        let tree = repo.find_tree(tree_id).unwrap();
+        let oid = repo
+            .commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+            .unwrap();
+        let obj = repo.find_object(oid, None).unwrap();
+        repo.tag_lightweight(tag_name, &obj, false).unwrap();
+    }
+    let head_oid = repo.head().unwrap().target().unwrap();
+    (dir, head_oid)
+}
+
+fn npm_matcher_for(name: &str) -> crate::core::tag_format::TagMatcher {
+    build_tag_matcher(&TagPatternInputs {
+        project_name: name,
+        ecosystem: "npm",
+        ecosystem_default: "{name}@v{version}",
+        allowed_vars: &["name", "version", "ecosystem"],
+        override_template: None,
+        maven_coords: None,
+        module_path: None,
+        allow_bare_v_fallback: false,
+    })
+    .unwrap()
+}
+
+#[test]
+fn find_latest_tag_recovers_npm_scoped_tag() {
+    // The exact failure mode from the original bug report:
+    // tag `@clikd/landing@v0.7.0` exists but the legacy hardcoded
+    // `-v` prefix never matched it. With the fix, the npm matcher
+    // must recover it.
+    let (dir, tagged_oid) = seed_repo_with_tag("@clikd/landing@v0.7.0");
+    let repo = super::Repository::open(dir.path()).unwrap();
+    let matcher = npm_matcher_for("@clikd/landing");
+
+    let result = repo
+        .find_latest_tag_for_project(&matcher)
+        .expect("lookup must not error");
+    let (oid, tag_name, version) = result.expect("npm tag should be found");
+    assert_eq!(oid, tagged_oid);
+    assert_eq!(tag_name, "@clikd/landing@v0.7.0");
+    assert_eq!(version, semver::Version::new(0, 7, 0));
+}
+
+#[test]
+fn find_latest_tag_ignores_other_projects_npm_tags() {
+    // Repo has `@clikd/api@v0.5.0`, but we look for `@clikd/landing`.
+    // Must return None — and crucially must NOT confuse with a
+    // permissive prefix match.
+    let (dir, _oid) = seed_repo_with_tag("@clikd/api@v0.5.0");
+    let repo = super::Repository::open(dir.path()).unwrap();
+    let matcher = npm_matcher_for("@clikd/landing");
+
+    let result = repo.find_latest_tag_for_project(&matcher).unwrap();
+    assert!(result.is_none(), "must not match a different project's tag");
+}
+
+#[test]
+fn find_latest_tag_picks_highest_among_many() {
+    let dir = TempDir::new().unwrap();
+    let repo_git = git2::Repository::init(dir.path()).unwrap();
+    let sig = git2::Signature::now("test", "test@example.com").unwrap();
+    let tree_id = {
+        let mut idx = repo_git.index().unwrap();
+        idx.write_tree().unwrap()
+    };
+    let tree = repo_git.find_tree(tree_id).unwrap();
+    let oid = repo_git
+        .commit(Some("HEAD"), &sig, &sig, "initial", &tree, &[])
+        .unwrap();
+    let obj = repo_git.find_object(oid, None).unwrap();
+    for v in &["v0.6.0", "v0.7.0", "v0.6.99"] {
+        repo_git
+            .tag_lightweight(&format!("@clikd/landing@{v}"), &obj, false)
+            .unwrap();
+    }
+
+    let repo = super::Repository::open(dir.path()).unwrap();
+    let matcher = npm_matcher_for("@clikd/landing");
+    let (_, name, version) = repo
+        .find_latest_tag_for_project(&matcher)
+        .unwrap()
+        .expect("must find a tag");
+    assert_eq!(name, "@clikd/landing@v0.7.0");
+    assert_eq!(version, semver::Version::new(0, 7, 0));
+}
+
+#[test]
+fn find_latest_tag_maven_slash_form() {
+    // Maven tag format uses `/` between coords; this is the ONLY form
+    // that survives `git check-ref-format` (colon is rejected).
+    let (dir, _) = seed_repo_with_tag("com.example/mylib@v1.2.3");
+    let repo = super::Repository::open(dir.path()).unwrap();
+    let matcher = build_tag_matcher(&TagPatternInputs {
+        project_name: "com.example:mylib",
+        ecosystem: "maven",
+        ecosystem_default: "{groupId}/{artifactId}@v{version}",
+        allowed_vars: &["name", "version", "ecosystem", "groupId", "artifactId"],
+        override_template: None,
+        maven_coords: Some(("com.example".into(), "mylib".into())),
+        module_path: None,
+        allow_bare_v_fallback: false,
+    })
+    .unwrap();
+
+    let (_, _, version) = repo
+        .find_latest_tag_for_project(&matcher)
+        .unwrap()
+        .expect("maven slash-form tag must be recognised");
+    assert_eq!(version, semver::Version::new(1, 2, 3));
+}

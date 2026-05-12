@@ -12,14 +12,109 @@ use crate::{
     atry,
     core::{
         config::{syntax::ChangelogConfiguration, ConfigurationFile},
+        ecosystem::format_handler::FormatHandlerRegistry,
         errors::Result,
         git::repository::{ChangeList, ReleaseAvailability, Repository},
         graph::{ReleaseUnitGraph, ReleaseUnitGraphBuilder, RepoHistories},
-        resolved_release_unit::{DepRequirement, ReleaseUnitId},
+        group::GroupSet,
+        resolved_release_unit::{DepRequirement, ReleaseUnitId, ResolvedReleaseUnit},
+        tag_format::{
+            build_tag_matcher, split_maven_coords, TagMatcher, TagPatternInputs,
+        },
         version::Version,
     },
     utils::theme::ReleaseProgressBar,
 };
+
+/// Build a [`TagMatcher`] for one project, honouring the same
+/// precedence chain as [`crate::core::workflow::build_tag_name`] —
+/// `[release_unit.<name>].tag_format` > `[group.<id>].tag_format` >
+/// the ecosystem trait's `tag_format_default()`. The matcher is the
+/// inverse of the tag the github-app would create on PR-merge, so any
+/// previously-published tag will be recognised.
+///
+/// Used by every place that walks `git tag` looking for "this
+/// project's last release" — `analyze_histories`,
+/// `find_earliest_release_containing`, the initial `resolve_versions_from_tags`
+/// pass during graph build.
+fn build_tag_matcher_for(
+    project_name: &str,
+    ecosystem_name: &str,
+    tag_format_override: Option<&str>,
+    group_tag_format: Option<&str>,
+    registry: &FormatHandlerRegistry,
+    allow_bare_v_fallback: bool,
+) -> Result<TagMatcher> {
+    let template_override = tag_format_override.or(group_tag_format);
+    let (eco_default_tag, eco_allowed_vars): (&'static str, &'static [&'static str]) =
+        match registry.lookup(ecosystem_name) {
+            Some(h) => (h.tag_format_default(), h.tag_template_vars()),
+            None => ("{name}@v{version}", &["name", "version", "ecosystem"]),
+        };
+    let maven_coords = if ecosystem_name == "maven" {
+        split_maven_coords(project_name)
+    } else {
+        None
+    };
+    let module_path = if ecosystem_name == "go" {
+        Some(project_name)
+    } else {
+        None
+    };
+    let inputs = TagPatternInputs {
+        project_name,
+        ecosystem: ecosystem_name,
+        ecosystem_default: eco_default_tag,
+        allowed_vars: eco_allowed_vars,
+        override_template: template_override,
+        maven_coords,
+        module_path,
+        allow_bare_v_fallback,
+    };
+    build_tag_matcher(&inputs)
+}
+
+/// Build a matcher per project for the *runtime* graph — used by
+/// `AppSession::analyze_histories` and by `find_earliest_release_containing`.
+fn build_matchers_for_runtime_units(
+    units: &[&ResolvedReleaseUnit],
+    cfg_units: &[crate::core::release_unit::ResolvedReleaseUnit],
+    groups: &GroupSet,
+    registry: &FormatHandlerRegistry,
+) -> Result<Vec<TagMatcher>> {
+    let allow_bare_v_fallback = units.len() == 1;
+    units
+        .iter()
+        .map(|unit| {
+            let project_name = &unit.user_facing_name;
+            // qnames[1] is the ecosystem string by convention (per
+            // FormatHandler::name docs). Fall back to "cargo" for the
+            // legacy single-qname case to preserve the previous
+            // bare-v matching behaviour.
+            let ecosystem_name = unit
+                .qualified_names()
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| "cargo".to_string());
+            let tag_format_override = cfg_units
+                .iter()
+                .find(|r| r.unit.name == *project_name)
+                .and_then(|r| r.unit.tag_format.as_deref())
+                .map(|s| s.to_string());
+            let group_tag_format = groups
+                .group_of(unit.ident())
+                .and_then(|g| g.tag_format.clone());
+            build_tag_matcher_for(
+                project_name,
+                &ecosystem_name,
+                tag_format_override.as_deref(),
+                group_tag_format.as_deref(),
+                registry,
+                allow_bare_v_fallback,
+            )
+        })
+        .collect()
+}
 
 #[derive(Clone, Debug, Default)]
 pub struct NpmConfig {
@@ -74,8 +169,24 @@ impl AppBuilder {
         self
     }
 
-    fn resolve_versions_from_tags(&mut self) -> Result<()> {
+    /// Walk every project whose manifest reported version `0.0.0` and
+    /// try to recover the real current version from an existing git
+    /// tag. Uses the same template-driven lookup as the post-init code
+    /// path, honouring per-`[release_unit]` `tag_format` overrides.
+    ///
+    /// Group-level (`[group.X].tag_format`) overrides are not consulted
+    /// here because the `GroupSet` is only assembled inside
+    /// [`ReleaseUnitGraphBuilder::complete_loading_with_groups`], which
+    /// runs *after* this pass. That's acceptable: a group-only override
+    /// only matters if the unit's manifest also reads as 0.0.0 (rare),
+    /// and the post-init `analyze_histories` path applies the full
+    /// precedence chain again before any bump decision is made.
+    fn resolve_versions_from_tags(
+        &mut self,
+        resolved_units: &[crate::core::release_unit::ResolvedReleaseUnit],
+    ) -> Result<()> {
         let is_single_project = self.graph.unit_count() == 1;
+        let registry = FormatHandlerRegistry::with_defaults();
 
         for ident in self.graph.project_ids() {
             let unit = self.graph.lookup_mut(ident);
@@ -100,12 +211,29 @@ impl AppBuilder {
                 );
                 continue;
             };
+            let ecosystem_name = unit
+                .qnames
+                .get(1)
+                .cloned()
+                .unwrap_or_else(|| "cargo".to_string());
+            let tag_format_override = resolved_units
+                .iter()
+                .find(|r| r.unit.name == project_name)
+                .and_then(|r| r.unit.tag_format.as_deref())
+                .map(|s| s.to_string());
 
-            if let Some((_, tag_name)) = self
-                .repo
-                .find_latest_tag_for_project(&project_name, is_single_project)?
+            let matcher = build_tag_matcher_for(
+                &project_name,
+                &ecosystem_name,
+                tag_format_override.as_deref(),
+                None, // groups not assembled yet — see fn docstring
+                &registry,
+                is_single_project,
+            )?;
+
+            if let Some((_, tag_name, version)) =
+                self.repo.find_latest_tag_for_project(&matcher)?
             {
-                let version = Repository::parse_version_from_tag(&tag_name);
                 if version.major != 0 || version.minor != 0 || version.patch != 0 {
                     info!(
                         "resolved version {} from tag '{}' for project '{}'",
@@ -238,7 +366,7 @@ impl AppBuilder {
                 }
             }
 
-            self.resolve_versions_from_tags()?;
+            self.resolve_versions_from_tags(&resolved_units)?;
         }
 
         // Apply project config and compile the graph.
@@ -588,11 +716,17 @@ impl AppSession {
                         // this batch.
                         DepRequirement::Commit(ref cid) => {
                             let dependee_proj = self.graph.lookup(dep.ident);
-                            let is_single_project = self.graph.projects().count() == 1;
+                            let registry = FormatHandlerRegistry::with_defaults();
+                            let matchers = build_matchers_for_runtime_units(
+                                &[dependee_proj],
+                                &self.resolved_release_units,
+                                self.graph.groups(),
+                                &registry,
+                            )?;
                             let avail = self.repo.find_earliest_release_containing(
                                 dependee_proj,
+                                &matchers[0],
                                 cid,
-                                is_single_project,
                             )?;
 
                             let resolved = match avail {
@@ -705,7 +839,7 @@ impl AppSession {
     }
 
     pub fn apply_versions(&mut self, bump_specs: &HashMap<String, String>) -> Result<()> {
-        let histories = self.graph.analyze_histories(&self.repo)?;
+        let histories = self.analyze_histories()?;
 
         self.solve_internal_deps(|_repo, graph, ident| {
             let unit = graph.lookup_mut(ident);
@@ -772,7 +906,15 @@ impl AppSession {
     }
 
     pub fn analyze_histories(&self) -> Result<RepoHistories> {
-        self.graph.analyze_histories(&self.repo)
+        let registry = FormatHandlerRegistry::with_defaults();
+        let project_refs: Vec<&ResolvedReleaseUnit> = self.graph.projects_slice().iter().collect();
+        let matchers = build_matchers_for_runtime_units(
+            &project_refs,
+            &self.resolved_release_units,
+            self.graph.groups(),
+            &registry,
+        )?;
+        self.graph.analyze_histories(&self.repo, &matchers)
     }
 }
 

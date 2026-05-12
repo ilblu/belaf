@@ -23,6 +23,7 @@ use crate::{
         config::syntax::RepoConfiguration,
         errors::Result,
         resolved_release_unit::{DepRequirement, ResolvedReleaseUnit},
+        tag_format::TagMatcher,
         version::Version,
     },
 };
@@ -553,44 +554,50 @@ impl Repository {
     ///
     /// For multi-project repos, only matches prefixed tags to avoid ambiguity.
     ///
-    /// Returns the commit OID and tag name of the latest matching tag,
-    /// sorted by semantic version (highest first).
+    /// Returns the commit OID, tag name, and parsed version of the
+    /// latest matching tag, sorted by semantic version (highest first).
+    ///
+    /// The caller passes a pre-compiled [`TagMatcher`] built from the
+    /// project's effective tag-format template (unit override > group
+    /// override > ecosystem default). See
+    /// [`crate::core::tag_format::build_tag_matcher`].
+    ///
+    /// Pre-fix history note: this used to take `(project_name,
+    /// is_single_project)` and hard-coded `{name}-v{version}` (cargo) +
+    /// bare-`v{version}` (single-project). Every ecosystem with a
+    /// different default — npm, maven, pypa, go — silently missed its
+    /// own tags and triggered the "walk every commit since repo start"
+    /// fallback in [`Repository::analyze_histories`], inflating bumps.
     pub fn find_latest_tag_for_project(
         &self,
-        project_name: &str,
-        is_single_project: bool,
-    ) -> Result<Option<(git2::Oid, String)>> {
+        matcher: &TagMatcher,
+    ) -> Result<Option<(git2::Oid, String, semver::Version)>> {
         let tags = self.repo.tag_names(None)?;
 
-        let mut matching_tags = Vec::new();
+        let mut matching_tags: Vec<(git2::Oid, String, semver::Version)> = Vec::new();
 
         for tag_name in tags.iter().flatten() {
-            let is_prefixed_tag = tag_name.starts_with(&format!("{}-v", project_name));
-            let is_plain_v_tag = is_single_project
-                && tag_name.starts_with('v')
-                && tag_name.chars().nth(1).is_some_and(|c| c.is_ascii_digit());
-
-            if is_prefixed_tag || is_plain_v_tag {
-                if let Ok(tag_ref) = self.repo.find_reference(&format!("refs/tags/{}", tag_name)) {
-                    if let Some(target_oid) = tag_ref.target() {
-                        matching_tags.push((target_oid, tag_name.to_string()));
-                    } else if let Ok(tag_obj) = tag_ref.peel_to_tag() {
-                        matching_tags.push((tag_obj.target_id(), tag_name.to_string()));
-                    }
-                }
-            }
+            let Some(version) = matcher.match_version(tag_name) else {
+                continue;
+            };
+            let Ok(tag_ref) = self.repo.find_reference(&format!("refs/tags/{}", tag_name)) else {
+                continue;
+            };
+            let oid = if let Some(target_oid) = tag_ref.target() {
+                target_oid
+            } else if let Ok(tag_obj) = tag_ref.peel_to_tag() {
+                tag_obj.target_id()
+            } else {
+                continue;
+            };
+            matching_tags.push((oid, tag_name.to_string(), version));
         }
 
         if matching_tags.is_empty() {
             return Ok(None);
         }
 
-        matching_tags.sort_by(|a, b| {
-            let v1 = Self::parse_version_from_tag(&a.1);
-            let v2 = Self::parse_version_from_tag(&b.1);
-            v2.cmp(&v1)
-        });
-
+        matching_tags.sort_by(|a, b| b.2.cmp(&a.2));
         Ok(matching_tags.into_iter().next())
     }
 
@@ -613,6 +620,24 @@ impl Repository {
             }
         }
         semver::Version::new(0, 0, 0)
+    }
+
+    /// `true` if the repo has **any** tag whose name looks like a version
+    /// tag (`v1.2.3`, `name-v1.2.3`, `name@v1.2.3`, `name/v1.2.3`,
+    /// `name-1.2.3`). Used by [`Self::analyze_histories`] to decide
+    /// whether a tag-lookup miss is "first release ever" (no version
+    /// tags at all) vs. "the configured template doesn't match the
+    /// existing tags" (the bug class). Uses a permissive regex by
+    /// design — false positives just relax the safety net.
+    fn repo_has_any_version_tags(&self) -> Result<bool> {
+        let tags = self.repo.tag_names(None)?;
+        let re = regex::Regex::new(r"\d+\.\d+\.\d+").expect("BUG: literal regex compiles");
+        for tag_name in tags.iter().flatten() {
+            if re.is_match(tag_name) {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 
     fn find_baseline_tag(&self) -> Result<Option<git2::Oid>> {
@@ -691,7 +716,19 @@ impl Repository {
     /// the history from HEAD to its most recent release commit. I worry about
     /// the efficiency of this so we trace all the histories at once to try to
     /// improve that.
-    pub fn analyze_histories(&self, projects: &[ResolvedReleaseUnit]) -> Result<Vec<RepoHistory>> {
+    pub fn analyze_histories(
+        &self,
+        projects: &[ResolvedReleaseUnit],
+        matchers: &[TagMatcher],
+    ) -> Result<Vec<RepoHistory>> {
+        if projects.len() != matchers.len() {
+            bail!(
+                "internal error: analyze_histories got {} projects and {} matchers; lengths must match",
+                projects.len(),
+                matchers.len()
+            );
+        }
+
         let mut histories = vec![
             RepoHistory {
                 commits: Vec::new(),
@@ -701,16 +738,19 @@ impl Repository {
         ];
 
         let baseline_tag_oid = self.find_baseline_tag()?;
-        let is_single_project = projects.len() == 1;
+        let repo_has_any_version_tags = self.repo_has_any_version_tags()?;
 
         for (i, unit) in projects.iter().enumerate() {
-            if let Some((tag_oid, tag_name)) =
-                self.find_latest_tag_for_project(&unit.user_facing_name, is_single_project)?
+            let matcher = &matchers[i];
+            if let Some((tag_oid, tag_name, version)) =
+                self.find_latest_tag_for_project(matcher)?
             {
-                let version = Self::parse_version_from_tag(&tag_name);
                 info!(
-                    "found release tag for {}: {} (v{})",
-                    unit.user_facing_name, tag_name, version
+                    "found release tag for {}: {} (v{}) via template `{}`",
+                    unit.user_facing_name,
+                    tag_name,
+                    version,
+                    matcher.template()
                 );
                 histories[i].boundary = Some(HistoryBoundary::ReleaseTag {
                     commit: CommitId(tag_oid),
@@ -725,9 +765,27 @@ impl Repository {
                 histories[i].boundary = Some(HistoryBoundary::Baseline {
                     commit: CommitId(baseline_oid),
                 });
+            } else if repo_has_any_version_tags {
+                // Defensive guard. If the repo already has version-shaped
+                // tags but none matched THIS project's template, falling
+                // back to "all commits since repo start" is almost
+                // certainly going to inflate the recommended bump. The
+                // legacy code path hit this bug for every npm/maven/pypa/go
+                // project. Surface the diagnostic loudly, do NOT fall
+                // through silently.
+                bail!(
+                    "could not locate a previous-release tag for `{name}` (tried template `{tmpl}`), \
+                     but this repo already has version-shaped tags. \
+                     Refusing to analyze the full history — that would over-count old commits and inflate the bump. \
+                     Likely causes: (1) the project's `tag_format` in `belaf/config.toml` doesn't match how previous tags were written; \
+                     (2) the project is genuinely new — in that case, create a baseline with `git tag belaf-baseline <commit>` to mark the starting point. \
+                     Override-only path: set `tag_format = \"...\"` on the `[release_unit.<name>]` block to match the existing tag shape.",
+                    name = unit.user_facing_name,
+                    tmpl = matcher.template(),
+                );
             } else {
                 warn!(
-                    "no release tag or baseline found for {}, analyzing all commits since repo start",
+                    "no release tag or baseline found for {}, and the repo has no version tags at all — analyzing all commits since repo start. This is correct only for a brand-new repo.",
                     unit.user_facing_name
                 );
             }
@@ -1003,14 +1061,13 @@ impl Repository {
     pub fn find_earliest_release_containing(
         &self,
         unit: &ResolvedReleaseUnit,
+        matcher: &TagMatcher,
         cid: &CommitId,
-        is_single_project: bool,
     ) -> Result<ReleaseAvailability> {
-        if let Some((tag_oid, tag_name)) =
-            self.find_latest_tag_for_project(&unit.user_facing_name, is_single_project)?
+        if let Some((tag_oid, _tag_name, version)) =
+            self.find_latest_tag_for_project(matcher)?
         {
             if self.repo.graph_descendant_of(tag_oid, cid.0)? || tag_oid == cid.0 {
-                let version = Self::parse_version_from_tag(&tag_name);
                 let v = Version::parse_like(&unit.version, version.to_string())?;
                 return Ok(ReleaseAvailability::ExistingRelease(v));
             }

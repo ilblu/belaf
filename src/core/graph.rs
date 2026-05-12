@@ -24,6 +24,7 @@ use crate::core::{
         DepRequirement, Dependency, DependencyBuilder, DependencyTarget, ReleaseUnitId,
         ResolvedReleaseUnit, ResolvedReleaseUnitBuilder,
     },
+    tag_format::TagMatcher,
 };
 use crate::{a_ok_or, atry};
 
@@ -145,10 +146,21 @@ impl ReleaseUnitGraph {
         Ok(matched_idents)
     }
 
-    pub fn analyze_histories(&self, repo: &Repository) -> Result<RepoHistories> {
+    pub fn analyze_histories(
+        &self,
+        repo: &Repository,
+        matchers: &[TagMatcher],
+    ) -> Result<RepoHistories> {
         Ok(RepoHistories {
-            histories: repo.analyze_histories(&self.projects[..])?,
+            histories: repo.analyze_histories(&self.projects[..], matchers)?,
         })
+    }
+
+    /// Slice access for callers that need to construct per-project
+    /// metadata parallel to the graph's project order (e.g. building
+    /// a `Vec<TagMatcher>` for [`Self::analyze_histories`]).
+    pub fn projects_slice(&self) -> &[ResolvedReleaseUnit] {
+        &self.projects
     }
 
     /// Read-only access to the configured project groups.

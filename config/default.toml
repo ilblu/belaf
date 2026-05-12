@@ -118,6 +118,7 @@ emoji_groups = true
 [changelog.group_emojis]
 "Features" = "✨"
 "Bug Fixes" = "🐛"
+"Reverts" = "⏪"
 "Documentation" = "📚"
 "Performance" = "⚡"
 "Refactoring" = "♻️"
@@ -135,6 +136,10 @@ group = "Features"
 [[changelog.commit_parsers]]
 message = "^fix"
 group = "Bug Fixes"
+
+[[changelog.commit_parsers]]
+message = "^revert|^Revert \""
+group = "Reverts"
 
 [[changelog.commit_parsers]]
 message = "^doc"
