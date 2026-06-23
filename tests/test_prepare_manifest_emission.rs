@@ -167,19 +167,52 @@ fn breaking_commit_emits_major_manifest() {
 }
 
 #[test]
-fn chore_commit_emits_no_manifest() {
+fn chore_touching_src_emits_patch_manifest() {
+    // F5 — a chore that changes a binary-affecting file (`src/**`) still ships:
+    // the artifact changed, so it floors to a patch even though `chore` is not
+    // a release-driving type. (Baseline tag isolates the window to this commit.)
     let repo = TestRepo::new();
     seed_single_crate(&repo, "lib-w", "1.0.0");
+    // Real release tag (cargo default `{name}-v{version}`) so the prepare window
+    // is bounded to commits after it (excludes the seed commits).
+    repo.tag("lib-w-v1.0.0");
 
-    // chore is conventional but not a release-driving type
-    repo.write_file("src/chore.rs", "// comment only\n");
+    repo.write_file("src/chore.rs", "pub fn helper() {}\n");
     repo.commit("chore: clean up");
 
     let _ = repo.run_belaf_command_with_env(&["prepare", "--ci"], &[("BELAF_NO_KEYRING", "1")]);
 
     let manifests = manifest_files(&repo);
     assert!(
+        !manifests.is_empty(),
+        "chore touching src/ must emit a patch manifest (F5)"
+    );
+    let manifest = read_manifest(&manifests[0]);
+    assert_eq!(
+        release_bump(&manifest, "lib-w").as_deref(),
+        Some("patch"),
+        "binary-affecting chore must floor to patch; manifest:\n{manifest:#}"
+    );
+}
+
+#[test]
+fn docs_only_change_emits_no_manifest() {
+    // F3 — a change that touches only non-binary-affecting files (docs/**, .md)
+    // does NOT trigger a release. (Baseline tag isolates the window.)
+    let repo = TestRepo::new();
+    seed_single_crate(&repo, "lib-w", "1.0.0");
+    // Real release tag (cargo default `{name}-v{version}`) so the prepare window
+    // is bounded to commits after it (excludes the seed commits).
+    repo.tag("lib-w-v1.0.0");
+
+    repo.write_file("docs/notes.md", "# notes\n");
+    repo.commit("docs: add notes");
+
+    let _ = repo.run_belaf_command_with_env(&["prepare", "--ci"], &[("BELAF_NO_KEYRING", "1")]);
+
+    let manifests = manifest_files(&repo);
+    assert!(
         manifests.is_empty(),
-        "chore commit must NOT produce a manifest; got: {manifests:?}"
+        "docs-only change must NOT produce a manifest (F3); got: {manifests:?}"
     );
 }

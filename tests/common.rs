@@ -79,6 +79,17 @@ impl TestRepo {
             .expect("failed to git commit");
     }
 
+    /// Create a lightweight git tag at HEAD. Useful for establishing a release
+    /// boundary (e.g. `belaf-baseline`) so a subsequent `prepare` only analyzes
+    /// commits after it.
+    pub fn tag(&self, name: &str) {
+        Command::new("git")
+            .args(["tag", name])
+            .current_dir(&self.path)
+            .output()
+            .expect("failed to git tag");
+    }
+
     #[must_use]
     pub fn run_belaf_command(&self, args: &[&str]) -> std::process::Output {
         let belaf_bin = env!("CARGO_BIN_EXE_belaf");

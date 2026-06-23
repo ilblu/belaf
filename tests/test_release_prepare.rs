@@ -261,6 +261,10 @@ edition = "2021"
     let output = repo.run_belaf_command(&["init", "--force"]);
     assert!(output.status.success());
     repo.commit("chore: add belaf config");
+    // Tag the current state as the last release so "no changes" means "no
+    // binary-affecting commits *since the release*" (without a tag the seed
+    // commits are in-window and F5 would floor them to a patch).
+    repo.tag("no-changes-v1.0.0");
 
     let _output = repo.run_belaf_command(&["prepare", "--ci"]);
 
@@ -438,6 +442,10 @@ edition = "2021"
     assert!(output.status.success());
 
     repo.commit("chore: add belaf config");
+    // Tag the current state as the last release so there are no in-window
+    // binary-affecting commits (without a tag, F5 would floor the seed commits
+    // to a patch — see test_release_prepare_no_changes).
+    repo.tag("ci-clean-test-v1.0.0");
 
     let output = repo.run_belaf_command(&["prepare", "--ci"]);
 

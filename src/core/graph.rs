@@ -22,7 +22,7 @@ use crate::core::{
     group::{Group, GroupId, GroupSet},
     resolved_release_unit::{
         DepRequirement, Dependency, DependencyBuilder, DependencyTarget, ReleaseUnitId,
-        ResolvedReleaseUnit, ResolvedReleaseUnitBuilder,
+        ResolvedReleaseUnit, ResolvedReleaseUnitBuilder, UnitKind,
     },
     tag_format::TagMatcher,
 };
@@ -53,6 +53,12 @@ pub struct ReleaseUnitGraph {
     /// Groups: bundles of projects that release together. Sourced from
     /// `[[group]]` entries in `belaf/config.toml`. See `core::group`.
     groups: GroupSet,
+
+    /// `ReleaseUnitId` → petgraph `NodeIndex`. Carried over from the builder
+    /// (lockstep with `add_project`) so [`Self::closure`] can start a graph
+    /// traversal from a unit id. `retain_edges` only drops edges, never nodes,
+    /// so these indices stay valid after `complete_loading_with_groups`.
+    node_ixs: Vec<OurNodeIndex>,
 }
 
 impl ReleaseUnitGraph {
@@ -150,9 +156,21 @@ impl ReleaseUnitGraph {
         &self,
         repo: &Repository,
         matchers: &[TagMatcher],
+        binary_affecting: &crate::core::config::syntax::BinaryAffectingConfiguration,
     ) -> Result<RepoHistories> {
+        // F2 — precompute each unit's dependency closure as positions in the
+        // projects slice. For the full ordered slice, position == ReleaseUnitId,
+        // so `closure(id)` yields the positions a unit's commits may come from.
+        let closures: Vec<Vec<usize>> = (0..self.projects.len())
+            .map(|id| self.closure(id))
+            .collect();
         Ok(RepoHistories {
-            histories: repo.analyze_histories(&self.projects[..], matchers)?,
+            histories: repo.analyze_histories(
+                &self.projects[..],
+                matchers,
+                &closures,
+                binary_affecting,
+            )?,
         })
     }
 
@@ -166,6 +184,43 @@ impl ReleaseUnitGraph {
     /// Read-only access to the configured project groups.
     pub fn groups(&self) -> &GroupSet {
         &self.groups
+    }
+
+    /// Compute the transitive dependency **closure** of `root` (F2): the unit
+    /// itself plus every in-repo crate it depends on, transitively.
+    ///
+    /// Traverses the petgraph (NOT the raw `internal_deps`) so it inherits the
+    /// graph's two guarantees for free: intra-group edges are already filtered
+    /// out (`retain_edges`), and the graph is toposort-acyclic. A `visited` set
+    /// makes the walk cycle-/diamond-safe regardless.
+    ///
+    /// Edges are stored `dependee → depender` (see `complete_loading_with_groups`),
+    /// so a dependency-closure walk follows **incoming** edges from `root`.
+    /// `Ignore` units are never roots and are never traversed into.
+    pub fn closure(&self, root: ReleaseUnitId) -> Vec<ReleaseUnitId> {
+        let mut visited: HashSet<ReleaseUnitId> = HashSet::new();
+        let mut out: Vec<ReleaseUnitId> = Vec::new();
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            if self.projects[id].kind == UnitKind::Ignore {
+                continue;
+            }
+            out.push(id);
+            let nix = self.node_ixs[id];
+            for dep_nix in self
+                .graph
+                .neighbors_directed(nix, petgraph::Direction::Incoming)
+            {
+                let dep_id = self.graph[dep_nix];
+                if !visited.contains(&dep_id) {
+                    stack.push(dep_id);
+                }
+            }
+        }
+        out
     }
 }
 
@@ -257,6 +312,16 @@ impl ReleaseUnitGraphBuilder {
     /// Get an iterator over all project IDs.
     pub fn project_ids(&self) -> std::ops::Range<ReleaseUnitId> {
         0..self.projects.len()
+    }
+
+    /// Find a builder project by its primary qualified name (`qnames[0]`).
+    /// Used by codegen-edge materialization (F4) to wire a consumer crate to a
+    /// synthetic codegen-source node before `complete_loading` builds the
+    /// name→id map.
+    pub fn id_for_qname(&self, name: &str) -> Option<ReleaseUnitId> {
+        self.projects
+            .iter()
+            .position(|p| p.qnames.first().map(String::as_str) == Some(name))
     }
 
     /// Add a dependency between two projects in the graph.
@@ -559,6 +624,7 @@ impl ReleaseUnitGraphBuilder {
             graph: self.graph,
             toposorted_ids,
             groups,
+            node_ixs: self.node_ixs,
         })
     }
 }
@@ -1320,5 +1386,81 @@ mod tests {
             DepRequirement::Manual(s) => assert_eq!(s, ">=1.0.0"),
             _ => panic!("Expected Manual requirement"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // F2 — dependency-closure traversal (`closure`).
+    // -----------------------------------------------------------------------
+
+    fn dep(graph: &mut ReleaseUnitGraphBuilder, depender: ReleaseUnitId, dependee: ReleaseUnitId) {
+        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget};
+        graph.add_dependency(
+            depender,
+            DependencyTarget::Ident(dependee),
+            "0.0.0-dev.0".to_string(),
+            DepRequirement::Manual("^0.1".to_string()),
+        );
+    }
+
+    #[test]
+    fn closure_includes_transitive_deps_and_dedups_diamond() {
+        // A depends on B and C; both B and C depend on D (diamond). closure(A)
+        // = {A, B, C, D} with D visited once.
+        let mut graph = ReleaseUnitGraphBuilder::new();
+        let a = create_test_project(&mut graph, "A");
+        let b = create_test_project(&mut graph, "B");
+        let c = create_test_project(&mut graph, "C");
+        let d = create_test_project(&mut graph, "D");
+        dep(&mut graph, a, b);
+        dep(&mut graph, a, c);
+        dep(&mut graph, b, d);
+        dep(&mut graph, c, d);
+        let graph = graph.complete_loading().unwrap();
+
+        let mut cl = graph.closure(a);
+        cl.sort_unstable();
+        assert_eq!(cl, vec![a, b, c, d]);
+
+        // A leaf's closure is just itself.
+        assert_eq!(graph.closure(d), vec![d]);
+    }
+
+    #[test]
+    fn closure_follows_incoming_edges_not_dependents() {
+        // A depends on B. closure(A) must include B (its dependency), and
+        // closure(B) must NOT include A (B does not depend on A). This pins the
+        // edge direction (Incoming = dependencies).
+        let mut graph = ReleaseUnitGraphBuilder::new();
+        let a = create_test_project(&mut graph, "A");
+        let b = create_test_project(&mut graph, "B");
+        dep(&mut graph, a, b);
+        let graph = graph.complete_loading().unwrap();
+
+        let mut ca = graph.closure(a);
+        ca.sort_unstable();
+        assert_eq!(ca, vec![a, b]);
+        assert_eq!(graph.closure(b), vec![b]);
+    }
+
+    #[test]
+    fn closure_skips_ignore_units() {
+        use crate::core::resolved_release_unit::UnitKind;
+        // A depends on B (Internal) and E (Ignore). closure(A) includes B but
+        // not E, and does not traverse into E.
+        let mut graph = ReleaseUnitGraphBuilder::new();
+        let a = create_test_project(&mut graph, "A");
+        let b = create_test_project(&mut graph, "B");
+        let e = create_test_project(&mut graph, "E");
+        graph.lookup_mut(b).kind = UnitKind::Internal;
+        graph.lookup_mut(e).kind = UnitKind::Ignore;
+        dep(&mut graph, a, b);
+        dep(&mut graph, a, e);
+        let graph = graph.complete_loading().unwrap();
+
+        let mut cl = graph.closure(a);
+        cl.sort_unstable();
+        assert_eq!(cl, vec![a, b]);
+        // An Ignore unit is never a closure root either.
+        assert!(graph.closure(e).is_empty());
     }
 }

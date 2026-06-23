@@ -61,6 +61,7 @@ enum ExplainOrigin {
 enum ExplainSource {
     Manifests { paths: Vec<String> },
     External { tool: String },
+    PathsOnly { paths: Vec<String> },
 }
 
 #[derive(Serialize)]
@@ -163,6 +164,10 @@ pub fn run(format: Option<ExplainOutputFormat>) -> Result<i32> {
                 }
             }
             VersionSource::External(ext) => format!("External(tool={})", ext.tool),
+            VersionSource::PathsOnly(paths) => {
+                let ps: Vec<_> = paths.iter().map(|p| p.escaped().to_string()).collect();
+                format!("PathsOnly([{}])", ps.join(", "))
+            }
         };
 
         println!("  {} {}", "•".green(), r.unit.name.bold());
@@ -252,6 +257,9 @@ fn build_json_payload(
                 },
                 VersionSource::External(ext) => ExplainSource::External {
                     tool: ext.tool.clone(),
+                },
+                VersionSource::PathsOnly(paths) => ExplainSource::PathsOnly {
+                    paths: paths.iter().map(|p| p.escaped().to_string()).collect(),
                 },
             },
             satellites: r

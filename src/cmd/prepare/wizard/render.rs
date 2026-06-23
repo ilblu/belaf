@@ -529,7 +529,10 @@ fn build_detail_panel(
     if revert_count > 0 {
         lines.push(Line::from(vec![
             Span::styled("  revert:    ", Style::default().fg(Color::Yellow)),
-            Span::styled(format!("{}", revert_count), Style::default().fg(Color::Yellow)),
+            Span::styled(
+                format!("{}", revert_count),
+                Style::default().fg(Color::Yellow),
+            ),
         ]));
     }
     if other_count > 0 {

@@ -60,6 +60,38 @@ impl BumpRecommendation {
         }
     }
 
+    /// F5 — floor a `None` recommendation up to `Patch`. Applied when a unit
+    /// has a binary-affecting change in its dependency closure but no commit
+    /// carried a bumpable conventional type (e.g. all `chore`/`refactor`): the
+    /// artifact changed, so it must still ship at least a patch. Apply this
+    /// *before* `apply_config` (the pre-1.0 downgrade never lowers `Patch`).
+    pub fn with_patch_floor(self) -> Self {
+        match self {
+            Self::None => Self::Patch,
+            other => other,
+        }
+    }
+
+    /// Numeric rank for ordering: None < Patch < Minor < Major.
+    fn rank(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Patch => 1,
+            Self::Minor => 2,
+            Self::Major => 3,
+        }
+    }
+
+    /// F11a — clamp the bump level down to a cap (never exceed it, even for
+    /// `feat`/breaking). `max` is the per-unit `max_bump` (`Patch`/`Minor`).
+    pub fn cap_at(self, max: Self) -> Self {
+        if self.rank() > max.rank() {
+            max
+        } else {
+            self
+        }
+    }
+
     pub fn apply_config(self, config: &BumpConfig, current_version: Option<&str>) -> Self {
         let is_pre_1_0 = current_version
             .and_then(|v| {
@@ -324,6 +356,19 @@ impl ScopeMatcher {
             scope_mappings,
             package_scopes,
         }
+    }
+
+    /// Build a matcher from the parsed `[commit_attribution]` config (F10).
+    /// Previously the runtime hardcoded [`ScopeMatcher::default`], so the
+    /// user's `scope_matching` / `scope_mappings` / `package_scopes` settings
+    /// were silently ignored. `ScopeMatchMode::from_str` is infallible
+    /// (unknown values fall back to `Smart`).
+    pub fn from_config(cfg: &super::config::syntax::CommitAttributionConfiguration) -> Self {
+        Self::new(
+            cfg.scope_matching.parse().unwrap_or_default(),
+            cfg.scope_mappings.clone(),
+            cfg.package_scopes.clone(),
+        )
     }
 
     pub fn find_matching_project<'a>(
@@ -602,6 +647,39 @@ mod tests {
         assert_eq!(
             matcher.find_matching_project("auth", &projects),
             Some(&"belaf-jwt".to_string())
+        );
+    }
+
+    #[test]
+    fn scope_matcher_from_config_applies_mode_and_scopes() {
+        // F10 — the matcher must be built from the parsed [commit_attribution]
+        // config, not hardcoded ::default(). With scope_matching="exact" a fuzzy
+        // scope no longer matches, and package_scopes flow through.
+        let mut package_scopes = HashMap::new();
+        package_scopes.insert("belaf-jwt".to_string(), vec!["token".to_string()]);
+
+        let cfg = crate::core::config::syntax::CommitAttributionConfiguration {
+            strategy: "scope".to_string(),
+            scope_matching: "exact".to_string(),
+            scope_mappings: HashMap::new(),
+            package_scopes,
+        };
+        let matcher = ScopeMatcher::from_config(&cfg);
+        let projects = vec!["gate".to_string(), "belaf-jwt".to_string()];
+
+        // package_scopes mapping flowed through from config.
+        assert_eq!(
+            matcher.find_matching_project("token", &projects),
+            Some(&"belaf-jwt".to_string())
+        );
+        // Exact mode took effect: a suffix that Smart would have matched
+        // ("jwt" → "belaf-jwt") is now rejected — proving the config's
+        // scope_matching reached the matcher (was a no-op before F10).
+        assert_eq!(matcher.find_matching_project("jwt", &projects), None);
+        // Exact full-equality still matches.
+        assert_eq!(
+            matcher.find_matching_project("gate", &projects),
+            Some(&"gate".to_string())
         );
     }
 

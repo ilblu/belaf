@@ -960,6 +960,7 @@ mod tests {
                 commits: Vec::new(),
                 commit_count: 0,
                 suggested_bump: BumpRecommendation::Patch,
+                prerelease_version: None,
                 ecosystem: Ecosystem::classify("npm"),
             },
             selected: true,

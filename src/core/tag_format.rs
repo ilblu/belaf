@@ -213,8 +213,7 @@ fn capture_version(re: &Regex, tag: &str) -> Option<semver::Version> {
 /// Kept conservative — we feed the captured slice into
 /// [`semver::Version::parse`], so this only needs to be permissive
 /// enough to not pre-filter valid versions.
-const VERSION_CAPTURE: &str =
-    r"(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z\-]+(?:\.[0-9A-Za-z\-]+)*)?(?:\+[0-9A-Za-z\-]+(?:\.[0-9A-Za-z\-]+)*)?)";
+const VERSION_CAPTURE: &str = r"(?P<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z\-]+(?:\.[0-9A-Za-z\-]+)*)?(?:\+[0-9A-Za-z\-]+(?:\.[0-9A-Za-z\-]+)*)?)";
 
 /// Compile a [`TagMatcher`] from the project's effective tag template.
 /// Mirrors [`format_tag`]'s variable-substitution + whitelist rules but
@@ -282,9 +281,8 @@ pub fn build_tag_matcher(inputs: &TagPatternInputs<'_>) -> Result<TagMatcher> {
         ));
     }
 
-    let primary = Regex::new(&pattern).map_err(|e| {
-        anyhow!("failed to compile tag-format regex from `{template}`: {e}")
-    })?;
+    let primary = Regex::new(&pattern)
+        .map_err(|e| anyhow!("failed to compile tag-format regex from `{template}`: {e}"))?;
 
     let bare_v_fallback = if inputs.allow_bare_v_fallback {
         // Bare `v{version}` — the cargo single-project convention.

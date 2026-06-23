@@ -155,3 +155,50 @@ edition = "2021"
         "Config should not be overwritten"
     );
 }
+
+#[test]
+fn init_emits_kind_docs_and_codegen_stub() {
+    // F1/F4 — a freshly auto-detected config that emits a release_unit block
+    // is born-correct: it documents the `kind` axis and leaves a commented
+    // `[codegen_edges]` stub. A hexagonal-cargo service triggers a snippet.
+    let repo = TestRepo::new();
+    repo.write_file(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"apps/services/aura/crates/*\"]\nresolver = \"2\"\n",
+    );
+    repo.write_file(
+        "apps/services/aura/crates/bin/Cargo.toml",
+        "[package]\nname = \"aura-bin\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    repo.write_file(
+        "apps/services/aura/crates/bin/src/main.rs",
+        "fn main() {}\n",
+    );
+    repo.write_file(
+        "apps/services/aura/crates/api/Cargo.toml",
+        "[package]\nname = \"aura-api\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+    );
+    repo.write_file(
+        "apps/services/aura/crates/api/src/lib.rs",
+        "pub fn api() {}\n",
+    );
+    repo.commit("seed hexagonal service");
+
+    let out = repo.run_belaf_command(&["init", "--ci", "--force", "--auto-detect"]);
+    assert!(
+        out.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let cfg = repo.read_file("belaf/config.toml");
+    // Unique phrases from MODEL_HEADER + CODEGEN_STUB (not the embedded default).
+    assert!(
+        cfg.contains("cascade-only node"),
+        "config must document the `kind` axis:\n{cfg}"
+    );
+    assert!(
+        cfg.contains("Extra-cargo"),
+        "config must include the codegen_edges stub:\n{cfg}"
+    );
+}

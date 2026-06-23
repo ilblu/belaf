@@ -227,6 +227,14 @@ pub fn detect_drift_from_report(
                 }
             }
         }
+        // F1 — a manifest-less `paths = [...]` unit (internal/ignore) explicitly
+        // declares the directories it owns; they count as covered so the drift
+        // detector doesn't flag e.g. `proto/` or `apps/services/e2e`.
+        if let super::VersionSource::PathsOnly(paths) = &r.unit.source {
+            for p in paths {
+                coverage.push(p.clone());
+            }
+        }
         for s in &r.unit.satellites {
             coverage.push(s.clone());
         }

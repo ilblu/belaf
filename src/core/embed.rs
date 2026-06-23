@@ -54,6 +54,8 @@ impl EmbeddedConfig {
             changelog: cfg.changelog,
             bump: cfg.bump,
             commit_attribution: cfg.commit_attribution,
+            binary_affecting: cfg.binary_affecting,
+            codegen_edges: cfg.codegen_edges,
             groups,
             bump_sources: cfg.bump_sources,
             release_units,

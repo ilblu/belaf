@@ -77,8 +77,6 @@ impl ReleaseEntry {
         } else {
             Some(format!("{prefix_trimmed}/v{previous_version}"))
         };
-        let is_prerelease = detect_prerelease(&new_version);
-
         Self {
             name,
             ecosystem: Ecosystem::classify(&ecosystem),
@@ -89,7 +87,7 @@ impl ReleaseEntry {
             tag_name,
             previous_tag,
             compare_url: None,
-            is_prerelease,
+            is_prerelease: false,
             changelog,
             contributors: Vec::new(),
             first_time_contributors: Vec::new(),
@@ -174,16 +172,17 @@ impl ReleaseEntry {
         self
     }
 
+    /// Set whether this release is a prerelease (F7/F11b) — computed
+    /// structurally from the version by the caller.
+    pub fn with_prerelease(mut self, is_prerelease: bool) -> Self {
+        self.is_prerelease = is_prerelease;
+        self
+    }
+
     pub fn with_statistics(mut self, statistics: ReleaseStatistics) -> Self {
         self.statistics = Some(statistics);
         self
     }
-}
-
-fn detect_prerelease(version: &str) -> bool {
-    let prerelease_markers = ["-alpha", "-beta", "-rc", "-dev", "-pre", "-snapshot"];
-    let v = version.to_lowercase();
-    prerelease_markers.iter().any(|m| v.contains(m))
 }
 
 #[cfg(test)]
@@ -304,11 +303,29 @@ mod tests {
     }
 
     #[test]
-    fn detect_prerelease_recognises_common_markers() {
-        assert!(detect_prerelease("1.0.0-alpha"));
-        assert!(detect_prerelease("2.3.4-beta.1"));
-        assert!(detect_prerelease("0.5.0-rc.2"));
-        assert!(!detect_prerelease("1.0.0"));
-        assert!(!detect_prerelease("2.0.0+build.123"));
+    fn release_entry_propagates_is_prerelease() {
+        // is_prerelease is set via the builder (computed structurally from the
+        // version, F7/F11b) rather than sniffed from the string.
+        let pre = ReleaseEntry::new(
+            "x".into(),
+            "cargo".into(),
+            "0.5.0".into(),
+            "0.6.0-canary.1".into(),
+            "minor".into(),
+            String::new(),
+            String::new(),
+        )
+        .with_prerelease(true);
+        assert!(pre.is_prerelease);
+        let stable = ReleaseEntry::new(
+            "x".into(),
+            "cargo".into(),
+            "0.5.0".into(),
+            "0.6.0".into(),
+            "minor".into(),
+            String::new(),
+            String::new(),
+        );
+        assert!(!stable.is_prerelease);
     }
 }

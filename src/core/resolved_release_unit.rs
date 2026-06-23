@@ -24,6 +24,28 @@ use crate::core::{
 /// particular semantics other than being cheaply copyable.
 pub type ReleaseUnitId = usize;
 
+/// How a unit participates in the release model (F1). Deliberately a
+/// separate axis from [`crate::core::release_unit::Visibility`]:
+/// `Visibility::Internal` means "versioned + in the manifest, just no git
+/// tag", whereas `UnitKind::Internal` means **no version, tag, release, or
+/// manifest entry at all** — a pure cascade node in the dependency graph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum UnitKind {
+    /// Released: versioned, tagged, emitted to the manifest. Root of a
+    /// dependency closure. The back-compat default.
+    #[default]
+    Deploy,
+
+    /// A named graph node that cascades to the `deploy` units depending on
+    /// it but is **never** versioned/tagged/released (e.g. internal library
+    /// crates, `proto/`). Participates in closures and path attribution.
+    Internal,
+
+    /// Skipped entirely — not a candidate, not a closure root, not traversed
+    /// into (e.g. flat test crates like `apps/services/e2e`).
+    Ignore,
+}
+
 #[derive(Debug)]
 pub struct ResolvedReleaseUnit {
     ident: ReleaseUnitId,
@@ -67,6 +89,14 @@ pub struct ResolvedReleaseUnit {
 
     /// This project's internal dependencies.
     pub internal_deps: Vec<Dependency>,
+
+    /// How this unit participates in the release model (F1). `Deploy` units
+    /// are versioned/tagged/released; `Internal` units are pure cascade
+    /// nodes; `Ignore` units are skipped entirely.
+    pub kind: UnitKind,
+
+    /// Per-unit bump-policy override (F11a). `None` = inherit global `[bump]`.
+    pub bump_override: Option<crate::core::release_unit::syntax::BumpOverrideConfig>,
 }
 
 impl ResolvedReleaseUnit {
@@ -160,6 +190,22 @@ pub struct ResolvedReleaseUnitBuilder {
     pub prefix: Option<RepoPathBuf>,
     pub rewriters: Vec<Box<dyn Rewriter>>,
     pub internal_deps: Vec<DependencyBuilder>,
+    /// See [`ResolvedReleaseUnit::kind`]. Defaults to `Deploy`.
+    pub kind: UnitKind,
+    /// Extra repo-relative path prefixes to include in `repo_paths` beyond
+    /// the unit's primary `prefix`. Used by multi-path units (e.g. a
+    /// `paths`-only internal unit covering several directories).
+    pub extra_includes: Vec<RepoPathBuf>,
+    /// Residual glob patterns (Tier-3, F4-Glob) for manifest-less units whose
+    /// `paths` aren't simple prefixes (e.g. `**/*.sql`). Compiled into
+    /// `repo_paths` at `finalize`.
+    pub extra_globs: Vec<String>,
+    /// When set, `finalize` does NOT add the `prefix` as an `Include` term —
+    /// the unit matches purely via `extra_globs`/`extra_includes`. Used by
+    /// glob-only `paths` units, where a prefix `Include` would over-match.
+    pub repo_paths_no_prefix_include: bool,
+    /// See [`ResolvedReleaseUnit::bump_override`].
+    pub bump_override: Option<crate::core::release_unit::syntax::BumpOverrideConfig>,
 }
 
 /// An in-process dependency. We haven't necessarily yet resolved references to
@@ -194,6 +240,11 @@ impl ResolvedReleaseUnitBuilder {
             prefix: None,
             rewriters: Vec::new(),
             internal_deps: Vec::new(),
+            kind: UnitKind::Deploy,
+            extra_includes: Vec::new(),
+            extra_globs: Vec::new(),
+            repo_paths_no_prefix_include: false,
+            bump_override: None,
         }
     }
 
@@ -225,6 +276,18 @@ impl ResolvedReleaseUnitBuilder {
             )
         })?;
 
+        let mut repo_paths = if self.repo_paths_no_prefix_include {
+            PathMatcher::new_globs_only()
+        } else {
+            PathMatcher::new_include(prefix.clone())
+        };
+        for extra in self.extra_includes {
+            repo_paths.add_include(extra);
+        }
+        for pattern in &self.extra_globs {
+            repo_paths.add_glob(pattern)?;
+        }
+
         Ok(ResolvedReleaseUnit {
             ident,
             qnames: self.qnames,
@@ -232,8 +295,10 @@ impl ResolvedReleaseUnitBuilder {
             version,
             prefix: prefix.clone(),
             rewriters: self.rewriters,
-            repo_paths: PathMatcher::new_include(prefix),
+            repo_paths,
             internal_deps,
+            kind: self.kind,
+            bump_override: self.bump_override,
         })
     }
 }

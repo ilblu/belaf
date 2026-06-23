@@ -3,6 +3,7 @@ pub mod error;
 
 pub mod cmd {
     pub mod changelog;
+    pub mod check;
     pub mod completions;
     pub mod dashboard;
     pub mod describe;
@@ -208,6 +209,13 @@ pub async fn execute(cli: Cli) -> Result<()> {
         }
         Commands::Doctor(args) => {
             let exit_code = cmd::doctor::run(args.json).await?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
+        Commands::Check(args) => {
+            let exit_code = cmd::check::run(args.message, args.range, args.ci)?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }

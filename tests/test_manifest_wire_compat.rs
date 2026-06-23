@@ -166,6 +166,12 @@ fn pipeline_cargo_workspace_emits_schema_valid_manifest() {
 #[test]
 fn pipeline_nested_submodule_outer_crate_emits_schema_valid_manifest() {
     fn mutate(repo: &TestRepo) {
+        // Tag the existing units as already-released so only the new feat is in
+        // the analysis window. Without tags, F5 would first-release every
+        // detected unit (incl. the vendored npm package), which is correct for
+        // a brand-new repo but not what this test isolates.
+        repo.tag("outer-v0.1.0");
+        repo.tag("vendored-mono@v0.1.0");
         repo.write_file("src/extra.rs", "pub fn extra() {}\n");
         repo.commit("feat: extend outer crate");
     }

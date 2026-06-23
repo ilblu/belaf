@@ -364,6 +364,7 @@ fn test_repo_history_n_commits() {
     let history = RepoHistory {
         commits: vec![CommitId(git2::Oid::zero()), CommitId(git2::Oid::zero())],
         boundary: None,
+        provenance: Default::default(),
     };
     assert_eq!(history.n_commits(), 2);
 }
@@ -373,6 +374,7 @@ fn test_repo_history_n_commits_empty() {
     let history = RepoHistory {
         commits: vec![],
         boundary: None,
+        provenance: Default::default(),
     };
     assert_eq!(history.n_commits(), 0);
 }
@@ -386,6 +388,7 @@ fn test_repo_history_with_release_tag() {
             tag_name: "test-v1.0.0".to_string(),
             version: semver::Version::new(1, 0, 0),
         }),
+        provenance: Default::default(),
     };
     assert!(history.has_release_tag());
     assert!(history.boundary_commit().is_some());
@@ -402,6 +405,7 @@ fn test_repo_history_with_baseline() {
         boundary: Some(HistoryBoundary::Baseline {
             commit: CommitId(git2::Oid::zero()),
         }),
+        provenance: Default::default(),
     };
     assert!(!history.has_release_tag());
     assert!(history.boundary_commit().is_some());
@@ -413,6 +417,7 @@ fn test_repo_history_no_boundary() {
     let history = RepoHistory {
         commits: vec![],
         boundary: None,
+        provenance: Default::default(),
     };
     assert!(!history.has_release_tag());
     assert!(history.boundary_commit().is_none());
@@ -861,4 +866,48 @@ fn find_latest_tag_maven_slash_form() {
         .unwrap()
         .expect("maven slash-form tag must be recognised");
     assert_eq!(version, semver::Version::new(1, 2, 3));
+}
+
+// ---------------------------------------------------------------------------
+// F3 — binary-affecting path filter.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn is_binary_affecting_excludes_segments_suffixes_names() {
+    let cfg = crate::core::config::syntax::BinaryAffectingConfiguration {
+        exclude_segments: vec!["tests".into(), "docs".into(), "examples".into()],
+        exclude_suffixes: vec![".md".into()],
+        exclude_names: vec!["CHANGELOG.md".into()],
+    };
+    // Affecting:
+    assert!(is_binary_affecting(b"src/lib.rs", &cfg));
+    assert!(is_binary_affecting(b"Cargo.toml", &cfg));
+    // `examples` only matches a *whole segment*, not a substring:
+    assert!(is_binary_affecting(b"src/examples_helper.rs", &cfg));
+    // Not affecting:
+    assert!(!is_binary_affecting(b"tests/it.rs", &cfg));
+    assert!(!is_binary_affecting(b"crate/docs/guide.rs", &cfg));
+    assert!(!is_binary_affecting(b"README.md", &cfg)); // .md suffix
+    assert!(!is_binary_affecting(b"CHANGELOG.md", &cfg)); // exact name
+    assert!(!is_binary_affecting(b"examples/demo.rs", &cfg));
+}
+
+// ---------------------------------------------------------------------------
+// F4-Glob (Tier-3) — residual glob matching on PathMatcher.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn path_matcher_globs_match_additively() {
+    let mut m = PathMatcher::new_globs_only();
+    m.add_glob("**/*.sql").unwrap();
+    assert!(m.has_globs());
+    assert!(m.repo_path_matches(RepoPath::new(b"db/migrations/001.sql")));
+    assert!(!m.repo_path_matches(RepoPath::new(b"src/lib.rs")));
+
+    // Prefix + glob coexist: a path matches if EITHER hits.
+    let mut m2 = PathMatcher::new_include(RepoPathBuf::new(b"src/"));
+    m2.add_glob("**/*.sql").unwrap();
+    assert!(m2.repo_path_matches(RepoPath::new(b"src/lib.rs"))); // prefix
+    assert!(m2.repo_path_matches(RepoPath::new(b"other/x.sql"))); // glob
+    assert!(!m2.repo_path_matches(RepoPath::new(b"other/x.rs")));
 }

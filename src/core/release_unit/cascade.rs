@@ -203,6 +203,8 @@ mod tests {
                     source: src.to_string(),
                     bump,
                 }),
+                kind: Default::default(),
+                bump_override: None,
             },
             origin: ResolveOrigin::Explicit { config_index: 0 },
         }

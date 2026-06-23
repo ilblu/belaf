@@ -113,6 +113,12 @@ pub struct Commit {
     pub extra: Option<Value>,
     pub remote: Option<RemoteContributor>,
     pub raw_message: Option<String>,
+    /// F7 — closure provenance. When this commit reached a deploy unit's
+    /// changelog via a dependency-closure member (an internal crate) rather
+    /// than the unit's own paths, this names that crate so the template can
+    /// render a `via <crate>` prefix. `None` for the unit's own commits.
+    #[serde(default)]
+    pub via: Option<String>,
 }
 
 impl From<String> for Commit {
@@ -358,8 +364,9 @@ impl Serialize for Commit {
             }
         }
 
-        let mut commit = serializer.serialize_struct("Commit", 15)?;
+        let mut commit = serializer.serialize_struct("Commit", 16)?;
         commit.serialize_field("id", &self.id)?;
+        commit.serialize_field("via", &self.via)?;
         if let Some(conv) = &self.conv {
             commit.serialize_field("message", &conv.description)?;
             commit.serialize_field("body", &conv.body)?;

@@ -182,6 +182,7 @@ mod tests {
             old_version: old.to_string(),
             new_version: new.to_string(),
             bump_type: bump.to_string(),
+            is_prerelease: false,
             commits: vec![],
             ecosystem: Ecosystem::classify("cargo"),
             cached_changelog: None,

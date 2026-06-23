@@ -43,6 +43,10 @@ pub struct ReleaseUnitCandidate {
     pub commits: Vec<Commit>,
     pub commit_count: usize,
     pub suggested_bump: BumpRecommendation,
+    /// Fully-computed prerelease version (F11b), e.g. `0.6.0-beta.3`, when the
+    /// unit has a `prerelease` override. `None` = stable release (apply
+    /// `suggested_bump` normally).
+    pub prerelease_version: Option<String>,
     pub ecosystem: Ecosystem,
 }
 
@@ -90,6 +94,60 @@ type ChangelogGenerationResult = (
     HashMap<String, String>,
     HashMap<String, Vec<Commit>>,
 );
+
+/// F11b — compute a prerelease version (`<base>-<label>.<N>`).
+///
+/// `stable` is the last stable release version (the prerelease unit's
+/// boundary); `level` is the bump computed from commits since stable; `current`
+/// is the unit's current version (possibly already a prerelease of this
+/// base/label). The counter resets to 1 when the base or label changes,
+/// otherwise increments. Semver-only — non-semver current versions error.
+fn compute_prerelease_version(
+    label: &str,
+    stable: Option<&semver::Version>,
+    level: BumpRecommendation,
+    current: &str,
+) -> Result<String> {
+    // Validate the label is a usable semver prerelease identifier.
+    semver::Prerelease::new(&format!("{label}.1"))
+        .with_context(|| format!("invalid prerelease label `{label}`"))?;
+
+    let current_sv = semver::Version::parse(current).with_context(|| {
+        format!("prerelease requires a semver version; `{current}` is not semver")
+    })?;
+    let current_base = semver::Version::new(current_sv.major, current_sv.minor, current_sv.patch);
+
+    // Base on the last stable release (counts accumulated changes once), else
+    // fall back to the current base.
+    let base_src = stable.cloned().unwrap_or_else(|| current_base.clone());
+    let new_base = match level {
+        BumpRecommendation::Major => semver::Version::new(base_src.major + 1, 0, 0),
+        BumpRecommendation::Minor => semver::Version::new(base_src.major, base_src.minor + 1, 0),
+        // `None` shouldn't reach here (F5 floors to patch); treat as patch.
+        BumpRecommendation::Patch | BumpRecommendation::None => {
+            semver::Version::new(base_src.major, base_src.minor, base_src.patch + 1)
+        }
+    };
+
+    // Counter: continue iff current is a prerelease of the same base + label.
+    let counter = if current_base == new_base && !current_sv.pre.is_empty() {
+        prerelease_counter(current_sv.pre.as_str(), label)
+            .map(|n| n + 1)
+            .unwrap_or(1)
+    } else {
+        1
+    };
+
+    Ok(format!(
+        "{}.{}.{}-{label}.{counter}",
+        new_base.major, new_base.minor, new_base.patch
+    ))
+}
+
+/// Extract the numeric counter from a `<label>.<N>` prerelease string.
+fn prerelease_counter(pre: &str, label: &str) -> Option<u64> {
+    pre.strip_prefix(label)?.strip_prefix('.')?.parse().ok()
+}
 
 pub struct PrepareContext<'a> {
     pub sess: &'a mut AppSession,
@@ -167,6 +225,15 @@ impl<'a> PrepareContext<'a> {
 
         for ident in &idents {
             let unit = self.sess.graph().lookup(*ident);
+
+            // F1 — only `deploy` units are release candidates. `internal`
+            // (cascade-only) and `ignore` units are never versioned/tagged/
+            // released; they participate in the graph for the closure cascade
+            // (WS-3) but must never produce a manifest entry.
+            if unit.kind != crate::core::resolved_release_unit::UnitKind::Deploy {
+                continue;
+            }
+
             let history = histories.lookup(*ident);
             let n_commits = history.n_commits();
 
@@ -181,7 +248,16 @@ impl<'a> PrepareContext<'a> {
             let commits: Vec<Commit> = history
                 .commits()
                 .into_iter()
-                .filter_map(|cid| self.sess.repo.get_commit_details(*cid).ok())
+                .filter_map(|cid| {
+                    let mut commit = self.sess.repo.get_commit_details(*cid).ok()?;
+                    // F7 — annotate closure-propagated commits with the internal
+                    // crate they came from, for the `via <crate>` changelog prefix.
+                    if let Some(member) = history.provenance_for(*cid) {
+                        commit.via =
+                            Some(self.sess.graph().lookup(member).user_facing_name.clone());
+                    }
+                    Some(commit)
+                })
                 .collect();
 
             let current_version = unit.version.to_string();
@@ -193,10 +269,56 @@ impl<'a> PrepareContext<'a> {
                 )
             })?;
 
-            let bump_config = BumpConfig::from_user_config(&self.bump_config);
-            let suggested_bump = analysis
+            // F11a — effective bump policy = global `[bump]` ⊕ the per-unit
+            // `[release_unit.<name>.bump]` override (field-wise, per-unit wins).
+            let mut bump_config = BumpConfig::from_user_config(&self.bump_config);
+            let mut prerelease: Option<String> = None;
+            if let Some(ov) = &unit.bump_override {
+                if let Some(v) = ov.features_always_bump_minor {
+                    bump_config.features_always_bump_minor = v;
+                }
+                if let Some(v) = ov.breaking_always_bump_major {
+                    bump_config.breaking_always_bump_major = v;
+                }
+                prerelease = ov.prerelease.clone();
+            }
+            // F5 — every commit collected here is binary-affecting (the closure
+            // collection only keeps path-hits through the binary filter), so a
+            // unit that reached this point must ship at least a patch even if no
+            // commit carried a bumpable type (all `chore`/`refactor`). Floor
+            // before `apply_config` so the pre-1.0 downgrade can't drop it.
+            let mut suggested_bump = analysis
                 .recommendation
+                .with_patch_floor()
                 .apply_config(&bump_config, Some(&current_version));
+
+            // F11a — cap the level at `max_bump` (never exceed it, even on
+            // feat/breaking). Combined with the F5 floor → interval [patch, cap].
+            if let Some(max) = unit
+                .bump_override
+                .as_ref()
+                .and_then(|o| o.max_bump.as_deref())
+            {
+                if let Some(cap) = BumpRecommendation::from_string(max) {
+                    suggested_bump = suggested_bump.cap_at(cap);
+                }
+            }
+
+            // F11b — compute the prerelease version (`<base>-<label>.<N>`). The
+            // base comes from the last STABLE tag (the unit's boundary is the
+            // last stable tag for prerelease units, see analyze_histories), so
+            // changes accumulated across betas are counted once; the counter
+            // continues iff the current version is already a prerelease of the
+            // same base + label.
+            let prerelease_version = match &prerelease {
+                Some(label) => Some(compute_prerelease_version(
+                    label,
+                    history.release_version(),
+                    suggested_bump,
+                    &current_version,
+                )?),
+                None => None,
+            };
 
             info!("{}: {}", unit.user_facing_name, analysis.summary());
 
@@ -214,6 +336,7 @@ impl<'a> PrepareContext<'a> {
                 commits,
                 commit_count: n_commits,
                 suggested_bump,
+                prerelease_version,
                 ecosystem,
             });
         }
@@ -262,13 +385,38 @@ impl<'a> PrepareContext<'a> {
 
             let proj_mut = self.sess.graph_mut().lookup_mut(selection.candidate.ident);
 
-            bump_scheme.apply(&mut proj_mut.version).with_context(|| {
-                format!(
-                    "failed to apply version bump to {}",
-                    proj_mut.user_facing_name
-                )
-            })?;
+            if let Some(pre_ver) = &selection.candidate.prerelease_version {
+                // F11b — apply the precomputed prerelease version directly.
+                let new = proj_mut.version.parse_like(pre_ver).with_context(|| {
+                    format!(
+                        "invalid prerelease version `{}` for {}",
+                        pre_ver, proj_mut.user_facing_name
+                    )
+                })?;
+                // Monotonicity guard (per-ecosystem ordering, incl. prerelease):
+                // the new version must be strictly greater than the current one.
+                if new.partial_cmp(&proj_mut.version) != Some(std::cmp::Ordering::Greater) {
+                    return Err(anyhow::anyhow!(
+                        "prerelease version `{}` for {} is not greater than current `{}` \
+                         — check the prerelease label/counter",
+                        pre_ver,
+                        proj_mut.user_facing_name,
+                        old_version
+                    ));
+                }
+                proj_mut.version = new;
+            } else {
+                bump_scheme.apply(&mut proj_mut.version).with_context(|| {
+                    format!(
+                        "failed to apply version bump to {}",
+                        proj_mut.user_facing_name
+                    )
+                })?;
+            }
 
+            // F7/F11b — compute prerelease from the STRUCTURED version (not a
+            // string-marker check), so arbitrary labels classify correctly.
+            let is_prerelease = proj_mut.version.is_prerelease();
             let new_version = proj_mut.version.to_string();
 
             info!(
@@ -291,6 +439,7 @@ impl<'a> PrepareContext<'a> {
                 old_version,
                 new_version,
                 bump_type: bump_scheme_text.to_string(),
+                is_prerelease,
                 commits: selection.candidate.commits.clone(),
                 ecosystem: selection.candidate.ecosystem.clone(),
                 cached_changelog: selection.cached_changelog.clone(),
@@ -314,6 +463,9 @@ pub struct SelectedReleaseUnit {
     pub old_version: String,
     pub new_version: String,
     pub bump_type: String,
+    /// Whether `new_version` carries a prerelease marker, computed from the
+    /// structured version (F7/F11b) rather than a string-marker heuristic.
+    pub is_prerelease: bool,
     pub commits: Vec<Commit>,
     pub ecosystem: Ecosystem,
     pub cached_changelog: Option<String>,
@@ -510,6 +662,7 @@ impl<'a> ReleasePipeline<'a> {
                 changelog_content,
                 project.prefix.clone(),
             )
+            .with_prerelease(project.is_prerelease)
             .with_contributors(contributors)
             .with_first_time_contributors(first_time_contributors)
             .with_statistics(statistics);
@@ -954,3 +1107,79 @@ pub use changelog_gen::{
 pub use github::{extract_github_remote, load_github_token, GitHubRemoteInfo};
 
 use github::parse_github_url;
+
+#[cfg(test)]
+mod prerelease_tests {
+    use super::{compute_prerelease_version, prerelease_counter};
+    use crate::core::bump::BumpRecommendation;
+
+    fn sv(s: &str) -> semver::Version {
+        semver::Version::parse(s).unwrap()
+    }
+
+    #[test]
+    fn first_beta_from_stable() {
+        // F11b — base from the last stable tag + level; counter starts at 1.
+        let v = compute_prerelease_version(
+            "beta",
+            Some(&sv("0.5.0")),
+            BumpRecommendation::Minor,
+            "0.5.0",
+        )
+        .unwrap();
+        assert_eq!(v, "0.6.0-beta.1");
+    }
+
+    #[test]
+    fn counter_continues_same_base_and_label() {
+        // base 0.6.0 unchanged + same label → increment counter.
+        let v = compute_prerelease_version(
+            "beta",
+            Some(&sv("0.5.0")),
+            BumpRecommendation::Minor,
+            "0.6.0-beta.2",
+        )
+        .unwrap();
+        assert_eq!(v, "0.6.0-beta.3");
+    }
+
+    #[test]
+    fn counter_resets_on_base_rise() {
+        // A breaking change raises the base (1.x) → counter resets to 1.
+        let v = compute_prerelease_version(
+            "beta",
+            Some(&sv("1.1.0")),
+            BumpRecommendation::Major,
+            "1.1.0-beta.4",
+        )
+        .unwrap();
+        assert_eq!(v, "2.0.0-beta.1");
+    }
+
+    #[test]
+    fn counter_resets_on_label_change() {
+        // alpha → beta keeps the base but resets the counter (not alpha's).
+        let v = compute_prerelease_version(
+            "beta",
+            Some(&sv("0.5.0")),
+            BumpRecommendation::Minor,
+            "0.6.0-alpha.2",
+        )
+        .unwrap();
+        assert_eq!(v, "0.6.0-beta.1");
+    }
+
+    #[test]
+    fn non_semver_current_errors() {
+        assert!(
+            compute_prerelease_version("beta", None, BumpRecommendation::Patch, "1.0.0a1").is_err()
+        );
+    }
+
+    #[test]
+    fn counter_parsing() {
+        assert_eq!(prerelease_counter("beta.3", "beta"), Some(3));
+        assert_eq!(prerelease_counter("alpha.1", "beta"), None);
+        assert_eq!(prerelease_counter("beta", "beta"), None);
+    }
+}

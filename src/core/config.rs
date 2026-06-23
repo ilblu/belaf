@@ -24,6 +24,17 @@ pub mod syntax {
 
         pub commit_attribution: CommitAttributionConfiguration,
 
+        /// `[binary_affecting]` (F3) — path-exclusion lists controlling which
+        /// changes count toward a bump. Defaults from the embedded config.
+        #[serde(default)]
+        pub binary_affecting: BinaryAffectingConfiguration,
+
+        /// `[codegen_edges]` (F4) — extra-cargo "this path feeds these crates"
+        /// edges, e.g. `"proto/**" = ["clikd-grpc", "clikd-events"]`. A change
+        /// under the glob cascades as if the listed crates changed.
+        #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+        pub codegen_edges: HashMap<String, Vec<String>>,
+
         /// `[group.<id>]` — bundles projects that release together with
         /// synchronised versions. Named-entry form only; the parser
         /// rejects an array-of-tables `[[group]]` shape.
@@ -234,6 +245,27 @@ pub mod syntax {
         pub package_scopes: HashMap<String, Vec<String>>,
     }
 
+    /// `[binary_affecting]` (F3) — which changed paths count as affecting the
+    /// build artifact. A commit that only touches *non*-binary-affecting files
+    /// (tests, docs, …) does not trigger a bump. Defaults live in the embedded
+    /// `default.toml`; a user's `belaf/config.toml` overrides each list.
+    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    pub struct BinaryAffectingConfiguration {
+        /// Full path segments that are NOT binary-affecting (matched as whole
+        /// `/segment/` components, never substrings) — e.g. `tests`, `benches`.
+        #[serde(default)]
+        pub exclude_segments: Vec<String>,
+
+        /// File-name suffixes that are NOT binary-affecting — e.g. `.md`.
+        #[serde(default)]
+        pub exclude_suffixes: Vec<String>,
+
+        /// Exact repo-relative file names that are NOT binary-affecting — e.g.
+        /// `CHANGELOG.md`, `LICENSE`.
+        #[serde(default)]
+        pub exclude_names: Vec<String>,
+    }
+
     #[derive(Clone, Debug, Deserialize, Serialize)]
     pub struct RepoConfiguration {
         #[serde(default)]
@@ -264,6 +296,8 @@ pub struct ConfigurationFile {
     pub changelog: syntax::ChangelogConfiguration,
     pub bump: syntax::BumpConfiguration,
     pub commit_attribution: syntax::CommitAttributionConfiguration,
+    pub binary_affecting: syntax::BinaryAffectingConfiguration,
+    pub codegen_edges: std::collections::HashMap<String, Vec<String>>,
     pub groups: Vec<syntax::ResolvedGroupConfig>,
     pub bump_sources: Vec<syntax::BumpSourceConfig>,
     pub release_units: Vec<NamedReleaseUnitConfig>,
@@ -317,6 +351,8 @@ impl ConfigurationFile {
             changelog: cfg.changelog,
             bump: cfg.bump,
             commit_attribution: cfg.commit_attribution,
+            binary_affecting: cfg.binary_affecting,
+            codegen_edges: cfg.codegen_edges,
             groups,
             bump_sources: cfg.bump_sources,
             release_units,
@@ -351,6 +387,8 @@ impl ConfigurationFile {
             changelog: self.changelog,
             bump: self.bump,
             commit_attribution: self.commit_attribution,
+            binary_affecting: self.binary_affecting,
+            codegen_edges: self.codegen_edges,
             groups,
             bump_sources: self.bump_sources,
             release_units,

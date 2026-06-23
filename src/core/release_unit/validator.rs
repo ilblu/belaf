@@ -215,6 +215,12 @@ pub enum ResolverError {
         "release_unit `{unit}`: partial-override entries must set at least one override field (`tag_format`, `visibility`, `satellites`, `cascade_from`). An empty block has no effect."
     )]
     PartialOverrideEmpty { unit: String },
+
+    /// A manifest-less `paths = [...]` unit (F1) is misused: either combined
+    /// with a `manifests`/`external` source, or declared on a `deploy` unit
+    /// (paths-only is only for `kind = "internal"` / `"ignore"` cascade nodes).
+    #[error("release_unit `{unit}`: {reason}")]
+    PathsOnlyInvalid { unit: String, reason: &'static str },
 }
 
 impl ResolverError {
@@ -257,6 +263,7 @@ impl ResolverError {
             Self::GlobUnitHasExternal { .. } => "glob_unit_has_external",
             Self::GlobUnitHasExplicitManifests { .. } => "glob_unit_has_explicit_manifests",
             Self::GlobUnitMissingNameTemplate { .. } => "glob_unit_missing_name_template",
+            Self::PathsOnlyInvalid { .. } => "paths_only_invalid",
         }
     }
 }

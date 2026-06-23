@@ -102,6 +102,12 @@ pub enum Commands {
         long_about = "Inspect the current state and report what's healthy / broken. Checks:\n  • Auth state (keyring token present? expired? still valid against the API?)\n  • Config (belaf/config.toml present? parses?)\n  • Repository (inside a git repo? clean tree?)\n  • Ecosystems (how many ReleaseUnits would auto-detect find?)\n  • API connectivity (api.belaf.dev reachable?)\n  • Environment (BELAF_* overrides, CI detection)\n\nDefault output is human-readable. Pass --json for an agent-friendly\nstructured payload (status field per check, plus an overall `ok` bool)."
     )]
     Doctor(DoctorArgs),
+
+    #[command(
+        about = "Validate commit labels against the release model",
+        long_about = "Check that commits are labelled consistently with the release model (F8).\n\nValidates:\n  • the conventional commit scope names a known release unit (deploy or internal)\n  • the commit's binary-affecting changed paths fall within that unit's\n    dependency closure (its own crate, or an internal crate it cascades through)\n\nThis only validates the *label* — it never affects what releases. A failing\ncheck blocks a mislabeled PR, never a correct release.\n\nModes:\n  • --message <MSG>   validate a single message (commit-msg hook; scope only)\n  • --range <A>..<B>  validate every commit in the range (CI)\n  • (default)         validate HEAD\n\nUse --ci to fail (exit 1) on any violation; without it, violations are warnings."
+    )]
+    Check(CheckArgs),
 }
 
 #[derive(Args)]
@@ -153,6 +159,30 @@ pub struct DoctorArgs {
         help = "Emit a structured JSON payload instead of human-readable text."
     )]
     pub json: bool,
+}
+
+#[derive(Args)]
+pub struct CheckArgs {
+    #[arg(
+        long,
+        value_name = "MSG",
+        conflicts_with = "range",
+        help = "Validate a single commit message (commit-msg hook). Scope-only — no diff is available yet."
+    )]
+    pub message: Option<String>,
+
+    #[arg(
+        long,
+        value_name = "RANGE",
+        help = "Git commit range to validate, e.g. `origin/main..HEAD`. Defaults to HEAD."
+    )]
+    pub range: Option<String>,
+
+    #[arg(
+        long,
+        help = "Fail (exit 1) on any violation. Without this, violations are reported as warnings (exit 0)."
+    )]
+    pub ci: bool,
 }
 
 #[derive(Subcommand)]

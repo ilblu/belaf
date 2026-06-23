@@ -99,6 +99,14 @@ impl DetectionCounters {
 const AUTO_DETECT_MARKER: &str =
     "# belaf:auto-detect-marker (do not remove — used for idempotency)";
 
+/// F1/F4 — born-correct model documentation emitted into freshly-detected
+/// configs. Auto-detect can't *classify* units (deploy/internal/ignore is a
+/// human design call), so it documents the `kind` axis and leaves a
+/// `[codegen_edges]` stub instead of guessing.
+const MODEL_HEADER: &str = "\n# Each unit below defaults to `kind = \"deploy\"` (versioned, tagged, released).\n# Add `kind = \"internal\"` to make a unit a cascade-only node — its changes bump\n# the deploy units that depend on it, but it is never released (e.g. internal\n# library crates, generated schemas). Add `kind = \"ignore\"` to exclude a unit\n# entirely (e.g. flat test crates).\n";
+
+const CODEGEN_STUB: &str = "\n# Extra-cargo \"this path feeds these crates\" edges (F4). A change under the\n# glob cascades as if the listed crates changed (e.g. protobuf schemas compiled\n# by a build.rs that `cargo metadata` cannot see). Uncomment + adjust:\n# [codegen_edges]\n# \"proto/**\" = [\"my-grpc-crate\", \"my-events-crate\"]\n";
+
 /// Old single-shot entry point — equivalent to running with no
 /// exclusions and no cascade overrides. Kept as a stable public
 /// surface for `--ci --auto-detect` and existing integration tests.
@@ -244,7 +252,7 @@ pub fn run_with_cascade(
     let prefixed_snippet = if snippet.is_empty() {
         snippet
     } else {
-        format!("\n{AUTO_DETECT_MARKER}\n{snippet}")
+        format!("\n{AUTO_DETECT_MARKER}\n{MODEL_HEADER}{snippet}{CODEGEN_STUB}")
     };
 
     AutoDetectResult {

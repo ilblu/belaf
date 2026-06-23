@@ -278,9 +278,13 @@ strategy = "scope_first"
 scope_matching = "smart"
 "##;
     write_custom_config(&repo, config);
+    // Tag both units so the analysis window excludes the seed commit — only the
+    // feat below is in-window.
+    repo.tag("api-v0.1.0");
+    repo.tag("web-v0.1.0");
 
     repo.write_file("crates/web/src/feature.rs", "pub fn feature() {}");
-    repo.commit("feat(api): add feature with api scope but web file change");
+    repo.commit("feat(api): api scope but only touches web");
 
     let output = repo.run_belaf_command(&["status"]);
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -290,9 +294,16 @@ scope_matching = "smart"
         "Command failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // F-decouple (F6): WHETHER/attribution is PATH-based, not scope-based. The
+    // commit names scope `api` but touches only web's source, so it belongs to
+    // `web` — the `scope_first` config no longer makes scope override the path.
     assert!(
-        stdout.contains("api"),
-        "With scope_first strategy, commit should be attributed to 'api' based on scope, got: {stdout}"
+        stdout.contains("web: 1 relevant commit"),
+        "the commit touched web's path → web must get it; got: {stdout}"
+    );
+    assert!(
+        !stdout.contains("api: 1 relevant commit"),
+        "scope `api` must NOT pull the commit onto api (no path change there); got: {stdout}"
     );
 }
 

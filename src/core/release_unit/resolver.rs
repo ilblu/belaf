@@ -46,6 +46,13 @@ pub struct PartialOverrideSpec {
     pub visibility: Option<Visibility>,
     pub satellites: Vec<RepoPathBuf>,
     pub cascade_from: Option<CascadeRule>,
+    /// `kind` override (F1) — lets a bare `[release_unit.<name>] kind = "..."`
+    /// reclassify an auto-detected unit as internal/ignore. `None` = leave the
+    /// discovered unit's default (`Deploy`).
+    pub kind: Option<crate::core::resolved_release_unit::UnitKind>,
+
+    /// Per-unit bump-policy override (F11a) decorating an auto-detected unit.
+    pub bump_override: Option<super::syntax::BumpOverrideConfig>,
 }
 
 /// Public API: resolve the parsed config into a list of
@@ -77,14 +84,18 @@ pub fn resolve(
             partial_overrides.push(spec);
             continue;
         }
-        let ecosystem_str =
-            named
-                .config
-                .ecosystem
-                .as_deref()
-                .ok_or_else(|| ResolverError::SourceNotSet {
+        let ecosystem_str = match named.config.ecosystem.as_deref() {
+            Some(e) => e,
+            // A manifest-less `paths = [...]` unit (F1) needs no ecosystem —
+            // it is never tagged/released, so the value is irrelevant. Default
+            // to "cargo" so downstream parsing has a concrete value.
+            None if !named.config.paths.is_empty() => "cargo",
+            None => {
+                return Err(ResolverError::SourceNotSet {
                     unit: named.name.clone(),
-                })?;
+                })
+            }
+        };
         let unit = convert_explicit(&named.name, ecosystem_str, &named.config, repo)?;
         resolved.push(ResolvedReleaseUnit {
             unit,
@@ -201,6 +212,8 @@ fn validate_partial_override(
         Some("fallback_manifests")
     } else if cfg.name.is_some() {
         Some("name")
+    } else if !cfg.paths.is_empty() {
+        Some("paths")
     } else {
         None
     };
@@ -222,10 +235,14 @@ fn validate_partial_override(
         .map(|s| parse_repo_path(name, s))
         .collect::<Result<Vec<_>, _>>()?;
 
+    let kind = parse_kind(name, cfg.kind.as_deref())?;
+
     let has_any_override = cfg.tag_format.is_some()
         || cfg.visibility.is_some()
         || !cfg.satellites.is_empty()
-        || cfg.cascade_from.is_some();
+        || cfg.cascade_from.is_some()
+        || cfg.kind.is_some()
+        || cfg.bump.is_some();
     if !has_any_override {
         return Err(ResolverError::PartialOverrideEmpty {
             unit: name.to_string(),
@@ -242,6 +259,8 @@ fn validate_partial_override(
         visibility: cfg.visibility.as_deref().map(|_| visibility),
         satellites,
         cascade_from,
+        kind: cfg.kind.as_deref().map(|_| kind),
+        bump_override: cfg.bump.clone(),
     })
 }
 
@@ -302,6 +321,8 @@ pub fn resolve_partial_against_discovered(
             tag_format: spec.tag_format.clone(),
             visibility: spec.visibility.unwrap_or_default(),
             cascade_from: spec.cascade_from.clone(),
+            kind: spec.kind.unwrap_or_default(),
+            bump_override: spec.bump_override.clone(),
         };
 
         out.push(ResolvedReleaseUnit {
@@ -344,8 +365,11 @@ fn convert_explicit(
     }
 
     let ecosystem = parse_ecosystem(ecosystem_str);
+    let kind = parse_kind(name, cfg.kind.as_deref())?;
 
-    // Source: exactly one of manifests / external must be set.
+    // Source: a manifest-less `paths = [...]` unit (F1 — internal/ignore
+    // cascade nodes), OR exactly one of manifests / external.
+    let paths_set = !cfg.paths.is_empty();
     let manifests_set =
         matches!(cfg.manifests, Some(ManifestList::Explicit(ref m)) if !m.is_empty());
     let templates_set = matches!(cfg.manifests, Some(ManifestList::Templates(_)));
@@ -358,18 +382,43 @@ fn convert_explicit(
         });
     }
 
-    let source = match (manifests_set, external_set) {
-        (true, true) => {
+    if paths_set {
+        if manifests_set || external_set {
+            return Err(ResolverError::PathsOnlyInvalid {
+                unit: name.to_string(),
+                reason: "`paths = [...]` is mutually exclusive with `manifests`/`external`",
+            });
+        }
+        if kind == crate::core::resolved_release_unit::UnitKind::Deploy {
+            return Err(ResolverError::PathsOnlyInvalid {
+                unit: name.to_string(),
+                reason: "`paths = [...]` (manifest-less) requires `kind = \"internal\"` or `\"ignore\"` \
+                         — a `deploy` unit must declare a `manifests`/`external` version source",
+            });
+        }
+    }
+
+    let source = match (paths_set, manifests_set, external_set) {
+        // Manifest-less paths-only unit: just records the owned directories.
+        (true, _, _) => {
+            let paths = cfg
+                .paths
+                .iter()
+                .map(|p| parse_repo_path(name, p))
+                .collect::<Result<Vec<_>, _>>()?;
+            VersionSource::PathsOnly(paths)
+        }
+        (false, true, true) => {
             return Err(ResolverError::SourceBothSet {
                 unit: name.to_string(),
             });
         }
-        (false, false) => {
+        (false, false, false) => {
             return Err(ResolverError::SourceNotSet {
                 unit: name.to_string(),
             });
         }
-        (true, false) => {
+        (false, true, false) => {
             let Some(ManifestList::Explicit(manifests_cfg)) = &cfg.manifests else {
                 unreachable!("manifests_set implies Explicit");
             };
@@ -382,7 +431,7 @@ fn convert_explicit(
             )?;
             VersionSource::Manifests(manifests)
         }
-        (false, true) => {
+        (false, false, true) => {
             let ext_cfg = cfg.external.as_ref().unwrap();
             let cwd = match &ext_cfg.cwd {
                 Some(s) => Some(parse_repo_path(name, s)?),
@@ -419,6 +468,8 @@ fn convert_explicit(
         tag_format: cfg.tag_format.clone(),
         visibility,
         cascade_from,
+        kind,
+        bump_override: cfg.bump.clone(),
     })
 }
 
@@ -527,12 +578,31 @@ fn expand_glob(
             .map(|s| substitute(glob_idx, s, &ctx))
             .collect::<Result<Vec<_>, _>>()?;
 
-        let chosen_manifest = pick_first_existing(
+        // F9 — glob soft-skip: a directory that matches the glob pattern but
+        // carries none of the expected manifests/fallbacks is simply not a unit
+        // of this shape (e.g. `apps/services/e2e`, a flat test crate, matched by
+        // `apps/services/*` whose template expects `crates/bin/Cargo.toml`).
+        // Skip it instead of hard-erroring the whole resolve — but log loudly,
+        // so a real service silently vanishing from releases stays observable.
+        // Any *other* resolver error still propagates.
+        let chosen_manifest = match pick_first_existing(
             &unit_name,
             &manifests_paths_templated,
             &fallback_paths_templated,
             repo,
-        )?;
+        ) {
+            Ok(m) => m,
+            Err(ResolverError::AllManifestsAndFallbacksMissing { tried, .. }) => {
+                tracing::warn!(
+                    "release_unit `{config_key}`: glob match `{}` has none of the \
+                     expected manifests (tried: {}) — skipping (not a unit of this shape)",
+                    matched_repopath.escaped(),
+                    tried.join(", "),
+                );
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
 
         let cfg_ecosystem =
             cfg.ecosystem
@@ -565,6 +635,7 @@ fn expand_glob(
             .collect::<Result<Vec<_>, _>>()?;
 
         let visibility = parse_visibility(&unit_name, cfg.visibility.as_deref())?;
+        let kind = parse_kind(&unit_name, cfg.kind.as_deref())?;
         let cascade_from = match &cfg.cascade_from {
             Some(c) => Some(parse_cascade_rule(&unit_name, c)?),
             None => None,
@@ -578,6 +649,8 @@ fn expand_glob(
             tag_format: cfg.tag_format.clone(),
             visibility,
             cascade_from,
+            kind,
+            bump_override: cfg.bump.clone(),
         };
 
         units.push(ResolvedReleaseUnit {
@@ -907,6 +980,29 @@ fn parse_visibility(unit_name: &str, raw: Option<&str>) -> Result<Visibility, Re
     }
 }
 
+/// Parse the `kind = "deploy" | "internal" | "ignore"` field (F1). Defaults
+/// to `Deploy` when unset (back-compat).
+fn parse_kind(
+    unit_name: &str,
+    raw: Option<&str>,
+) -> Result<crate::core::resolved_release_unit::UnitKind, ResolverError> {
+    use crate::core::resolved_release_unit::UnitKind;
+    match raw {
+        None => Ok(UnitKind::default()),
+        Some(s) => match s.to_lowercase().as_str() {
+            "deploy" => Ok(UnitKind::Deploy),
+            "internal" => Ok(UnitKind::Internal),
+            "ignore" => Ok(UnitKind::Ignore),
+            _ => Err(ResolverError::UnknownEnumValue {
+                unit: unit_name.to_string(),
+                field: "kind",
+                value: s.to_string(),
+                allowed: "deploy, internal, ignore",
+            }),
+        },
+    }
+}
+
 fn parse_cascade_rule(
     unit_name: &str,
     c: &CascadeRuleConfig,
@@ -1198,6 +1294,8 @@ mod tests {
                 tag_format: None,
                 visibility: Visibility::Public,
                 cascade_from: None,
+                kind: Default::default(),
+                bump_override: None,
             },
             origin: ResolveOrigin::Explicit { config_index: 0 },
         };
@@ -1224,6 +1322,8 @@ mod tests {
                 tag_format: None,
                 visibility: Visibility::Public,
                 cascade_from: None,
+                kind: Default::default(),
+                bump_override: None,
             },
             origin: ResolveOrigin::Explicit { config_index: 0 },
         };
@@ -1247,6 +1347,8 @@ mod tests {
                 tag_format: None,
                 visibility: Visibility::Public,
                 cascade_from: None,
+                kind: Default::default(),
+                bump_override: None,
             },
             origin: ResolveOrigin::Explicit { config_index: 0 },
         };
@@ -1269,6 +1371,8 @@ mod tests {
                     source: "ghost-schema".into(),
                     bump: CascadeBumpStrategy::FloorMinor,
                 }),
+                kind: Default::default(),
+                bump_override: None,
             },
             origin: ResolveOrigin::Explicit { config_index: 0 },
         };

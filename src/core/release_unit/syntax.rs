@@ -248,9 +248,53 @@ pub struct ReleaseUnitConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub visibility: Option<String>,
 
+    /// `deploy` (default) | `internal` | `ignore` — how this unit
+    /// participates in the release model (F1). `internal`/`ignore` units are
+    /// never versioned/tagged/released; `internal` still cascades.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+
+    /// Repo-relative directory prefixes that define a **manifest-less** unit
+    /// (no version source). Only valid for `kind = "internal"` / `"ignore"`
+    /// (e.g. `proto/`, `apps/services/e2e`). Mutually exclusive with
+    /// `manifests`/`external`; a `deploy` unit must still have a version
+    /// source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<String>,
+
     /// Optional cascade rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cascade_from: Option<CascadeRuleConfig>,
+
+    /// `[release_unit.<name>.bump]` — per-unit bump-policy override (F11a).
+    /// Each field overrides the global `[bump]` field-wise; unset fields inherit
+    /// the global value. Lets one unit diverge (e.g. a desktop app staying 0.x
+    /// while services go 1.0).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bump: Option<BumpOverrideConfig>,
+}
+
+/// Per-unit bump-policy override (F11a). All fields optional — an unset field
+/// inherits the global `[bump]` value.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct BumpOverrideConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub features_always_bump_minor: Option<bool>,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breaking_always_bump_major: Option<bool>,
+
+    /// Cap the inferred bump level at `"patch"` or `"minor"` — never exceed it,
+    /// even for `feat`/breaking. Combined with the F5 floor this yields the
+    /// interval `[patch, max_bump]`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_bump: Option<String>,
+
+    /// Emit prereleases under this label (F11b) — any valid semver prerelease
+    /// identifier (`beta`, `rc`, `canary`, …). Unset = stable releases.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prerelease: Option<String>,
 }
 
 impl ReleaseUnitConfig {
@@ -259,10 +303,11 @@ impl ReleaseUnitConfig {
     }
 
     /// A partial-override entry decorates an auto-detected unit with
-    /// override fields instead of declaring its own source. Detected
-    /// purely by the absence of `ecosystem` (and not being glob-form).
+    /// override fields instead of declaring its own source. Detected by the
+    /// absence of `ecosystem` (and not being glob-form) — but a `paths = [...]`
+    /// block is a manifest-less *explicit* unit (F1), not a partial override.
     pub fn is_partial_override(&self) -> bool {
-        self.ecosystem.is_none() && !self.is_glob()
+        self.ecosystem.is_none() && !self.is_glob() && self.paths.is_empty()
     }
 }
 

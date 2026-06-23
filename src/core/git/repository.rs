@@ -19,17 +19,16 @@ use uuid::Uuid;
 use crate::{
     atry,
     core::{
-        bump::{extract_scope, ScopeMatcher},
-        config::syntax::RepoConfiguration,
+        config::syntax::{BinaryAffectingConfiguration, RepoConfiguration},
         errors::Result,
-        resolved_release_unit::{DepRequirement, ResolvedReleaseUnit},
+        resolved_release_unit::{DepRequirement, ReleaseUnitId, ResolvedReleaseUnit, UnitKind},
         tag_format::TagMatcher,
         version::Version,
     },
 };
 
 /// Opaque type representing a commit in the repository.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct CommitId(git2::Oid);
 
 impl std::fmt::Display for CommitId {
@@ -601,6 +600,39 @@ impl Repository {
         Ok(matching_tags.into_iter().next())
     }
 
+    /// Like [`Self::find_latest_tag_for_project`] but ignores prerelease tags
+    /// (F11b). The base level for a prerelease unit must be computed from
+    /// commits since the last **stable** release, not the last prerelease —
+    /// otherwise accumulated changes across betas get under-counted.
+    pub fn find_latest_stable_tag_for_project(
+        &self,
+        matcher: &TagMatcher,
+    ) -> Result<Option<(git2::Oid, String, semver::Version)>> {
+        let tags = self.repo.tag_names(None)?;
+        let mut matching: Vec<(git2::Oid, String, semver::Version)> = Vec::new();
+        for tag_name in tags.iter().flatten() {
+            let Some(version) = matcher.match_version(tag_name) else {
+                continue;
+            };
+            if !version.pre.is_empty() {
+                continue; // skip prereleases
+            }
+            let Ok(tag_ref) = self.repo.find_reference(&format!("refs/tags/{}", tag_name)) else {
+                continue;
+            };
+            let oid = if let Some(t) = tag_ref.target() {
+                t
+            } else if let Ok(tag_obj) = tag_ref.peel_to_tag() {
+                tag_obj.target_id()
+            } else {
+                continue;
+            };
+            matching.push((oid, tag_name.to_string(), version));
+        }
+        matching.sort_by(|a, b| b.2.cmp(&a.2));
+        Ok(matching.into_iter().next())
+    }
+
     /// Parse a semantic version from a tag name.
     ///
     /// Supports two formats:
@@ -720,6 +752,8 @@ impl Repository {
         &self,
         projects: &[ResolvedReleaseUnit],
         matchers: &[TagMatcher],
+        closures: &[Vec<usize>],
+        binary_affecting: &crate::core::config::syntax::BinaryAffectingConfiguration,
     ) -> Result<Vec<RepoHistory>> {
         if projects.len() != matchers.len() {
             bail!(
@@ -733,6 +767,7 @@ impl Repository {
             RepoHistory {
                 commits: Vec::new(),
                 boundary: None,
+                provenance: std::collections::HashMap::new(),
             };
             projects.len()
         ];
@@ -742,9 +777,20 @@ impl Repository {
 
         for (i, unit) in projects.iter().enumerate() {
             let matcher = &matchers[i];
-            if let Some((tag_oid, tag_name, version)) =
+            // F11b — a prerelease unit's boundary is its last STABLE tag, so the
+            // base level is computed from all commits since stable (across any
+            // intervening prereleases), not just since the last prerelease.
+            let is_prerelease_unit = unit
+                .bump_override
+                .as_ref()
+                .and_then(|o| o.prerelease.as_ref())
+                .is_some();
+            let latest = if is_prerelease_unit {
+                self.find_latest_stable_tag_for_project(matcher)?
+            } else {
                 self.find_latest_tag_for_project(matcher)?
-            {
+            };
+            if let Some((tag_oid, tag_name, version)) = latest {
                 info!(
                     "found release tag for {}: {} (v{}) via template `{}`",
                     unit.user_facing_name,
@@ -765,7 +811,7 @@ impl Repository {
                 histories[i].boundary = Some(HistoryBoundary::Baseline {
                     commit: CommitId(baseline_oid),
                 });
-            } else if repo_has_any_version_tags {
+            } else if repo_has_any_version_tags && unit.kind == UnitKind::Deploy {
                 // Defensive guard. If the repo already has version-shaped
                 // tags but none matched THIS project's template, falling
                 // back to "all commits since repo start" is almost
@@ -773,6 +819,12 @@ impl Repository {
                 // legacy code path hit this bug for every npm/maven/pypa/go
                 // project. Surface the diagnostic loudly, do NOT fall
                 // through silently.
+                //
+                // F1 — only `Deploy` units bail: `Internal`/`Ignore` units have
+                // no tags by design. Their own history is never used for
+                // candidacy (deploy units collect their commits within the
+                // *deploy* unit's tag window via the closure), so analyzing
+                // from repo start for them is harmless.
                 bail!(
                     "could not locate a previous-release tag for `{name}` (tried template `{tmpl}`), \
                      but this repo already has version-shaped tags. \
@@ -783,12 +835,14 @@ impl Repository {
                     name = unit.user_facing_name,
                     tmpl = matcher.template(),
                 );
-            } else {
+            } else if unit.kind == UnitKind::Deploy {
                 warn!(
                     "no release tag or baseline found for {}, and the repo has no version tags at all — analyzing all commits since repo start. This is correct only for a brand-new repo.",
                     unit.user_facing_name
                 );
             }
+            // else: Internal/Ignore unit with no tag — expected, analyze from
+            // repo start silently (boundary stays None).
         }
 
         let commit_cache_size = std::num::NonZeroUsize::new(self.analysis_config.commit_cache_size)
@@ -802,11 +856,17 @@ impl Repository {
         let mut dopts = git2::DiffOptions::new();
         dopts.include_typechange(true);
 
-        let project_names: Vec<String> = projects
-            .iter()
-            .map(|p| p.user_facing_name.clone())
-            .collect();
-        let scope_matcher = ScopeMatcher::default();
+        // F-decouple — WHETHER is path-based only: the per-commit hit map is
+        // populated solely from binary-affecting path matches. Scope no longer
+        // writes it (scope/type drive changelog + `belaf check`, never the bump
+        // decision — see F6).
+        debug_assert_eq!(closures.len(), projects.len());
+
+        // Tier-3 (F4-Glob) overlap guard prep: which units own residual globs.
+        // `any_globs` is false for every all-prefix repo (e.g. clikd), so the
+        // per-path overlap check below is entirely skipped — zero overhead.
+        let unit_has_globs: Vec<bool> = projects.iter().map(|u| u.repo_paths.has_globs()).collect();
+        let any_globs = unit_has_globs.iter().any(|&b| b);
 
         // note that we don't "know" that unit_idx = project.ident
         for unit_idx in 0..projects.len() {
@@ -868,35 +928,50 @@ impl Repository {
 
                     let mut hit_buf = vec![false; projects.len()];
 
+                    // Skip merge commits (>=2 parents): the per-unit, no-squash
+                    // commit convention means non-merge commits carry all the
+                    // signal.
                     if commit.parent_count() < 2 {
-                        let mut scope_matched = false;
-
-                        if let Some(summary) = commit.summary() {
-                            if let Some(scope) = extract_scope(summary) {
-                                if let Some(matched_name) =
-                                    scope_matcher.find_matching_project(&scope, &project_names)
-                                {
+                        for delta in diff.deltas() {
+                            for file in &[delta.old_file(), delta.new_file()] {
+                                if let Some(path_bytes) = file.path_bytes() {
+                                    // F3 — only binary-affecting paths count
+                                    // toward WHETHER (skip tests/docs/… either
+                                    // side of a rename is conservative).
+                                    if !is_binary_affecting(path_bytes, binary_affecting) {
+                                        continue;
+                                    }
+                                    let path = RepoPath::new(path_bytes);
+                                    let mut matched: Vec<usize> = Vec::new();
                                     for (idx, unit) in projects.iter().enumerate() {
-                                        if &unit.user_facing_name == matched_name {
+                                        if unit.repo_paths.repo_path_matches(path) {
                                             hit_buf[idx] = true;
-                                            scope_matched = true;
-                                            break;
+                                            matched.push(idx);
                                         }
                                     }
-                                }
-                            }
-                        }
-
-                        if !scope_matched {
-                            for delta in diff.deltas() {
-                                for file in &[delta.old_file(), delta.new_file()] {
-                                    if let Some(path_bytes) = file.path_bytes() {
-                                        let path = RepoPath::new(path_bytes);
-                                        for (idx, unit) in projects.iter().enumerate() {
-                                            if unit.repo_paths.repo_path_matches(path) {
-                                                hit_buf[idx] = true;
-                                            }
-                                        }
+                                    // Tier-3 overlap guard — a path claimed by a
+                                    // residual-glob unit AND any other unit is a
+                                    // partition break. Never silently co-own:
+                                    // hard-error so the human resolves it (narrow
+                                    // the glob). Prefix↔prefix overlaps can't
+                                    // happen (make_disjoint), so this only fires
+                                    // when a glob is involved.
+                                    if any_globs
+                                        && matched.len() > 1
+                                        && matched.iter().any(|&i| unit_has_globs[i])
+                                    {
+                                        let owners: Vec<String> = matched
+                                            .iter()
+                                            .map(|&i| projects[i].user_facing_name.clone())
+                                            .collect();
+                                        bail!(
+                                            "path `{}` is claimed by multiple release units {:?} \
+                                             via a residual glob — narrow the glob so it doesn't \
+                                             overlap build-owned territory; belaf will not silently \
+                                             pick an owner",
+                                            path.escaped(),
+                                            owners,
+                                        );
                                     }
                                 }
                             }
@@ -910,8 +985,26 @@ impl Repository {
                     .get(&oid)
                     .expect("BUG: commit data should be in cache after put()");
 
-                if hits[unit_idx] {
-                    histories[unit_idx].commits.push(CommitId(oid));
+                // F2 — a unit collects every commit that touched ANY member of
+                // its dependency closure (itself + transitive in-repo deps),
+                // bounded to its own tag window (this walk hid its boundary). A
+                // leaf unit's closure is just `{unit}`, reducing to the historical
+                // per-unit behaviour.
+                if closures[unit_idx].iter().any(|&c| hits[c]) {
+                    let cid = CommitId(oid);
+                    histories[unit_idx].commits.push(cid);
+                    // F7 — provenance: if the commit didn't touch the unit's OWN
+                    // paths, attribute it to the closure member it did touch
+                    // (self wins → no `via`; diamond → lowest id, deterministic).
+                    if !hits[unit_idx] {
+                        if let Some(&member) = closures[unit_idx]
+                            .iter()
+                            .filter(|&&c| c != unit_idx && hits[c])
+                            .min()
+                        {
+                            histories[unit_idx].provenance.insert(cid, member);
+                        }
+                    }
                 }
             }
         }
@@ -934,6 +1027,65 @@ impl Repository {
     pub fn get_commit_details(&self, cid: CommitId) -> Result<crate::core::changelog::Commit> {
         let commit = self.repo.find_commit(cid.0)?;
         Ok(crate::core::changelog::Commit::from(&commit))
+    }
+
+    /// The repo-relative paths changed by a commit (diff vs its first parent;
+    /// for a root commit, vs the empty tree). Used by `belaf check` (F8) to
+    /// validate that a commit's changed paths belong to its scope's closure.
+    pub fn commit_changed_paths(&self, cid: CommitId) -> Result<Vec<RepoPathBuf>> {
+        let commit = self.repo.find_commit(cid.0)?;
+        let cur_tree = commit.tree()?;
+        let parent_tree = if commit.parent_count() == 0 {
+            None
+        } else {
+            Some(commit.parent(0)?.tree()?)
+        };
+        let mut dopts = git2::DiffOptions::new();
+        dopts.include_typechange(true);
+        let diff =
+            self.repo
+                .diff_tree_to_tree(parent_tree.as_ref(), Some(&cur_tree), Some(&mut dopts))?;
+        let mut out = Vec::new();
+        for delta in diff.deltas() {
+            for file in &[delta.old_file(), delta.new_file()] {
+                if let Some(b) = file.path_bytes() {
+                    let p = RepoPathBuf::new(b);
+                    if !out.contains(&p) {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Resolve a `git`-style commit range (`A..B`, or a single revision meaning
+    /// "just that commit") into the list of [`CommitId`]s it contains, newest
+    /// first. Used by `belaf check --range` (F8).
+    pub fn commits_in_range(&self, range: &str) -> Result<Vec<CommitId>> {
+        let mut walk = self.repo.revwalk()?;
+        if range.contains("..") {
+            walk.push_range(range)
+                .with_context(|| format!("invalid commit range `{range}`"))?;
+        } else {
+            let oid = self
+                .repo
+                .revparse_single(range)
+                .with_context(|| format!("could not resolve revision `{range}`"))?
+                .id();
+            walk.push(oid)?;
+            // A bare revision means "just that commit", not its whole ancestry.
+            if let Ok(c) = self.repo.find_commit(oid) {
+                if c.parent_count() > 0 {
+                    walk.hide(c.parent_id(0)?)?;
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for oid in walk {
+            out.push(CommitId(oid?));
+        }
+        Ok(out)
     }
 
     /// Update the specified files in the working tree to reset them to what
@@ -1012,9 +1164,7 @@ impl Repository {
         let mut remote = self
             .repo
             .find_remote(&self.upstream_name)
-            .with_context(|| {
-                format!("cannot find upstream remote `{}`", self.upstream_name)
-            })?;
+            .with_context(|| format!("cannot find upstream remote `{}`", self.upstream_name))?;
 
         let token_for_closure = git_token.map(str::to_owned);
 
@@ -1126,9 +1276,7 @@ impl Repository {
         matcher: &TagMatcher,
         cid: &CommitId,
     ) -> Result<ReleaseAvailability> {
-        if let Some((tag_oid, _tag_name, version)) =
-            self.find_latest_tag_for_project(matcher)?
-        {
+        if let Some((tag_oid, _tag_name, version)) = self.find_latest_tag_for_project(matcher)? {
             if self.repo.graph_descendant_of(tag_oid, cid.0)? || tag_oid == cid.0 {
                 let v = Version::parse_like(&unit.version, version.to_string())?;
                 return Ok(ReleaseAvailability::ExistingRelease(v));
@@ -1236,6 +1384,11 @@ pub enum HistoryBoundary {
 pub struct RepoHistory {
     commits: Vec<CommitId>,
     boundary: Option<HistoryBoundary>,
+    /// F7 — for commits collected via the dependency closure (not the unit's
+    /// own paths), records which closure member (an internal crate) the commit
+    /// is attributed to. Drives the `via <crate>` changelog prefix. Commits
+    /// hitting the unit's own paths are absent (self wins → no `via`).
+    provenance: std::collections::HashMap<CommitId, ReleaseUnitId>,
 }
 
 impl RepoHistory {
@@ -1279,6 +1432,13 @@ impl RepoHistory {
     pub fn commits(&self) -> impl IntoIterator<Item = &CommitId> {
         &self.commits[..]
     }
+
+    /// F7 — closure-provenance: which internal crate (by `ReleaseUnitId`) a
+    /// collected commit is attributed to, when it came from a dependency-closure
+    /// member rather than the unit's own paths. Absent = the unit's own change.
+    pub fn provenance_for(&self, commit: CommitId) -> Option<ReleaseUnitId> {
+        self.provenance.get(&commit).copied()
+    }
 }
 
 /// A filter that matches paths inside the repository and/or working directory.
@@ -1288,17 +1448,85 @@ impl RepoHistory {
 /// at the repo base, plus one or more subprojects in some kind of
 /// subdirectories. For the toplevel project, we need to express a match for a
 /// file anywhere in the repo *except* ones that match any of the subprojects.
+/// Whether a changed path counts as affecting the build artifact (F3).
+/// Returns `false` for paths excluded by `[binary_affecting]` (tests, docs,
+/// `.md`, …) — those changes never trigger a bump. Segment exclusions match
+/// whole `/`-delimited components, never substrings (so `src/examples_helper.rs`
+/// is *not* excluded by an `examples` segment rule).
+pub fn is_binary_affecting(path_bytes: &[u8], cfg: &BinaryAffectingConfiguration) -> bool {
+    let path = String::from_utf8_lossy(path_bytes);
+    let path: &str = &path;
+    let basename = path.rsplit('/').next().unwrap_or(path);
+
+    if cfg.exclude_names.iter().any(|n| n == basename) {
+        return false;
+    }
+    if cfg
+        .exclude_suffixes
+        .iter()
+        .any(|suf| path.ends_with(suf.as_str()))
+    {
+        return false;
+    }
+    for seg in path.split('/') {
+        if cfg.exclude_segments.iter().any(|ex| ex == seg) {
+            return false;
+        }
+    }
+    true
+}
+
 #[derive(Debug)]
 pub struct PathMatcher {
     terms: Vec<PathMatcherTerm>,
+    /// F4-Glob (Tier-3) — residual glob patterns for manifest-less units whose
+    /// `paths` aren't simple prefixes (e.g. `**/*.sql`). Additive: a path
+    /// matches if any prefix `Include` term matches OR any glob matches. Empty
+    /// for all normal (prefix-based) units, so they are entirely unaffected and
+    /// `make_disjoint` (prefix-only) keeps working unchanged.
+    globs: Vec<globset::GlobMatcher>,
 }
 
 impl PathMatcher {
     /// Create a new matcher that includes only files in the specified repopath
     /// prefix.
     pub fn new_include(p: RepoPathBuf) -> Self {
-        let terms = vec![PathMatcherTerm::Include(p)];
-        PathMatcher { terms }
+        PathMatcher {
+            terms: vec![PathMatcherTerm::Include(p)],
+            globs: Vec::new(),
+        }
+    }
+
+    /// Create a matcher with no prefix `Include` terms — only globs (Tier-3).
+    /// Used by glob-only `paths` units, where a prefix `Include` would
+    /// over-match (e.g. an empty prefix matches everything).
+    pub fn new_globs_only() -> Self {
+        PathMatcher {
+            terms: Vec::new(),
+            globs: Vec::new(),
+        }
+    }
+
+    /// Add another included prefix to this matcher. Used by multi-path units
+    /// (e.g. a `paths`-only internal unit covering several directories).
+    pub fn add_include(&mut self, p: RepoPathBuf) {
+        self.terms.push(PathMatcherTerm::Include(p));
+    }
+
+    /// Compile + add a residual glob pattern (Tier-3). Returns an error if the
+    /// pattern is not a valid glob.
+    pub fn add_glob(&mut self, pattern: &str) -> anyhow::Result<()> {
+        let glob = globset::Glob::new(pattern)
+            .with_context(|| format!("invalid glob pattern `{pattern}`"))?;
+        self.globs.push(glob.compile_matcher());
+        Ok(())
+    }
+
+    /// Whether this matcher carries any residual glob patterns (Tier-3). Such
+    /// units are exempt from `make_disjoint` and are subject to the overlap
+    /// guard in `analyze_histories`.
+    pub fn has_globs(&self) -> bool {
+        !self.globs.is_empty()
     }
 
     /// Modify this matcher to exclude any paths that *other* would include.
@@ -1342,6 +1570,14 @@ impl PathMatcher {
                         return false;
                     }
                 }
+            }
+        }
+
+        // Tier-3 — residual globs are additive (checked after prefix terms).
+        if !self.globs.is_empty() {
+            let candidate = p.as_path();
+            if self.globs.iter().any(|g| g.is_match(candidate)) {
+                return true;
             }
         }
 

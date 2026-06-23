@@ -35,7 +35,7 @@ body = """
 
 ### {% if emoji_groups and group_emojis["Breaking Changes"] %}{{ group_emojis["Breaking Changes"] }} {% endif %}Breaking Changes
         {% for commit in breaking_commits %}
-- {% if commit.scope %}*({{ commit.scope }})* {% endif %}{{ commit.message | split(pat="\\n") | first | upper_first }}{% if commit.remote.username %} by @{{ commit.remote.username }}{% elif commit.author.name %} by {{ commit.author.name }}{% endif %}{% if commit.remote.pr_number %} in [#{{ commit.remote.pr_number }}]({{ repository }}/pull/{{ commit.remote.pr_number }}){% endif %} - ([{{ commit.id | truncate(length=7, end="") }}]({{ repository }}/commit/{{ commit.id }}))
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}{% if commit.via %}via {{ commit.via }} — {% endif %}{{ commit.message | split(pat="\\n") | first | upper_first }}{% if commit.remote.username %} by @{{ commit.remote.username }}{% elif commit.author.name %} by {{ commit.author.name }}{% endif %}{% if commit.remote.pr_number %} in [#{{ commit.remote.pr_number }}]({{ repository }}/pull/{{ commit.remote.pr_number }}){% endif %} - ([{{ commit.id | truncate(length=7, end="") }}]({{ repository }}/commit/{{ commit.id }}))
         {% endfor %}\
     {% endif %}\
 {% endif %}\
@@ -43,7 +43,7 @@ body = """
 
 ### {% if emoji_groups and group_emojis[group] %}{{ group_emojis[group] }} {% endif %}{{ group | upper_first }}
     {% for commit in commits %}
-- {% if commit.breaking and not include_breaking_section %}**BREAKING:** {% endif %}{% if commit.scope %}*({{ commit.scope }})* {% endif %}{{ commit.message | split(pat="\\n") | first | upper_first }}{% if commit.remote.username %} by @{{ commit.remote.username }}{% elif commit.author.name %} by {{ commit.author.name }}{% endif %}{% if commit.remote.pr_number %} in [#{{ commit.remote.pr_number }}]({{ repository }}/pull/{{ commit.remote.pr_number }}){% endif %} - ([{{ commit.id | truncate(length=7, end="") }}]({{ repository }}/commit/{{ commit.id }}))
+- {% if commit.breaking and not include_breaking_section %}**BREAKING:** {% endif %}{% if commit.scope %}*({{ commit.scope }})* {% endif %}{% if commit.via %}via {{ commit.via }} — {% endif %}{{ commit.message | split(pat="\\n") | first | upper_first }}{% if commit.remote.username %} by @{{ commit.remote.username }}{% elif commit.author.name %} by {{ commit.author.name }}{% endif %}{% if commit.remote.pr_number %} in [#{{ commit.remote.pr_number }}]({{ repository }}/pull/{{ commit.remote.pr_number }}){% endif %} - ([{{ commit.id | truncate(length=7, end="") }}]({{ repository }}/commit/{{ commit.id }}))
     {% endfor %}\
 {% endfor %}\
 {% if include_statistics %}
@@ -224,3 +224,21 @@ scope_matching = "smart"
 # ignore = false
 # [projects.my-package.cargo]
 # publish = true
+
+# Which changed paths count as affecting the build artifact (F3). A commit
+# that only touches non-binary-affecting files (tests, docs, …) does not
+# trigger a bump. Override any list in your belaf/config.toml to customise.
+[binary_affecting]
+# Full path segments that are NOT binary-affecting (matched as whole
+# `/segment/` components, never substrings).
+exclude_segments = ["tests", "benches", "examples", "docs", ".github"]
+# File-name suffixes that are NOT binary-affecting.
+exclude_suffixes = [".md"]
+# Exact repo-relative file names that are NOT binary-affecting.
+exclude_names = ["CHANGELOG.md", "LICENSE", "LICENSE.md", "LICENSE.txt", "README.md", "README"]
+
+# Extra-cargo "this path feeds these crates" edges (F4). A change under the
+# glob cascades as if the listed crates changed (e.g. protobuf schemas
+# compiled by a build.rs). `cargo metadata` cannot see these edges.
+# [codegen_edges]
+# "proto/**" = ["clikd-grpc", "clikd-events"]

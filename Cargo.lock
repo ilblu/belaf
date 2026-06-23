@@ -313,6 +313,7 @@ dependencies = [
  "git-url-parse",
  "git2",
  "glob",
+ "globset",
  "indicatif",
  "insta",
  "json5 1.3.1",

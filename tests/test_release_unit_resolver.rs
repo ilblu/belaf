@@ -11,6 +11,7 @@ use belaf::core::release_unit::syntax::{
     CascadeRuleConfig, ExternalConfig, ManifestFileConfig, ManifestList, ReleaseUnitConfig,
 };
 use belaf::core::release_unit::{ResolveOrigin, VersionSource};
+use belaf::core::resolved_release_unit::UnitKind;
 use common::TestRepo;
 
 fn open_repo(t: &TestRepo) -> Repository {
@@ -27,6 +28,8 @@ struct ExplicitBuilder {
     external: Option<ExternalConfig>,
     satellites: Vec<String>,
     cascade_from: Option<CascadeRuleConfig>,
+    kind: Option<String>,
+    paths: Vec<String>,
 }
 
 fn explicit(name: &str, ecosystem: &str) -> ExplicitBuilder {
@@ -67,11 +70,24 @@ impl ExplicitBuilder {
         });
         self
     }
+    /// A manifest-less paths-only block: no ecosystem required.
+    fn paths_only(kind: &str, paths: &[&str]) -> ExplicitBuilder {
+        ExplicitBuilder {
+            ecosystem: String::new(),
+            kind: Some(kind.to_string()),
+            paths: paths.iter().map(|p| p.to_string()).collect(),
+            ..Default::default()
+        }
+    }
     fn build(self, name: &str) -> NamedReleaseUnitConfig {
         NamedReleaseUnitConfig {
             name: name.to_string(),
             config: ReleaseUnitConfig {
-                ecosystem: Some(self.ecosystem),
+                ecosystem: if self.ecosystem.is_empty() {
+                    None
+                } else {
+                    Some(self.ecosystem)
+                },
                 name: None,
                 glob: None,
                 manifests: if self.manifests.is_empty() {
@@ -85,7 +101,10 @@ impl ExplicitBuilder {
                 satellites: self.satellites,
                 tag_format: None,
                 visibility: None,
+                kind: self.kind,
+                paths: self.paths,
                 cascade_from: self.cascade_from,
+                bump: None,
             },
         }
     }
@@ -99,6 +118,7 @@ struct GlobBuilder {
     manifests: Vec<String>,
     fallback_manifests: Vec<String>,
     satellites: Vec<String>,
+    kind: Option<String>,
 }
 
 fn glob(config_key: &str, ecosystem: &str, glob: &str, name_template: &str) -> GlobBuilder {
@@ -124,6 +144,10 @@ impl GlobBuilder {
         self.satellites.push(template.to_string());
         self
     }
+    fn with_kind(mut self, kind: &str) -> Self {
+        self.kind = Some(kind.to_string());
+        self
+    }
     fn build(self, config_key: &str) -> NamedReleaseUnitConfig {
         NamedReleaseUnitConfig {
             name: config_key.to_string(),
@@ -138,7 +162,10 @@ impl GlobBuilder {
                 satellites: self.satellites,
                 tag_format: None,
                 visibility: None,
+                kind: self.kind,
+                paths: vec![],
                 cascade_from: None,
+                bump: None,
             },
         }
     }
@@ -272,13 +299,23 @@ fn missing_manifest_path_is_hard_error() {
 }
 
 #[test]
-fn fallback_exhausted_lists_all_tried_paths() {
+fn glob_match_without_expected_manifest_is_skipped() {
+    // F9 — a directory matched by the glob that carries none of the expected
+    // manifests/fallbacks (e.g. a flat test crate like `apps/services/e2e`)
+    // is skipped, not a hard error. A sibling that *does* match still resolves.
     let repo = TestRepo::new();
+    // `aura` has only crates/api — neither the bin manifest nor the workers
+    // fallback the glob expects → skipped.
     repo.write_file(
         "apps/services/aura/crates/api/Cargo.toml",
         "[package]\nname=\"aura-api\"\nversion=\"0.0.0\"\n",
     );
-    repo.commit("seed without bin or workers");
+    // `ekko` has the expected bin manifest → resolves.
+    repo.write_file(
+        "apps/services/ekko/crates/bin/Cargo.toml",
+        "[package]\nname=\"ekko-bin\"\nversion=\"0.1.0\"\n",
+    );
+    repo.commit("seed: one service-shaped dir, one not");
 
     let r = open_repo(&repo);
 
@@ -287,8 +324,100 @@ fn fallback_exhausted_lists_all_tried_paths() {
         .with_fallback("{path}/crates/workers/Cargo.toml")
         .build("services");
 
-    let err = resolve(&r, &[services]).unwrap_err();
-    assert_eq!(err.rule(), "all_manifests_and_fallbacks_missing");
+    let resolved = resolve(&r, &[services]).expect("must succeed").resolved;
+    let names: Vec<&str> = resolved.iter().map(|u| u.unit.name.as_str()).collect();
+    assert_eq!(names, vec!["ekko"]);
+}
+
+// ---------------------------------------------------------------------------
+// F1 — unit kinds + manifest-less `paths = [...]` units.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn paths_only_internal_unit_resolves() {
+    let repo = TestRepo::new();
+    repo.write_file("proto/schema.proto", "syntax = \"proto3\";\n");
+    repo.commit("seed proto");
+    let r = open_repo(&repo);
+
+    let proto = ExplicitBuilder::paths_only("internal", &["proto"]).build("proto");
+    let resolved = resolve(&r, &[proto]).expect("must succeed").resolved;
+
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].unit.kind, UnitKind::Internal);
+    assert!(matches!(
+        resolved[0].unit.source,
+        VersionSource::PathsOnly(_)
+    ));
+}
+
+#[test]
+fn paths_only_ignore_unit_resolves() {
+    let repo = TestRepo::new();
+    repo.write_file(
+        "apps/services/e2e/Cargo.toml",
+        "[package]\nname=\"e2e\"\nversion=\"0.0.0\"\n",
+    );
+    repo.commit("seed e2e");
+    let r = open_repo(&repo);
+
+    let e2e = ExplicitBuilder::paths_only("ignore", &["apps/services/e2e"]).build("e2e");
+    let resolved = resolve(&r, &[e2e]).expect("must succeed").resolved;
+
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].unit.kind, UnitKind::Ignore);
+}
+
+#[test]
+fn paths_with_manifest_is_error() {
+    let repo = TestRepo::new();
+    repo.write_file(
+        "proto/Cargo.toml",
+        "[package]\nname=\"p\"\nversion=\"0.0.0\"\n",
+    );
+    repo.commit("seed");
+    let r = open_repo(&repo);
+
+    let bad = ExplicitBuilder::paths_only("internal", &["proto"])
+        .with_manifest("proto/Cargo.toml", "cargo_toml")
+        .build("proto");
+    let err = resolve(&r, &[bad]).unwrap_err();
+    assert_eq!(err.rule(), "paths_only_invalid");
+}
+
+#[test]
+fn paths_on_deploy_unit_is_error() {
+    let repo = TestRepo::new();
+    repo.write_file("proto/schema.proto", "x\n");
+    repo.commit("seed");
+    let r = open_repo(&repo);
+
+    // `kind = "deploy"` (the default) + `paths` → error: a deploy unit needs
+    // a real version source.
+    let bad = ExplicitBuilder::paths_only("deploy", &["proto"]).build("proto");
+    let err = resolve(&r, &[bad]).unwrap_err();
+    assert_eq!(err.rule(), "paths_only_invalid");
+}
+
+#[test]
+fn glob_unit_carries_internal_kind() {
+    let repo = TestRepo::new();
+    repo.write_file(
+        "packages/clikd-foo/Cargo.toml",
+        "[package]\nname=\"clikd-foo\"\nversion=\"0.1.0\"\n",
+    );
+    repo.commit("seed package");
+    let r = open_repo(&repo);
+
+    let packages = glob("packages", "cargo", "packages/*", "{basename}")
+        .with_manifest("{path}/Cargo.toml")
+        .with_kind("internal")
+        .build("packages");
+    let resolved = resolve(&r, &[packages]).expect("must succeed").resolved;
+
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].unit.name, "clikd-foo");
+    assert_eq!(resolved[0].unit.kind, UnitKind::Internal);
 }
 
 #[test]

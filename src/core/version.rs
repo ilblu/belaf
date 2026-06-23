@@ -90,6 +90,17 @@ impl Version {
         }
     }
 
+    /// Whether this version carries a prerelease marker (F7/F11b). Structural,
+    /// per-ecosystem — NOT a hardcoded label list, so arbitrary labels
+    /// (`-canary`, `-preview`, …) are classified correctly.
+    pub fn is_prerelease(&self) -> bool {
+        match self {
+            Version::Semver(v) => !v.pre.is_empty(),
+            Version::Pep440(v) => v.pre_release.is_some() || v.dev_release.is_some(),
+            Version::DotNet(_) => false,
+        }
+    }
+
     /// Given a template version, parse a "bump scheme" from a textual
     /// description.
     ///

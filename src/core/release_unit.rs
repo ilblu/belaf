@@ -64,6 +64,14 @@ pub struct ReleaseUnit {
     /// Optional cascade rule — bump this unit when a named upstream
     /// unit bumps. SDKs use this to follow a schema unit.
     pub cascade_from: Option<CascadeRule>,
+
+    /// How this unit participates in the release model (F1). `Internal` /
+    /// `Ignore` units are never versioned/tagged/released.
+    pub kind: crate::core::resolved_release_unit::UnitKind,
+
+    /// Per-unit bump-policy override (F11a). `None` = inherit the global
+    /// `[bump]` policy.
+    pub bump_override: Option<syntax::BumpOverrideConfig>,
 }
 
 // ---------------------------------------------------------------------------
@@ -82,6 +90,13 @@ pub enum VersionSource {
     /// schema-first codegen, custom build phases, anything needing
     /// "run a command at prepare-time".
     External(ExternalVersioner),
+
+    /// No version source at all — a manifest-less unit defined purely by its
+    /// repo paths (F1 `paths = [...]`). Only valid for `kind = Internal` /
+    /// `Ignore`: such units are graph nodes for cascade + path attribution
+    /// but never read, written, versioned, tagged, or released. The payload
+    /// is the set of repo-relative directory prefixes the unit owns.
+    PathsOnly(Vec<RepoPathBuf>),
 }
 
 impl VersionSource {
