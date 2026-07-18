@@ -5,6 +5,114 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 2.1.0 — 2026-07-18
+
+Config-aware auto-detection. `belaf init` now respects every decision
+already recorded in `belaf/config.toml`, which makes re-running
+auto-detect safe and turns the drift-error remediation
+(`belaf init --ci --auto-detect --force`) into a real, per-path
+idempotent re-detect.
+
+### Added
+
+- **Real `--force` re-detect.** On an already-initialized config,
+  `belaf init --ci --auto-detect --force` now appends exactly the
+  detector hits the config does not cover yet — nothing more. Coverage
+  mirrors the `prepare`-time drift check precisely (same shared
+  helpers, including glob-form unit expansion and partial-override
+  resolution): whatever drift is silent about, re-detect will not
+  re-emit. Without `--force`, an initialized config stays untouched and
+  the run reports how many uncovered candidates are waiting.
+- **`[allow_uncovered]` merging.** Newly detected externally-managed
+  paths (e.g. a mobile app added after the first init) are merged into
+  an existing `[allow_uncovered]` table via `toml_edit` — format- and
+  comment-preserving — instead of appending a duplicate table header,
+  which would have been a TOML parse error.
+- **Validated config writes.** Every auto-detect write (CI and wizard,
+  including the wizard's tag-format override) parses the merged result
+  before writing. Residual collisions — say, a re-emitted unit name
+  that already exists as a table — abort with a diagnostic and leave
+  `config.toml` untouched.
+- **`--ci` JSON status fields.** `already_covered` (detector hits
+  suppressed because the config already handles them) and `advice`
+  (config-free detector hints, see below).
+
+### Changed
+
+- **`[ignore_paths]` suppresses detection at scan level.** Its
+  documented contract ("belaf does not scan inside at all") now also
+  holds for `init` auto-detect, not just the `prepare` drift check:
+  hits under ignored paths are dropped before any emission, counting,
+  or wizard display.
+- **`[allow_uncovered]` and configured `[release_unit]` blocks suppress
+  emission.** Paths a human already classified — externally managed, or
+  claimed by an existing unit (explicit, glob-expanded, or partial
+  override) — are never re-emitted; they surface in the summary as
+  `already_covered` instead.
+- **Detector hints are advice, not config.** The sdk-cascade
+  suggestion, npm-workspace, nested-submodule, and single-project hints
+  are rendered as config comments exactly once (first init). Re-runs
+  surface them via the log and the `--ci` JSON instead of accumulating
+  duplicate comment blocks in `config.toml`.
+- **Wizard re-runs respect prior decisions.** Paths that are ignored,
+  allow-uncovered, or covered by a configured unit no longer reappear
+  as selectable detection rows.
+
+### Fixed
+
+- **Wizard re-run no longer silently drops confirmed choices.** The
+  auto-detect marker gate used to discard the entire wizard output
+  (including freshly confirmed `cascade_from` rules) when the config
+  had been initialized before. Writes are now coverage-filtered and
+  validated instead of marker-gated.
+- **Tag-format override can no longer corrupt the config.** Re-running
+  the wizard and picking a tag format for a project that already has a
+  `[projects.<name>]` block used to append a duplicate table (a TOML
+  parse error on the next load); it now aborts cleanly without
+  writing.
+- **Drift-error remediation text was wrong.** The `prepare` drift error
+  recommended `belaf init --ci --auto-detect --force`, which silently
+  did nothing on an initialized config. The command now works as
+  advertised, and the message describes the per-path idempotency
+  correctly.
+
+## 2.0.0 — 2026-06-23
+
+Dependency-closure-aware release model (F1–F11).
+
+### Added
+
+- F1 unit kinds (`deploy`/`internal`/`ignore`) + manifest-less
+  `paths = [...]` units.
+- F2/F5 dependency-closure cascade + patch-floor on binary-affecting
+  changes.
+- F3 configurable `[binary_affecting]` path filter.
+- F4 `[codegen_edges]` synthetic cascade nodes + Tier-3 glob ownership.
+- F6 path-based WHETHER — scope decoupled from the bump decision.
+- F7 "via `<crate>`" changelog provenance.
+- F8 `belaf check` commit-label validation.
+- F9 glob soft-skip; F10 wired `[commit_attribution]` scope matcher.
+- F11 per-unit `[release_unit.<name>.bump]` overrides + prerelease
+  generation.
+
+### Changed
+
+- **BREAKING:** bump decisions are now path-based — a binary-affecting
+  change floors to patch even for `chore`/`refactor` commits, and a
+  commit's scope no longer decides whether a unit bumps (path
+  attribution only).
+
+## 1.3.2 — 2026-05-12
+
+### Fixed
+
+- **`belaf prepare` fetches upstream tags before reading its
+  baseline.** Tag lookup only read local refs; when a prior release was
+  tagged server-side (by the belaf GitHub App), a developer's stale
+  local clone picked an old baseline and inflated the bump suggestion.
+  Both prepare paths (CI and wizard) now fetch tags from the resolved
+  upstream first; opt out with `BELAF_NO_FETCH=1`.
+
 ## 1.3.1 — 2026-05-12
 
 Hotfix release. Two correctness bugs that inflated semver bumps for
