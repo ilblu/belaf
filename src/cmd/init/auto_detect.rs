@@ -20,7 +20,6 @@
 //! Bundle-emit path.
 
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 
 use super::toml_util::toml_quote;
 use crate::core::git::repository::{RepoPathBuf, Repository};
@@ -29,6 +28,12 @@ use crate::core::release_unit::detector::{self, DetectedShape, DetectorMatch, Ex
 use crate::core::release_unit::resolver::{
     default_manifest_filename_for_ecosystem, default_version_field_for_ecosystem,
 };
+
+mod apply;
+mod decisions;
+
+pub use apply::{append_validated, apply_to_config};
+pub use decisions::ExistingDecisions;
 
 /// Identifies a loader-discovered standalone unit by name + ecosystem +
 /// repo prefix. Auto-detect uses this to emit decorator blocks for units
@@ -52,7 +57,24 @@ pub struct CascadeOverrideEmit {
 /// counters per detector kind for the wizard summary.
 #[derive(Debug, Default)]
 pub struct AutoDetectResult {
+    /// Marker-wrapped snippet (body + `[allow_uncovered]` table) for
+    /// the single-shot append path ([`append_to_config`]).
     pub toml_snippet: String,
+    /// Body only — `[release_unit.<name>]` blocks, hint comments, and
+    /// the `[ignore_paths]` table, WITHOUT the wrapper and WITHOUT the
+    /// `[allow_uncovered]` table. [`apply_to_config`] appends this and
+    /// handles `allow_uncovered_paths` separately so an existing table
+    /// is merged instead of duplicated.
+    pub body_snippet: String,
+    /// Newly detected externally-managed paths destined for
+    /// `[allow_uncovered]` (already filtered against the existing
+    /// config's decisions).
+    pub allow_uncovered_paths: Vec<String>,
+    /// Config-free advice (hint-shape detector output, e.g. the
+    /// SDK-cascade suggestion). Rendered as comments into the first-run
+    /// snippet only; re-runs surface it via log / CI status so `--force`
+    /// never accumulates duplicate comment blocks in config.toml.
+    pub advice: Vec<String>,
     pub counters: DetectionCounters,
 }
 
@@ -69,6 +91,11 @@ pub struct DetectionCounters {
     pub sdk_cascade_member: usize,
     pub single_project: usize,
     pub nested_monorepo: usize,
+    /// Detector hits under an existing `[allow_uncovered]` entry —
+    /// scanned but not re-emitted because a human already classified
+    /// them (see [`ExistingDecisions`]). Hits under `[ignore_paths]`
+    /// are dropped before counting and never appear here.
+    pub already_covered: usize,
 }
 
 impl DetectionCounters {
@@ -90,12 +117,12 @@ impl DetectionCounters {
     }
 }
 
-/// Marker comment prepended to every emitted snippet. The
-/// idempotency check in [`append_to_config`] looks for this exact
-/// string instead of matching the full snippet content (which is
-/// fragile: any user edit to the appended block would defeat the
-/// "already there" check and cause duplicate appends on the next
-/// run).
+/// Marker comment prepended to the first emitted snippet. Its presence
+/// ([`is_initialized`]) distinguishes the first-run append (full
+/// wrapper: marker + model header + codegen stub + advice comments)
+/// from re-runs, and gates un-forced `--ci` re-appends. Idempotency of
+/// the content itself comes from per-path coverage filtering
+/// ([`ExistingDecisions`]), not from this marker.
 const AUTO_DETECT_MARKER: &str =
     "# belaf:auto-detect-marker (do not remove — used for idempotency)";
 
@@ -107,11 +134,27 @@ const MODEL_HEADER: &str = "\n# Each unit below defaults to `kind = \"deploy\"` 
 
 const CODEGEN_STUB: &str = "\n# Extra-cargo \"this path feeds these crates\" edges (F4). A change under the\n# glob cascades as if the listed crates changed (e.g. protobuf schemas compiled\n# by a build.rs that `cargo metadata` cannot see). Uncomment + adjust:\n# [codegen_edges]\n# \"proto/**\" = [\"my-grpc-crate\", \"my-events-crate\"]\n";
 
+const ALLOW_UNCOVERED_HEADER: &str = "\n# Mobile apps detected — handed off to Bitrise / fastlane / Codemagic.\n# Belaf doesn't manage mobile app releases; these paths are listed in\n# allow_uncovered so the drift detector doesn't fire on them.\n[allow_uncovered]\n";
+
+/// Whether `config_text` was already populated by an auto-detect pass
+/// (the [`AUTO_DETECT_MARKER`] is present). Callers use this to decide
+/// between the first-run append and the `--force` re-detect path.
+pub fn is_initialized(config_text: &str) -> bool {
+    config_text.contains(AUTO_DETECT_MARKER)
+}
+
 /// Old single-shot entry point — equivalent to running with no
-/// exclusions and no cascade overrides. Kept as a stable public
-/// surface for `--ci --auto-detect` and existing integration tests.
+/// exclusions, no cascade overrides, and no existing config. Kept as
+/// a stable public surface for existing integration tests.
 pub fn run(repo: &Repository) -> AutoDetectResult {
-    run_with_cascade(repo, &HashSet::new(), &[], &HashMap::new())
+    run_against(repo, &ExistingDecisions::default())
+}
+
+/// `--ci` entry: like [`run`] but respecting the `[ignore_paths]` /
+/// `[allow_uncovered]` decisions already present in the loaded
+/// configuration.
+pub fn run_against(repo: &Repository, existing: &ExistingDecisions) -> AutoDetectResult {
+    run_with_cascade(repo, &HashSet::new(), &[], &HashMap::new(), existing)
 }
 
 /// Backwards-compatible entry that takes only path exclusions; the
@@ -119,7 +162,13 @@ pub fn run(repo: &Repository) -> AutoDetectResult {
 /// so user-confirmed cascade-from overrides flow into the emitted
 /// snippet alongside the bundle blocks.
 pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> AutoDetectResult {
-    run_with_cascade(repo, exclusions, &[], &HashMap::new())
+    run_with_cascade(
+        repo,
+        exclusions,
+        &[],
+        &HashMap::new(),
+        &ExistingDecisions::default(),
+    )
 }
 
 /// Full auto-detect entry. Each excluded match path:
@@ -139,18 +188,47 @@ pub fn run_filtered(repo: &Repository, exclusions: &HashSet<RepoPathBuf>) -> Aut
 /// canonical manifest path (derived from the loader-known prefix +
 /// ecosystem default filename), and the wire-form `cascade_from`
 /// inline table.
+///
+/// `existing` carries the `[ignore_paths]` / `[allow_uncovered]`
+/// decisions of an already-present config — see [`ExistingDecisions`]
+/// for the two suppression levels.
 pub fn run_with_cascade(
     repo: &Repository,
     exclusions: &HashSet<RepoPathBuf>,
     standalones: &[StandaloneRef],
     cascade_overrides: &HashMap<String, CascadeOverrideEmit>,
+    existing: &ExistingDecisions,
 ) -> AutoDetectResult {
     let mut report = detector::detect_all(repo);
+    // `[ignore_paths]` = "belaf does not scan inside at all" — hits
+    // under those paths are dropped before anything downstream (emission,
+    // counters, wizard rows) can see them.
+    report
+        .matches
+        .retain(|m| !detector::is_covered_by_config_paths(&m.path, &existing.ignore_paths));
     if !exclusions.is_empty() {
         report.matches.retain(|m| !exclusions.contains(&m.path));
     }
     let mut snippet = String::new();
+    let mut advice: Vec<String> = Vec::new();
     let mut counters = DetectionCounters::default();
+    // `[allow_uncovered]` = scanned but already classified by a human;
+    // `unit_paths` = already claimed by a configured `[release_unit]`
+    // block. Both suppress emission only (re-emitting would override
+    // the decision and/or append a duplicate table, which is a TOML
+    // parse error) and are counted for the summary.
+    let matches: Vec<DetectorMatch> = report
+        .matches
+        .into_iter()
+        .filter(|m| {
+            let covered = detector::is_covered_by_config_paths(&m.path, &existing.allow_uncovered)
+                || detector::is_covered_by_config_paths(&m.path, &existing.unit_paths);
+            if covered {
+                counters.already_covered += 1;
+            }
+            !covered
+        })
+        .collect();
     let mut allow_uncovered: Vec<String> = Vec::new();
     let mut ignore_paths: Vec<String> = exclusions
         .iter()
@@ -163,36 +241,30 @@ pub fn run_with_cascade(
     // glob-collapse for hexagonal). Adding a new bundle = one new
     // file under `bundle/` + one `mod` + one call inside
     // `bundle::emit_all` — never an edit here.
-    bundle::emit_all(&report.matches, &mut snippet, &mut counters);
+    bundle::emit_all(&matches, &mut snippet, &mut counters);
 
     // Hints + ExternallyManaged still dispatch inline because they
     // share the `allow_uncovered` accumulator and the SDK-cascade
     // aggregated message after the loop.
-    for m in &report.matches {
+    for m in &matches {
         match &m.shape {
             DetectedShape::Bundle(_) => {
                 // already emitted by bundle::emit_all above
             }
-            DetectedShape::Hint(h) => emit_hint_comment(&mut snippet, &mut counters, m, h),
+            DetectedShape::Hint(h) => collect_hint_advice(&mut advice, &mut counters, m, h),
             DetectedShape::ExternallyManaged(e) => {
                 register_externally_managed(&mut allow_uncovered, &mut counters, m, *e);
             }
         }
     }
 
-    if !allow_uncovered.is_empty() {
-        snippet.push_str("\n# Mobile apps detected — handed off to Bitrise / fastlane / Codemagic.\n# Belaf doesn't manage mobile app releases; these paths are listed in\n# allow_uncovered so the drift detector doesn't fire on them.\n[allow_uncovered]\n");
-        let quoted: Vec<String> = allow_uncovered.iter().map(|p| toml_quote(p)).collect();
-        snippet.push_str(&format!("paths = [{}]\n", quoted.join(", ")));
-    }
-
     if counters.sdk_cascade_member > 0 && cascade_overrides.is_empty() {
-        // Only print the "consider adding cascade_from" hint when the
+        // Only surface the "consider adding cascade_from" hint when the
         // user hasn't already wired one up via the wizard's `[c]` flow.
         // If they have, the actual cascade-blocks below replace this
         // generic suggestion.
-        snippet.push_str(&format!(
-            "\n# {} SDK packages detected under sdks/* — consider adding\n# `cascade_from = {{ source = \"<schema-unit>\", bump = \"floor_minor\" }}`\n# to each so they bump in lockstep when the schema bumps.\n",
+        advice.push(format!(
+            "{} SDK packages detected under sdks/* — consider adding\n`cascade_from = {{ source = \"<schema-unit>\", bump = \"floor_minor\" }}`\nto each so they bump in lockstep when the schema bumps.",
             counters.sdk_cascade_member
         ));
     }
@@ -249,23 +321,58 @@ pub fn run_with_cascade(
         snippet.push_str(&format!("paths = [{}]\n", quoted.join(", ")));
     }
 
-    let prefixed_snippet = if snippet.is_empty() {
-        snippet
+    // Advice is config-free by design: the first-run snippet renders it
+    // as comments, re-runs surface it via [`AutoDetectResult::advice`]
+    // (log / CI status) so `--force` re-appends never accumulate
+    // duplicate comment blocks. The [allow_uncovered] table comes last
+    // so callers can substitute a toml_edit merge for it when the
+    // config already has such a table (see [`apply_to_config`]).
+    let mut full = format!("{snippet}{}", advice_comments(&advice));
+    if !allow_uncovered.is_empty() {
+        full.push_str(ALLOW_UNCOVERED_HEADER);
+        full.push_str(&allow_uncovered_paths_line(&allow_uncovered));
+    }
+    let prefixed_snippet = if full.is_empty() {
+        full
     } else {
-        format!("\n{AUTO_DETECT_MARKER}\n{MODEL_HEADER}{snippet}{CODEGEN_STUB}")
+        format!("\n{AUTO_DETECT_MARKER}\n{MODEL_HEADER}{full}{CODEGEN_STUB}")
     };
 
     AutoDetectResult {
         toml_snippet: prefixed_snippet,
+        body_snippet: snippet,
+        allow_uncovered_paths: allow_uncovered,
+        advice,
         counters,
     }
 }
 
+pub(super) fn allow_uncovered_paths_line(paths: &[String]) -> String {
+    let quoted: Vec<String> = paths.iter().map(|p| toml_quote(p)).collect();
+    format!("paths = [{}]\n", quoted.join(", "))
+}
+
+/// Render advice strings as `# `-prefixed comment blocks for first-run
+/// config emission.
+pub(super) fn advice_comments(advice: &[String]) -> String {
+    let mut out = String::new();
+    for a in advice {
+        out.push('\n');
+        for line in a.lines() {
+            out.push_str("# ");
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Pure metadata; never togglable, never produces a `[release_unit.<name>]`.
-/// Hint comments help the user understand what the wizard saw without
-/// committing config they'd have to maintain.
-fn emit_hint_comment(
-    snippet: &mut String,
+/// Hints are advice, not config: they help the user understand what the
+/// detector saw without committing config they'd have to maintain, so
+/// they live in [`AutoDetectResult::advice`] rather than the body.
+fn collect_hint_advice(
+    advice: &mut Vec<String>,
     counters: &mut DetectionCounters,
     m: &DetectorMatch,
     hint: &HintKind,
@@ -278,14 +385,14 @@ fn emit_hint_comment(
         HintKind::NpmWorkspace => {
             counters.nested_npm_workspace += 1;
             let path = m.path.escaped();
-            snippet.push_str(&format!(
-                "\n# Nested npm workspace detected at {path} — its members will\n# be auto-detected by the npm loader. Add an explicit [release_unit.<name>]\n# here if you want a non-default tag-format / cascade / visibility.\n",
+            advice.push(format!(
+                "Nested npm workspace detected at {path} — its members will\nbe auto-detected by the npm loader. Add an explicit [release_unit.<name>]\nentry if you want a non-default tag-format / cascade / visibility.",
             ));
         }
         HintKind::SingleProject { ecosystem } => {
             counters.single_project += 1;
-            snippet.push_str(&format!(
-                "\n# Single-project repo detected ({ecosystem}) — `v{{version}}`\n# tag format is suggested instead of the ecosystem default.\n# Override per-unit if you publish under a different naming convention.\n",
+            advice.push(format!(
+                "Single-project repo detected ({ecosystem}) — `v{{version}}`\ntag format is suggested instead of the ecosystem default.\nOverride per-unit if you publish under a different naming convention.",
             ));
         }
         HintKind::NestedMonorepo => {
@@ -295,8 +402,8 @@ fn emit_hint_comment(
                 .note
                 .as_deref()
                 .unwrap_or("submodule looks like its own monorepo");
-            snippet.push_str(&format!(
-                "\n# Nested submodule at {path} — {note}.\n# Consider running `belaf init` inside the submodule and excluding\n# its path from this repo's detection rather than driving both from one config.\n",
+            advice.push(format!(
+                "Nested submodule at {path} — {note}.\nConsider running `belaf init` inside the submodule and excluding\nits path from this repo's detection rather than driving both from one config.",
             ));
         }
     }
@@ -314,32 +421,6 @@ fn register_externally_managed(
         ExtKind::JvmPluginManaged => counters.jvm_plugin_managed += 1,
     }
     allow_uncovered.push(format!("{}/", m.path.escaped()));
-}
-
-/// Append the snippet to `belaf/config.toml`. Idempotent via the
-/// [`AUTO_DETECT_MARKER`] comment line: the snippet is appended only
-/// if the marker isn't already present in the config. This survives
-/// the user editing the appended block (e.g. tweaking a tag_format
-/// or commenting a manifest out) — only removing the marker line
-/// itself causes a re-append on the next `--auto-detect` run.
-///
-/// Tag-format-override snippets (which don't carry the marker) skip
-/// the idempotency check and always append; they're emitted at most
-/// once per wizard run anyway.
-pub fn append_to_config(config_path: &Path, snippet: &str) -> std::io::Result<()> {
-    if snippet.is_empty() {
-        return Ok(());
-    }
-    let existing = std::fs::read_to_string(config_path).unwrap_or_default();
-    if snippet.contains(AUTO_DETECT_MARKER) && existing.contains(AUTO_DETECT_MARKER) {
-        return Ok(());
-    }
-    let mut content = existing;
-    if !content.ends_with('\n') {
-        content.push('\n');
-    }
-    content.push_str(snippet);
-    std::fs::write(config_path, content)
 }
 
 #[cfg(test)]
@@ -388,7 +469,13 @@ mod tests {
             },
         );
 
-        let result = run_with_cascade(&repo, &HashSet::new(), &standalones, &overrides);
+        let result = run_with_cascade(
+            &repo,
+            &HashSet::new(),
+            &standalones,
+            &overrides,
+            &ExistingDecisions::default(),
+        );
         assert!(
             result
                 .toml_snippet
@@ -491,40 +578,5 @@ mod tests {
         let s = format!("key = {}", toml_quote(nasty));
         let parsed: toml::Value = toml::from_str(&s).expect("must parse as valid TOML");
         assert_eq!(parsed["key"].as_str(), Some(nasty));
-    }
-
-    // -------------------------------------------------------------------
-    // M7 — idempotency must rest on a stable marker, not on
-    // string-equal-snippet matching.
-    // -------------------------------------------------------------------
-
-    #[test]
-    fn append_to_config_skips_when_marker_already_present() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let cfg = dir.path().join("config.toml");
-        std::fs::write(&cfg, format!("# existing line\n{AUTO_DETECT_MARKER}\n")).unwrap();
-        let snippet =
-            format!("{AUTO_DETECT_MARKER}\n[release_unit.alpha]\necosystem = \"cargo\"\n");
-        append_to_config(&cfg, &snippet).unwrap();
-        let after = std::fs::read_to_string(&cfg).unwrap();
-        assert!(
-            !after.contains("[release_unit.alpha]"),
-            "marker present → snippet must NOT be re-appended; got:\n{after}"
-        );
-    }
-
-    #[test]
-    fn append_to_config_re_appends_when_marker_removed() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let cfg = dir.path().join("config.toml");
-        std::fs::write(&cfg, "# user removed the marker\n").unwrap();
-        let snippet =
-            format!("{AUTO_DETECT_MARKER}\n[release_unit.alpha]\necosystem = \"cargo\"\n");
-        append_to_config(&cfg, &snippet).unwrap();
-        let after = std::fs::read_to_string(&cfg).unwrap();
-        assert!(
-            after.contains("[release_unit.alpha]") && after.contains(AUTO_DETECT_MARKER),
-            "missing marker → snippet must be appended; got:\n{after}"
-        );
     }
 }

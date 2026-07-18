@@ -83,7 +83,30 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
         state.upstream_url = url;
     }
 
+    // Re-running the wizard on an existing config must not resurface
+    // paths the user already decided on: `[ignore_paths]` hits don't
+    // exist for belaf, `[allow_uncovered]` hits are classified, and
+    // paths claimed by configured `[release_unit]` blocks are handled —
+    // none of them re-enter the selectable detection rows.
+    let existing = if state.config_exists {
+        let cfg = atry!(
+            crate::core::config::ConfigurationFile::get(&config_path);
+            ["failed to load existing configuration at {}", config_path.display()]
+        );
+        atry!(
+            auto_detect::ExistingDecisions::from_config_with_units(&cfg, &repo);
+            ["failed to resolve configured release units in {}", config_path.display()]
+        )
+    } else {
+        auto_detect::ExistingDecisions::default()
+    };
+
     state.detection = detector::detect_all(&repo);
+    state.detection.matches.retain(|m| {
+        !detector::is_covered_by_config_paths(&m.path, &existing.ignore_paths)
+            && !detector::is_covered_by_config_paths(&m.path, &existing.allow_uncovered)
+            && !detector::is_covered_by_config_paths(&m.path, &existing.unit_paths)
+    });
 
     let sess = AppBuilder::new()?.with_progress(true).initialize()?;
 
@@ -127,7 +150,7 @@ pub fn run(force: bool, upstream: Option<String>, preset: Option<String>) -> Res
     )?;
 
     match outcome? {
-        WizardOutcome::Confirmed => execute_bootstrap_with_output(&state, &repo),
+        WizardOutcome::Confirmed => execute_bootstrap_with_output(&state, &repo, &existing),
         WizardOutcome::Cancelled => Ok(1),
         WizardOutcome::SuggestedAlternative(msg) => {
             println!();
@@ -215,7 +238,11 @@ fn apply(result: StepResult, stack: &mut Vec<Box<dyn Step>>) -> Option<WizardOut
     }
 }
 
-fn execute_bootstrap_with_output(state: &WizardState, repo: &Repository) -> Result<i32> {
+fn execute_bootstrap_with_output(
+    state: &WizardState,
+    repo: &Repository,
+    existing: &auto_detect::ExistingDecisions,
+) -> Result<i32> {
     println!();
     let mut spinner = spinoff::Spinner::new(
         spinoff::spinners::Dots,
@@ -259,17 +286,29 @@ fn execute_bootstrap_with_output(state: &WizardState, repo: &Repository) -> Resu
                     &state.detector_excluded,
                     &standalones,
                     &cascade_overrides,
+                    existing,
                 );
-                if let Err(e) = auto_detect::append_to_config(&cfg_path, &result.toml_snippet) {
+                // Coverage-filtered + validated apply: a re-run wizard
+                // appends only new blocks instead of being silently
+                // dropped by the historical marker gate.
+                let config_text = fs::read_to_string(&cfg_path).unwrap_or_default();
+                let first_run = !auto_detect::is_initialized(&config_text);
+                if let Err(e) = auto_detect::apply_to_config(&cfg_path, &result, first_run) {
                     eprintln!(
-                        "warning: detected bundles but failed to append to {}: {}",
+                        "warning: detected bundles but failed to update {}: {}",
                         cfg_path.display(),
                         e
                     );
+                } else if !first_run {
+                    // Advice went into the config as comments on the
+                    // first run; on re-runs it surfaces here instead.
+                    for a in &result.advice {
+                        println!("hint: {}", a.replace('\n', " "));
+                    }
                 }
             }
             if let Some(snippet) = build_tag_format_snippet(state) {
-                if let Err(e) = auto_detect::append_to_config(&cfg_path, &snippet) {
+                if let Err(e) = auto_detect::append_validated(&cfg_path, &snippet) {
                     eprintln!(
                         "warning: failed to append tag_format override to {}: {}",
                         cfg_path.display(),

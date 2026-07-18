@@ -79,7 +79,7 @@ pub fn run(
 
     let _ = auto_detect_flag; // accepted for backward compat; auto-detect is always on in --ci.
     if exit == 0 {
-        let summary = run_auto_detect()?;
+        let summary = run_auto_detect(force)?;
         if ci {
             emit_init_ci_status(&summary);
         }
@@ -94,6 +94,13 @@ struct InitSummary {
     config_path: String,
     release_units_detected: usize,
     ecosystems: Vec<String>,
+    /// Detector hits suppressed because the existing config already
+    /// covers them (`[allow_uncovered]` or a `[release_unit]` block).
+    already_covered: usize,
+    /// Config-free detector advice (hint-shape output); part of the
+    /// `--ci` JSON so scripted consumers see it even on re-runs, where
+    /// it is no longer appended to config.toml.
+    advice: Vec<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -105,6 +112,8 @@ struct InitCiStatus<'a> {
     config_path: &'a str,
     release_units_detected: usize,
     ecosystems: &'a [String],
+    already_covered: usize,
+    advice: &'a [String],
 }
 
 fn emit_init_ci_status(summary: &InitSummary) {
@@ -113,6 +122,8 @@ fn emit_init_ci_status(summary: &InitSummary) {
         config_path: &summary.config_path,
         release_units_detected: summary.release_units_detected,
         ecosystems: &summary.ecosystems,
+        already_covered: summary.already_covered,
+        advice: &summary.advice,
     };
     match serde_json::to_string_pretty(&payload) {
         Ok(s) => println!("{s}"),
@@ -120,26 +131,53 @@ fn emit_init_ci_status(summary: &InitSummary) {
     }
 }
 
-fn run_auto_detect() -> Result<InitSummary> {
+fn run_auto_detect(force: bool) -> Result<InitSummary> {
     let repo = crate::core::git::repository::Repository::open_from_env()
         .context("auto-detect: belaf is not in a Git working directory")?;
 
-    let result = auto_detect::run(&repo);
-
     let mut cfg_path = repo.resolve_config_dir();
     cfg_path.push("config.toml");
-    auto_detect::append_to_config(&cfg_path, &result.toml_snippet)
-        .with_context(|| format!("auto-detect: failed to append to {}", cfg_path.display()))?;
+
+    // The bootstrap just wrote (or found) config.toml — load it so
+    // existing `[ignore_paths]` / `[allow_uncovered]` / `[release_unit]`
+    // decisions suppress re-detection instead of being overridden.
+    let cfg = crate::core::config::ConfigurationFile::get(&cfg_path)
+        .with_context(|| format!("auto-detect: failed to load {}", cfg_path.display()))?;
+    let existing = auto_detect::ExistingDecisions::from_config_with_units(&cfg, &repo)
+        .context("auto-detect: failed to resolve configured release units")?;
+
+    let result = auto_detect::run_against(&repo, &existing);
+
+    let config_text = std::fs::read_to_string(&cfg_path).unwrap_or_default();
+    let initialized = auto_detect::is_initialized(&config_text);
+    if initialized && !force {
+        // Historical gate: an initialized config is only re-appended on
+        // explicit request. The coverage filter above means --force is
+        // safe — it emits only what the config doesn't cover yet.
+        if !result.body_snippet.is_empty() || !result.allow_uncovered_paths.is_empty() {
+            info!(
+                "auto-detect: config already initialized; {} candidate(s) not covered by config — re-run with --force to append them",
+                result.counters.total_release_unit_candidates() + result.counters.total_mobile_warnings(),
+            );
+        }
+    } else {
+        auto_detect::apply_to_config(&cfg_path, &result, !initialized)
+            .with_context(|| format!("auto-detect: failed to update {}", cfg_path.display()))?;
+    }
 
     info!(
-        "auto-detect: {} ReleaseUnit candidates ({} hexagonal cargo, {} tauri, {} jvm-library, {} sdk-cascade), {} mobile-app warnings → [allow_uncovered]",
+        "auto-detect: {} ReleaseUnit candidates ({} hexagonal cargo, {} tauri, {} jvm-library, {} sdk-cascade), {} mobile-app warnings → [allow_uncovered], {} already covered by existing config",
         result.counters.total_release_unit_candidates(),
         result.counters.hexagonal_cargo,
         result.counters.tauri_single_source + result.counters.tauri_legacy,
         result.counters.jvm_library,
         result.counters.sdk_cascade_member,
         result.counters.total_mobile_warnings(),
+        result.counters.already_covered,
     );
+    for a in &result.advice {
+        info!("auto-detect hint: {}", a.replace('\n', " "));
+    }
 
     // Re-walk the discovery surface for the JSON-status caller.
     // Cheap on small repos; on large monorepos this is the same walk
@@ -164,6 +202,8 @@ fn run_auto_detect() -> Result<InitSummary> {
         config_path: cfg_path.display().to_string(),
         release_units_detected: units.len(),
         ecosystems,
+        already_covered: result.counters.already_covered,
+        advice: result.advice,
     })
 }
 

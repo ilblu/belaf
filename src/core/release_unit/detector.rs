@@ -109,7 +109,7 @@ impl DriftReport {
             ));
         }
         s.push_str(
-            "\nChoose one:\n  → run `belaf init --ci --auto-detect --force` to re-detect bundles and append release_unit blocks to belaf/config.toml (idempotent — the auto-detect marker prevents duplicate appends)\n  → add explicit [release_unit.<name>] entries\n  → if intentional (mobile app, archive, etc.), add to [ignore_paths] or [allow_uncovered]\n\nAborting prepare. No releases will be drafted.",
+            "\nChoose one:\n  → run `belaf init --ci --auto-detect --force` to re-detect bundles and append release_unit blocks to belaf/config.toml (idempotent — paths already covered by the config are never re-emitted)\n  → add explicit [release_unit.<name>] entries\n  → if intentional (mobile app, archive, etc.), add to [ignore_paths] or [allow_uncovered]\n\nAborting prepare. No releases will be drafted.",
         );
         s
     }
@@ -215,6 +215,33 @@ pub fn detect_drift_from_report(
     ignore_paths: &[String],
     allow_uncovered: &[String],
 ) -> DriftReport {
+    let mut coverage = unit_coverage_paths(resolved);
+    for p in ignore_paths {
+        coverage.push(RepoPathBuf::new(p.trim_end_matches('/').as_bytes()));
+    }
+    for p in allow_uncovered {
+        coverage.push(RepoPathBuf::new(p.trim_end_matches('/').as_bytes()));
+    }
+
+    let uncovered: Vec<UncoveredHit> = report
+        .matches
+        .iter()
+        .filter(|m| is_drift_signal(&m.shape) && !is_covered(&m.path, &coverage))
+        .map(|m| UncoveredHit {
+            path: m.path.clone(),
+            shape: m.shape.clone(),
+        })
+        .collect();
+
+    DriftReport { uncovered }
+}
+
+/// Directory prefixes claimed by resolved release units: manifest
+/// parent dirs, `paths = [...]` entries of manifest-less units, and
+/// satellites. Shared between the drift check and init-time re-detect
+/// suppression so both agree on what a `[release_unit.<name>]` block
+/// covers.
+pub fn unit_coverage_paths(resolved: &[ResolvedReleaseUnit]) -> Vec<RepoPathBuf> {
     let mut coverage: Vec<RepoPathBuf> = Vec::new();
     for r in resolved {
         if let super::VersionSource::Manifests(ms) = &r.unit.source {
@@ -239,24 +266,7 @@ pub fn detect_drift_from_report(
             coverage.push(s.clone());
         }
     }
-    for p in ignore_paths {
-        coverage.push(RepoPathBuf::new(p.trim_end_matches('/').as_bytes()));
-    }
-    for p in allow_uncovered {
-        coverage.push(RepoPathBuf::new(p.trim_end_matches('/').as_bytes()));
-    }
-
-    let uncovered: Vec<UncoveredHit> = report
-        .matches
-        .iter()
-        .filter(|m| is_drift_signal(&m.shape) && !is_covered(&m.path, &coverage))
-        .map(|m| UncoveredHit {
-            path: m.path.clone(),
-            shape: m.shape.clone(),
-        })
-        .collect();
-
-    DriftReport { uncovered }
+    coverage
 }
 
 /// Whether a detector hit should ever surface as a drift error.
@@ -313,6 +323,19 @@ pub fn detect_drift(
         &cfg.ignore_paths.paths,
         &cfg.allow_uncovered.paths,
     )
+}
+
+/// Whether a detector-hit path is covered by a raw config path list
+/// (`[ignore_paths]` / `[allow_uncovered]` entries, trailing-slash
+/// tolerant). Shares [`is_covered`] with the drift check so init-time
+/// auto-detect suppression and prepare-time drift silence agree on
+/// what "covered" means.
+pub fn is_covered_by_config_paths(path: &RepoPathBuf, config_paths: &[String]) -> bool {
+    let coverage: Vec<RepoPathBuf> = config_paths
+        .iter()
+        .map(|p| RepoPathBuf::new(p.trim_end_matches('/').as_bytes()))
+        .collect();
+    is_covered(path, &coverage)
 }
 
 /// A detector-hit path is "covered" iff one of:

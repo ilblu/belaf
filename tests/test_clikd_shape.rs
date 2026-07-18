@@ -177,3 +177,193 @@ fn auto_detect_run_filtered_excludes_paths_from_release_units() {
     assert!(result.toml_snippet.contains("sdks/kotlin/"));
     assert!(result.toml_snippet.contains("sdks/swift/"));
 }
+
+#[test]
+fn auto_detect_suppresses_hits_under_existing_ignore_paths() {
+    use belaf::cmd::init::auto_detect::{self, ExistingDecisions};
+
+    let repo = seeded_clikd();
+    let r = open_repo(&repo);
+
+    // An existing config already ignores the kotlin SDK. Scan-level
+    // suppression: no block, no re-emitted path, no counter — the path
+    // does not exist for belaf.
+    let existing = ExistingDecisions {
+        ignore_paths: vec!["sdks/kotlin/".into()],
+        ..Default::default()
+    };
+    let result = auto_detect::run_against(&r, &existing);
+
+    assert!(
+        !result.toml_snippet.contains("jvm-library"),
+        "kotlin SDK is under [ignore_paths]; no jvm-library block expected, got:\n{}",
+        result.toml_snippet
+    );
+    assert!(
+        !result.toml_snippet.contains("sdks/kotlin"),
+        "an ignored path must not resurface anywhere in the snippet, got:\n{}",
+        result.toml_snippet
+    );
+    assert_eq!(result.counters.jvm_library, 0);
+    assert_eq!(
+        result.counters.already_covered, 0,
+        "[ignore_paths] hits are dropped before counting, not tallied as already_covered"
+    );
+
+    // Unrelated detection is unaffected.
+    assert!(
+        result.toml_snippet.contains("glob = \"apps/services/*\""),
+        "cargo services glob must still be emitted"
+    );
+}
+
+#[test]
+fn auto_detect_suppresses_emission_under_existing_allow_uncovered() {
+    use belaf::cmd::init::auto_detect::{self, ExistingDecisions};
+
+    let repo = seeded_clikd();
+    let r = open_repo(&repo);
+
+    // The mobile app was already classified as externally managed.
+    // Emission-level suppression: no [allow_uncovered] table may be
+    // re-emitted (a duplicate table would be a TOML parse error on
+    // append), but the hit is still counted as already covered.
+    let existing = ExistingDecisions {
+        allow_uncovered: vec!["apps/mobile-ios/".into()],
+        ..Default::default()
+    };
+    let result = auto_detect::run_against(&r, &existing);
+
+    assert!(
+        !result.toml_snippet.contains("[allow_uncovered]"),
+        "already-covered mobile app must not re-emit an [allow_uncovered] table, got:\n{}",
+        result.toml_snippet
+    );
+    assert!(
+        !result.toml_snippet.contains("apps/mobile-ios"),
+        "covered path must not appear in the snippet, got:\n{}",
+        result.toml_snippet
+    );
+    assert_eq!(result.counters.mobile_ios, 0);
+    assert!(
+        result.counters.already_covered >= 1,
+        "allow_uncovered hits must surface in the already_covered counter"
+    );
+
+    // Unrelated detection is unaffected.
+    assert!(
+        result.toml_snippet.contains("glob = \"apps/services/*\""),
+        "cargo services glob must still be emitted"
+    );
+}
+
+#[test]
+fn auto_detect_suppresses_hits_covered_by_configured_units() {
+    use belaf::cmd::init::auto_detect::{self, ExistingDecisions};
+
+    let repo = seeded_clikd();
+    let r = open_repo(&repo);
+
+    // The Tauri desktop app already has a [release_unit] block —
+    // re-detection must not emit a second one.
+    let existing = ExistingDecisions {
+        ignore_paths: vec![],
+        allow_uncovered: vec![],
+        unit_paths: vec!["apps/desktop".into()],
+    };
+    let result = auto_detect::run_against(&r, &existing);
+
+    assert!(
+        !result.toml_snippet.contains("apps/desktop"),
+        "unit-covered path must not resurface, got:\n{}",
+        result.toml_snippet
+    );
+    assert_eq!(
+        result.counters.tauri_single_source + result.counters.tauri_legacy,
+        0
+    );
+    assert!(result.counters.already_covered >= 1);
+}
+
+#[test]
+fn auto_detect_rerun_against_own_output_emits_no_config_blocks() {
+    use belaf::cmd::init::auto_detect::{self, ExistingDecisions};
+    use belaf::core::config::ConfigurationFile;
+
+    let repo = seeded_clikd();
+    let r = open_repo(&repo);
+
+    // First init: write the emitted snippet as the config.
+    let first = auto_detect::run(&r);
+    let cfg_path = repo.path.join("belaf").join("config.toml");
+    std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+    std::fs::write(&cfg_path, &first.toml_snippet).unwrap();
+
+    // Re-detect against that config: every block emitted in round one
+    // (release units via unit coverage, mobile app via allow_uncovered)
+    // must now be suppressed — the closed loop that makes
+    // `init --ci --auto-detect --force` per-path idempotent.
+    let cfg = ConfigurationFile::get(&cfg_path).expect("emitted config must load");
+    let existing =
+        ExistingDecisions::from_config_with_units(&cfg, &r).expect("emitted units must resolve");
+    let second = auto_detect::run_against(&r, &existing);
+
+    assert_eq!(
+        second.body_snippet, "",
+        "re-run must be a config no-op — hints are advice, not body"
+    );
+    assert!(second.allow_uncovered_paths.is_empty());
+    assert!(
+        !second.advice.is_empty(),
+        "unaddressed sdk-cascade hints must surface as advice"
+    );
+    assert!(
+        second.counters.already_covered >= 4,
+        "hexagonal services + tauri + jvm + mobile hits must all count as covered, got {}",
+        second.counters.already_covered
+    );
+}
+
+#[test]
+fn force_rerun_merges_new_mobile_app_into_existing_allow_uncovered() {
+    use belaf::cmd::init::auto_detect::{self, ExistingDecisions};
+    use belaf::core::config::ConfigurationFile;
+
+    let repo = seeded_clikd();
+    let r = open_repo(&repo);
+
+    // Config covers everything except the iOS app and already has an
+    // [allow_uncovered] table from an earlier decision.
+    let cfg_path = repo.path.join("belaf").join("config.toml");
+    std::fs::create_dir_all(cfg_path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &cfg_path,
+        "[ignore_paths]\npaths = [\"apps/services/\", \"apps/desktop/\", \"sdks/\"]\n\n[allow_uncovered]\npaths = [\"apps/android-legacy/\"]\n",
+    )
+    .unwrap();
+
+    let cfg = ConfigurationFile::get(&cfg_path).expect("config must load");
+    let existing = ExistingDecisions::from_config_with_units(&cfg, &r).expect("resolve");
+    let result = auto_detect::run_against(&r, &existing);
+    assert_eq!(
+        result.allow_uncovered_paths,
+        vec!["apps/mobile-ios/".to_string()],
+        "only the uncovered mobile app may be emitted"
+    );
+
+    auto_detect::apply_to_config(&cfg_path, &result, false).expect("force apply");
+    let after = std::fs::read_to_string(&cfg_path).unwrap();
+    assert_eq!(
+        after.matches("[allow_uncovered]").count(),
+        1,
+        "existing table must be merged into, not duplicated:\n{after}"
+    );
+    let reloaded = ConfigurationFile::get(&cfg_path).expect("merged config must still load");
+    assert_eq!(
+        reloaded.allow_uncovered.paths,
+        vec![
+            "apps/android-legacy/".to_string(),
+            "apps/mobile-ios/".to_string()
+        ]
+    );
+}
