@@ -98,8 +98,11 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # Prebuilt binary: `cargo install` compiled from source with the
+      # repo-pinned toolchain and broke whenever a fresh transitive dep
+      # of cargo-audit raised its MSRV past our pin.
       - name: Install cargo-audit
-        run: cargo install cargo-audit
+        uses: taiki-e/install-action@cargo-audit
 
       - name: Run security audit
         run: cargo audit
