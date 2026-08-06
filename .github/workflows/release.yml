@@ -42,6 +42,17 @@ on:
   push:
     tags:
       - '**[0-9]+.[0-9]+.[0-9]+*'
+  # Hand-added on top of what dist generates (`allow-dirty = ["ci"]` in
+  # dist-workspace.toml keeps `dist generate` from reverting it).
+  #
+  # Dispatch this workflow *at the release tag* — `gh workflow run Release
+  # --ref v1.2.3` — and every step below behaves exactly as it does for a
+  # tag push, because they all derive the version from `github.ref_name`.
+  #
+  # Why it exists: on 2026-08-06 a GitHub Actions incident stopped push and
+  # tag events from creating workflow runs while `workflow_dispatch` kept
+  # working, which left a pushed tag with no way to build its release.
+  workflow_dispatch:
 
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
