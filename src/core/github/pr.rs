@@ -186,6 +186,7 @@ mod tests {
             commits: vec![],
             ecosystem: Ecosystem::classify("cargo"),
             cached_changelog: None,
+            cascade_inputs: Vec::new(),
         }
     }
 

@@ -3,6 +3,11 @@
 
 //! State for the Belaf CLI application.
 
+mod builder;
+mod graph_build;
+
+pub use builder::AppBuilder;
+
 use anyhow::{anyhow, Context};
 use std::collections::HashMap;
 use thiserror::Error as ThisError;
@@ -11,17 +16,16 @@ use tracing::{error, info, warn};
 use crate::{
     atry,
     core::{
-        config::{syntax::ChangelogConfiguration, ConfigurationFile},
+        config::syntax::ChangelogConfiguration,
         ecosystem::format_handler::FormatHandlerRegistry,
         errors::Result,
         git::repository::{ChangeList, ReleaseAvailability, Repository},
-        graph::{ReleaseUnitGraph, ReleaseUnitGraphBuilder, RepoHistories},
+        graph::{ReleaseUnitGraph, RepoHistories},
         group::GroupSet,
         resolved_release_unit::{DepRequirement, ReleaseUnitId, ResolvedReleaseUnit},
         tag_format::{build_tag_matcher, split_maven_coords, TagMatcher, TagPatternInputs},
         version::Version,
     },
-    utils::theme::ReleaseProgressBar,
 };
 
 /// Build a [`TagMatcher`] for one project, honouring the same
@@ -74,12 +78,6 @@ fn build_tag_matcher_for(
 
 /// Build a matcher per project for the *runtime* graph — used by
 /// `AppSession::analyze_histories` and by `find_earliest_release_containing`.
-/// Whether a `paths = [...]` entry is a glob pattern (Tier-3, F4-Glob) rather
-/// than a literal directory prefix. Conservative: any of `*`, `?`, `[`.
-fn path_is_glob(s: &str) -> bool {
-    s.contains(['*', '?', '['])
-}
-
 fn build_matchers_for_runtime_units(
     units: &[&ResolvedReleaseUnit],
     cfg_units: &[crate::core::release_unit::ResolvedReleaseUnit],
@@ -125,555 +123,6 @@ pub struct NpmConfig {
     pub internal_dep_protocol: Option<String>,
 }
 
-/// Setting up a Belaf application session.
-pub struct AppBuilder {
-    pub repo: Repository,
-    pub graph: ReleaseUnitGraphBuilder,
-
-    is_ci: bool,
-    populate_graph: bool,
-    show_progress: bool,
-    fetch_tags_first: bool,
-}
-
-fn detect_ci_environment() -> bool {
-    std::env::var("CI").is_ok()
-        || std::env::var("GITHUB_ACTIONS").is_ok()
-        || std::env::var("GITLAB_CI").is_ok()
-        || std::env::var("CIRCLECI").is_ok()
-        || std::env::var("TRAVIS").is_ok()
-        || std::env::var("JENKINS_URL").is_ok()
-}
-
-impl AppBuilder {
-    /// Start initializing an application session.
-    ///
-    /// This first phase of initialization may fail if the environment doesn't
-    /// associate the process with a proper Git repository with a work tree.
-    pub fn new() -> Result<AppBuilder> {
-        let repo = Repository::open_from_env()?;
-        let graph = ReleaseUnitGraphBuilder::new();
-        let is_ci = detect_ci_environment();
-
-        Ok(AppBuilder {
-            graph,
-            repo,
-            is_ci,
-            populate_graph: true,
-            show_progress: false,
-            fetch_tags_first: false,
-        })
-    }
-
-    pub fn with_progress(mut self, show_progress: bool) -> Self {
-        self.show_progress = show_progress;
-        self
-    }
-
-    pub fn populate_graph(mut self, do_populate: bool) -> Self {
-        self.populate_graph = do_populate;
-        self
-    }
-
-    /// Opt into a `git fetch --tags` against the resolved upstream
-    /// before project discovery. Required for commands that read tag
-    /// state to make release decisions (`prepare`), because the
-    /// release tags are created server-side by the belaf GitHub App
-    /// after merging the manifest PR, and `git pull --ff-only` does
-    /// not pull tags. Set `BELAF_NO_FETCH=1` to bypass at runtime —
-    /// useful in tests and offline scenarios.
-    pub fn fetch_tags_first(mut self, do_fetch: bool) -> Self {
-        self.fetch_tags_first = do_fetch;
-        self
-    }
-
-    /// Walk every project whose manifest reported version `0.0.0` and
-    /// try to recover the real current version from an existing git
-    /// tag. Uses the same template-driven lookup as the post-init code
-    /// path, honouring per-`[release_unit]` `tag_format` overrides.
-    ///
-    /// Group-level (`[group.X].tag_format`) overrides are not consulted
-    /// here because the `GroupSet` is only assembled inside
-    /// [`ReleaseUnitGraphBuilder::complete_loading_with_groups`], which
-    /// runs *after* this pass. That's acceptable: a group-only override
-    /// only matters if the unit's manifest also reads as 0.0.0 (rare),
-    /// and the post-init `analyze_histories` path applies the full
-    /// precedence chain again before any bump decision is made.
-    fn resolve_versions_from_tags(
-        &mut self,
-        resolved_units: &[crate::core::release_unit::ResolvedReleaseUnit],
-    ) -> Result<()> {
-        let is_single_project = self.graph.unit_count() == 1;
-        let registry = FormatHandlerRegistry::with_defaults();
-
-        for ident in self.graph.project_ids() {
-            let unit = self.graph.lookup_mut(ident);
-
-            let is_zero_version = matches!(
-                &unit.version,
-                Some(Version::Semver(v)) if v.major == 0
-                    && v.minor == 0
-                    && v.patch == 0
-                    && v.pre.is_empty()
-                    && v.build.is_empty()
-            );
-
-            if !is_zero_version {
-                continue;
-            }
-
-            let Some(project_name) = unit.qnames.first().cloned() else {
-                warn!(
-                    "project at index {} has no qualified names, skipping version resolution",
-                    ident
-                );
-                continue;
-            };
-            let ecosystem_name = unit
-                .qnames
-                .get(1)
-                .cloned()
-                .unwrap_or_else(|| "cargo".to_string());
-            let tag_format_override = resolved_units
-                .iter()
-                .find(|r| r.unit.name == project_name)
-                .and_then(|r| r.unit.tag_format.as_deref())
-                .map(|s| s.to_string());
-
-            let matcher = build_tag_matcher_for(
-                &project_name,
-                &ecosystem_name,
-                tag_format_override.as_deref(),
-                None, // groups not assembled yet — see fn docstring
-                &registry,
-                is_single_project,
-            )?;
-
-            if let Some((_, tag_name, version)) = self.repo.find_latest_tag_for_project(&matcher)? {
-                if version.major != 0 || version.minor != 0 || version.patch != 0 {
-                    info!(
-                        "resolved version {} from tag '{}' for project '{}'",
-                        version, tag_name, project_name
-                    );
-                    unit.version = Some(Version::Semver(version));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Finish app initialization, yielding a full AppSession object.
-    pub fn initialize(mut self) -> Result<AppSession> {
-        // Start by loading the configuration file, if it exists. If it doesn't
-        // we'll get a sensible default.
-
-        let mut cfg_path = self.repo.resolve_config_dir();
-        cfg_path.push("config.toml");
-        let config = ConfigurationFile::get(&cfg_path).with_context(|| {
-            format!(
-                "failed to load repository config file `{}`",
-                cfg_path.display()
-            )
-        })?;
-
-        self.repo
-            .apply_config(config.repo)
-            .with_context(|| "failed to finalize repository setup")?;
-
-        if self.fetch_tags_first && std::env::var_os("BELAF_NO_FETCH").is_none() {
-            self.repo
-                .fetch_tags(None)
-                .with_context(|| "failed to fetch upstream tags before release prep")?;
-        }
-
-        let ignore_paths = config.ignore_paths.paths.clone();
-        let allow_uncovered = config.allow_uncovered.paths.clone();
-        let mut resolved_units: Vec<crate::core::release_unit::ResolvedReleaseUnit> = Vec::new();
-
-        // Now auto-detect everything in the repo index.
-
-        if self.populate_graph {
-            use crate::core::ecosystem::format_handler::{
-                FormatHandlerRegistry, WorkspaceDiscovererRegistry,
-            };
-            use crate::core::release_unit::discovery::discover_implicit_release_units;
-            use crate::core::release_unit::VersionSource;
-
-            let registry = FormatHandlerRegistry::with_defaults();
-            let discoverers = WorkspaceDiscovererRegistry::with_defaults();
-
-            // Resolve `[release_unit.<name>]` entries first so we can
-            // (a) add full-explicit / glob units to the graph as primary
-            // nodes, (b) feed their manifest+satellite paths to discovery
-            // as a skip-list, and (c) match partial-override blocks
-            // (those without `ecosystem`) against the auto-detected set
-            // after discovery returns.
-            let resolve_output =
-                crate::core::release_unit::resolver::resolve(&self.repo, &config.release_units)
-                    .map_err(|e| {
-                        crate::core::errors::Error::msg(format!("release_unit resolution: {e}"))
-                    })?;
-            resolved_units = resolve_output.resolved;
-
-            let mut configured_skip_paths: Vec<crate::core::git::repository::RepoPathBuf> =
-                Vec::new();
-            for r in &resolved_units {
-                if let VersionSource::Manifests(ms) = &r.unit.source {
-                    for m in ms {
-                        let escaped = m.path.escaped().to_string();
-                        if let Some(parent) = std::path::Path::new(&escaped).parent() {
-                            let parent_str = parent.to_string_lossy().to_string();
-                            if !parent_str.is_empty() {
-                                configured_skip_paths.push(
-                                    crate::core::git::repository::RepoPathBuf::new(
-                                        parent_str.as_bytes(),
-                                    ),
-                                );
-                            }
-                        }
-                    }
-                }
-                for sat in &r.unit.satellites {
-                    configured_skip_paths.push(sat.clone());
-                }
-            }
-            for p in &config.ignore_paths.paths {
-                configured_skip_paths.push(crate::core::git::repository::RepoPathBuf::new(
-                    p.trim_end_matches('/').as_bytes(),
-                ));
-            }
-
-            for resolved in &resolved_units {
-                self.add_configured_unit_to_graph(&registry, resolved)?;
-            }
-
-            // The skip-list keeps auto-discovery from claiming the
-            // same manifest paths that a `[release_unit.X]` block
-            // already covers.
-            let discovered = discover_implicit_release_units(
-                &self.repo,
-                &registry,
-                &discoverers,
-                &configured_skip_paths,
-            )?;
-
-            // Match partial-override specs against the discovered set
-            // and synthesize ResolvedReleaseUnits whose override fields
-            // (tag_format, visibility, satellites, cascade_from) take
-            // effect at workflow time. These are NOT registered via
-            // `add_configured_unit_to_graph` — graph registration goes
-            // through the discovered unit's already-built rewriters.
-            let partial_resolved =
-                crate::core::release_unit::resolver::resolve_partial_against_discovered(
-                    &resolve_output.partial_overrides,
-                    &discovered,
-                )
-                .map_err(|e| {
-                    crate::core::errors::Error::msg(format!("partial-override resolution: {e}"))
-                })?;
-            resolved_units.extend(partial_resolved);
-
-            if self.show_progress {
-                let total = discovered.len();
-                let mut progress = ReleaseProgressBar::new(total, "Loading release units");
-                for (idx, du) in discovered.into_iter().enumerate() {
-                    progress.update(idx);
-                    Self::register_discovered_unit(&mut self.graph, du);
-                }
-                progress.finish();
-            } else {
-                for du in discovered {
-                    Self::register_discovered_unit(&mut self.graph, du);
-                }
-            }
-
-            // F4 — materialize `[codegen_edges]` as synthetic internal nodes +
-            // dependency edges, now that all real units are registered (so their
-            // ids are resolvable). Must run before `complete_loading_with_groups`,
-            // which resolves the `Text` dependency targets and builds the petgraph.
-            self.materialize_codegen_edges(&config.codegen_edges)?;
-
-            self.resolve_versions_from_tags(&resolved_units)?;
-        }
-
-        // Apply project config and compile the graph.
-
-        let mut graph = self.graph.complete_loading_with_groups(&config.groups)?;
-
-        // F1 — apply `kind` overrides from partial-override blocks onto their
-        // (discovered) graph nodes. Explicit/glob/paths-only units already had
-        // `kind` set in `add_configured_unit_to_graph`; partial overrides
-        // decorate a discovered node, so the kind is applied here by name.
-        for ru in &resolved_units {
-            if matches!(
-                ru.origin,
-                crate::core::release_unit::ResolveOrigin::PartialOverride { .. }
-            ) {
-                if let Some(id) = graph.lookup_ident(&ru.unit.name) {
-                    let node = graph.lookup_mut(id);
-                    node.kind = ru.unit.kind;
-                    node.bump_override = ru.unit.bump_override.clone();
-                }
-            }
-        }
-
-        Ok(AppSession {
-            repo: self.repo,
-            graph,
-            npm_config: NpmConfig::default(),
-            changelog_config: config.changelog,
-            bump_config: config.bump,
-            commit_attribution: config.commit_attribution,
-            binary_affecting: config.binary_affecting,
-            bump_sources: config.bump_sources,
-            resolved_release_units: resolved_units,
-            ignore_paths,
-            allow_uncovered,
-            detection_cache: std::sync::OnceLock::new(),
-            is_ci: self.is_ci,
-        })
-    }
-
-    /// Add a configured `[release_unit.X]` block to the graph as a
-    /// primary node. Reads the version from the canonical manifest
-    /// (or runs the external `read_command`), constructs rewriters
-    /// for every manifest in the unit's `manifests = [...]`, and
-    /// registers them on the graph builder.
-    fn add_configured_unit_to_graph(
-        &mut self,
-        registry: &crate::core::ecosystem::format_handler::FormatHandlerRegistry,
-        resolved: &crate::core::release_unit::ResolvedReleaseUnit,
-    ) -> Result<()> {
-        use crate::core::release_unit::{ResolveOrigin, VersionSource};
-
-        // Partial-override units are synthesized AFTER discovery from the
-        // matching DiscoveredUnit. Graph registration (version read,
-        // rewriter setup) happens through `register_discovered_unit`;
-        // re-registering here would duplicate rewriters.
-        if matches!(resolved.origin, ResolveOrigin::PartialOverride { .. }) {
-            return Ok(());
-        }
-
-        let unit = &resolved.unit;
-        let qnames = vec![unit.name.clone(), unit.ecosystem.as_str().to_string()];
-
-        let (version, prefix, manifests_for_rewriter, extra_includes): (
-            Version,
-            _,
-            _,
-            Vec<crate::core::git::repository::RepoPathBuf>,
-        ) = match &unit.source {
-            VersionSource::PathsOnly(paths) => {
-                // Manifest-less internal/ignore unit (F1): no version to read.
-                // Use a placeholder that is never emitted (these units are
-                // excluded from candidacy). Literal paths become prefix includes
-                // so commits in any of them attribute to this unit (for the
-                // cascade closure); glob paths (Tier-3) are handled post-match.
-                let version = parse_version_for_ecosystem("0.0.0", unit.ecosystem.as_str())
-                    .with_context(|| {
-                        format!(
-                            "building placeholder version for paths-only unit `{}`",
-                            unit.name
-                        )
-                    })?;
-                let literals: Vec<crate::core::git::repository::RepoPathBuf> = paths
-                    .iter()
-                    .filter(|p| !path_is_glob(&p.escaped()))
-                    .cloned()
-                    .collect();
-                let prefix = literals
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| crate::core::git::repository::RepoPathBuf::new(b""));
-                let extra = literals.iter().skip(1).cloned().collect();
-                (version, prefix, Vec::new(), extra)
-            }
-            VersionSource::Manifests(ms) => {
-                let first = ms.first().ok_or_else(|| {
-                    anyhow!("release_unit `{}` has empty manifests = []", unit.name)
-                })?;
-                let abs = self.repo.resolve_workdir(&first.path);
-                let version_str = crate::core::version_field::read(&first.version_field, &abs)
-                    .with_context(|| {
-                        format!(
-                            "reading version for release_unit `{}` from `{}`",
-                            unit.name,
-                            first.path.escaped()
-                        )
-                    })?;
-                let version = parse_version_for_ecosystem(&version_str, unit.ecosystem.as_str())
-                    .with_context(|| {
-                        format!(
-                            "parsing version `{}` for release_unit `{}`",
-                            version_str, unit.name
-                        )
-                    })?;
-                let (prefix_path, _) = first.path.split_basename();
-                (version, prefix_path.to_owned(), ms.clone(), Vec::new())
-            }
-            VersionSource::External(ext) => {
-                let version_str = crate::core::rewriters::external::read_current(ext, &self.repo)
-                    .map_err(|e| {
-                    anyhow!(
-                        "reading external versioner for release_unit `{}`: {}",
-                        unit.name,
-                        e
-                    )
-                })?;
-                let version = parse_version_for_ecosystem(&version_str, unit.ecosystem.as_str())
-                    .with_context(|| {
-                        format!(
-                            "parsing version `{}` from external read_command for `{}`",
-                            version_str, unit.name
-                        )
-                    })?;
-                let prefix = unit
-                    .satellites
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| crate::core::git::repository::RepoPathBuf::new(b""));
-                (version, prefix, Vec::new(), Vec::new())
-            }
-        };
-
-        let id = self.graph.add_project(qnames);
-        let unit_node = self.graph.lookup_mut(id);
-        unit_node.version = Some(version);
-        unit_node.prefix = Some(prefix);
-        unit_node.extra_includes = extra_includes;
-        unit_node.kind = unit.kind;
-        unit_node.bump_override = unit.bump_override.clone();
-
-        // Tier-3 (F4-Glob) — glob-shaped `paths` become residual glob matchers.
-        // A unit with no literal paths skips the prefix `Include` (it would
-        // over-match the repo root).
-        if let VersionSource::PathsOnly(paths) = &unit.source {
-            let globs: Vec<String> = paths
-                .iter()
-                .map(|p| p.escaped().to_string())
-                .filter(|s| path_is_glob(s))
-                .collect();
-            if !globs.is_empty() {
-                let has_literals = paths.iter().any(|p| !path_is_glob(&p.escaped()));
-                unit_node.repo_paths_no_prefix_include = !has_literals;
-                unit_node.extra_globs = globs;
-            }
-        }
-
-        if !manifests_for_rewriter.is_empty() {
-            unit_node.rewriters.push(Box::new(
-                crate::core::rewriters::multi_manifest::MultiManifestRewriter::new(
-                    id,
-                    manifests_for_rewriter,
-                ),
-            ));
-        }
-        let _ = registry; // FormatHandler-specific rewriters are deferred
-                          // to the auto-discovered units.
-
-        Ok(())
-    }
-
-    /// F4 — turn `[codegen_edges]` (glob → consumer crates) into synthetic
-    /// `Internal` graph nodes + dependency edges. Each glob becomes one
-    /// manifest-less node owning the glob's path prefix (`proto/**` → owns
-    /// `proto/`, named `proto`); every listed consumer crate gets an edge to it,
-    /// so a change under the glob enters that crate's — and its dependents' —
-    /// dependency closure. The node is `Internal`, so it never releases.
-    fn materialize_codegen_edges(
-        &mut self,
-        codegen_edges: &std::collections::HashMap<String, Vec<String>>,
-    ) -> Result<()> {
-        use crate::core::resolved_release_unit::{DepRequirement, DependencyTarget, UnitKind};
-
-        for (glob, crates) in codegen_edges {
-            // "proto/**" → prefix "proto/", name "proto".
-            let mut prefix = glob.trim_end_matches('*').to_string();
-            if !prefix.ends_with('/') {
-                prefix.push('/');
-            }
-            let name = prefix
-                .trim_end_matches('/')
-                .rsplit('/')
-                .next()
-                .unwrap_or("")
-                .to_string();
-            if name.is_empty() {
-                tracing::warn!("[codegen_edges] glob `{glob}` has no usable name — skipping");
-                continue;
-            }
-
-            let placeholder = parse_version_for_ecosystem("0.0.0", "cargo")
-                .context("building placeholder version for codegen-edge node")?;
-            let id = self
-                .graph
-                .add_project(vec![name.clone(), "codegen".to_string()]);
-            let node = self.graph.lookup_mut(id);
-            node.version = Some(placeholder);
-            node.prefix = Some(crate::core::git::repository::RepoPathBuf::new(
-                prefix.as_bytes(),
-            ));
-            node.kind = UnitKind::Internal;
-
-            for crate_name in crates {
-                match self.graph.id_for_qname(crate_name) {
-                    Some(crate_id) => self.graph.add_dependency(
-                        crate_id,
-                        DependencyTarget::Text(name.clone()),
-                        "codegen".to_string(),
-                        DepRequirement::Unavailable,
-                    ),
-                    None => tracing::warn!(
-                        "[codegen_edges] `{glob}` lists crate `{crate_name}`, which is not a \
-                         known release unit — skipping that edge"
-                    ),
-                }
-            }
-        }
-        Ok(())
-    }
-
-    /// Register a `DiscoveredUnit` (from auto-discovery) as a graph
-    /// node. Closures capturing rewriter logic run here once the
-    /// unit's `ReleaseUnitId` is assigned.
-    fn register_discovered_unit(
-        graph: &mut ReleaseUnitGraphBuilder,
-        du: crate::core::ecosystem::format_handler::DiscoveredUnit,
-    ) {
-        use crate::core::resolved_release_unit::DependencyTarget;
-
-        let id = graph.add_project(du.qnames);
-        let node = graph.lookup_mut(id);
-        node.version = Some(du.version);
-        node.prefix = Some(du.prefix);
-        for factory in du.rewriter_factories {
-            node.rewriters.push(factory(id));
-        }
-        for dep in du.internal_deps {
-            graph.add_dependency(
-                id,
-                DependencyTarget::Text(dep.target_package_name),
-                dep.literal,
-                dep.requirement,
-            );
-        }
-    }
-}
-
-fn parse_version_for_ecosystem(version_str: &str, ecosystem: &str) -> Result<Version> {
-    let trimmed = version_str.trim();
-    if ecosystem == "pypa" {
-        Ok(Version::Pep440(
-            trimmed.parse().map_err(|e| anyhow!("not PEP 440: {e}"))?,
-        ))
-    } else {
-        Ok(Version::Semver(
-            semver::Version::parse(trimmed).map_err(|e| anyhow!("not semver: {e}"))?,
-        ))
-    }
-}
-
 /// An error returned when one project in the repository needs a newer release
 /// of another project. The inner values are the user-facing names of the two
 /// projects: the first named project depends on the second one.
@@ -694,6 +143,11 @@ pub struct AppSession {
     /// `[binary_affecting]` — which changed paths count toward a bump (F3).
     /// Consumed by `analyze_histories`.
     binary_affecting: super::config::syntax::BinaryAffectingConfiguration,
+    /// `[cascade_inputs.<name>]` — declared path inputs, already validated and
+    /// sorted. Held so the bump-floor step in
+    /// [`crate::core::workflow::PrepareContext::discover_projects`] can map a
+    /// contributing input node back to its declared `bump` strategy.
+    cascade_inputs: Vec<super::config::ResolvedCascadeInput>,
     /// `[[bump_source]]` entries from `belaf/config.toml`. Resolved at
     /// CI/wizard entry by [`crate::cmd::prepare`].
     bump_sources: Vec<super::config::syntax::BumpSourceConfig>,
@@ -743,6 +197,11 @@ impl AppSession {
     /// consistency.
     pub fn binary_affecting(&self) -> &super::config::syntax::BinaryAffectingConfiguration {
         &self.binary_affecting
+    }
+
+    /// The validated `[cascade_inputs.<name>]` blocks, sorted by name.
+    pub fn cascade_inputs(&self) -> &[super::config::ResolvedCascadeInput] {
+        &self.cascade_inputs
     }
 
     /// Check that the current process is running *outside* of a CI environment.

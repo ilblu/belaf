@@ -71,7 +71,31 @@ fn golden_manifest_roundtrips_structurally() {
             "statistics presence must round-trip for {}",
             a.name
         );
+        assert_eq!(
+            a.cascade_inputs
+                .iter()
+                .map(|c| (c.name.as_str(), c.bump.as_deref()))
+                .collect::<Vec<_>>(),
+            b.cascade_inputs
+                .iter()
+                .map(|c| (c.name.as_str(), c.bump.as_deref()))
+                .collect::<Vec<_>>(),
+            "cascade_inputs must round-trip for {}",
+            a.name
+        );
     }
+
+    // The golden carries a populated `cascade_inputs` so both this repo and
+    // the github-app (which vendors the same file) exercise the field rather
+    // than only its empty default.
+    let solo = m1
+        .releases
+        .iter()
+        .find(|r| r.name == "solo-cli")
+        .expect("golden should contain solo-cli");
+    assert_eq!(solo.cascade_inputs.len(), 1);
+    assert_eq!(solo.cascade_inputs[0].name, "apko-base");
+    assert_eq!(solo.cascade_inputs[0].bump.as_deref(), Some("floor_minor"));
 }
 
 /// `serialize → parse → serialize` produces byte-equal JSON. This is

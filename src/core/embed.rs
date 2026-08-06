@@ -1,7 +1,9 @@
 use rust_embed::RustEmbed;
 use std::str;
 
-use super::config::{syntax::ResolvedGroupConfig, ConfigurationFile, NamedReleaseUnitConfig};
+use super::config::{
+    resolve_cascade_inputs, syntax::ResolvedGroupConfig, ConfigurationFile, NamedReleaseUnitConfig,
+};
 use super::errors::{Error, Result};
 
 const DEFAULT_CONFIG_NAME: &str = "default.toml";
@@ -49,13 +51,17 @@ impl EmbeddedConfig {
             .collect();
         release_units.sort_by(|a, b| a.name.cmp(&b.name));
 
+        // The embedded default ships no `[cascade_inputs]` entries, but run it
+        // through the same validator so the two load paths can never diverge.
+        let cascade_inputs = resolve_cascade_inputs(cfg.cascade_inputs)?;
+
         Ok(ConfigurationFile {
             repo: cfg.repo,
             changelog: cfg.changelog,
             bump: cfg.bump,
             commit_attribution: cfg.commit_attribution,
             binary_affecting: cfg.binary_affecting,
-            codegen_edges: cfg.codegen_edges,
+            cascade_inputs,
             groups,
             bump_sources: cfg.bump_sources,
             release_units,

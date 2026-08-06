@@ -13,11 +13,36 @@ the worst class of 2.x bug.
 ```toml
 [repo]
 upstream_urls = ["https://github.com/your-org/your-repo.git"]
+release_branch = "belaf/release--{base}"
 ```
 
 | Key | Type | Default | Notes |
 |-----|------|---------|-------|
 | `upstream_urls` | array of strings | required | Used to compute compare URLs in changelogs and to detect "is this the canonical clone?" for the install flow. |
+| `release_branch` | string | `belaf/release--{base}` | Template for the branch `belaf prepare` pushes its release commit to. `{base}` expands to the branch you ran from, with `/` replaced by `-`. The result is validated with `git check-ref-format`. |
+
+### Why the release branch is stable
+
+`prepare` reuses one branch per base branch and force-pushes it, then
+**updates** the open release PR instead of opening a new one. That is what
+makes `prepare --ci` safe to run on every push to your main branch: N runs
+produce one PR, not N PRs.
+
+`{base}` is in the default for a reason — releasing from `main` and from a
+maintenance branch like `1.x` are separate release trains, and a single
+global branch name would let one clobber the other's PR.
+
+Each run rebuilds the branch from the base commit and pushes it in one
+atomic force-push, so it never passes through a state where it equals the
+base — GitHub auto-closes a PR whose branch is reset to its base, and that
+would orphan the release PR.
+
+After the PR merges, nothing needs cleaning up: the next run rebuilds the
+branch from the new base and opens a fresh PR. It does not matter whether
+GitHub's "automatically delete head branches" setting is on.
+
+If your branch protection forbids force-pushes on `belaf/*`, point this key
+somewhere unprotected.
 
 ### `[repo.analysis]`
 
@@ -157,6 +182,95 @@ tag_format = "schema-v{version}"
 Bundles units that release together as a single atomic group. The
 GitHub App tags every member at the same version on PR merge; if any
 member's tag-write fails the whole group is rolled back.
+
+## `[cascade_inputs.<name>]`
+
+Some files feed a release unit without being one. A shared OCI base
+image, protobuf schemas compiled by a `build.rs`, a shared config tree:
+no package manager can see those edges, so belaf can't infer them. Patch
+a CVE in the base image and — without a declaration — nothing bumps, no
+tag is cut, and the unpatched images stay in production while the fixed
+definition sits in the repo.
+
+`[cascade_inputs]` declares those edges. A change under `paths` cascades
+into every unit in `affects`, exactly as if that unit had changed.
+
+```toml
+[cascade_inputs.apko-base]
+paths   = ["apko/base.yaml", "apko/*.lock", "apko/overlays/**"]
+affects = "all-deploy-units"        # or ["gate", "rig", "kin"]
+bump    = "floor_minor"             # optional
+```
+
+| Field | Meaning |
+|-------|---------|
+| `paths` | Repo-relative paths. An entry containing `*`, `?` or `[` is matched as a **glob** (`apko/*.lock`, `apko/overlays/**`); anything else is a literal **path prefix** (`apko/base.yaml`, `proto`). At least one entry is required. |
+| `affects` | Either the shorthand string `"all-deploy-units"` or an explicit list of unit names. An empty list is a hard error — an input that affects nothing is the exact bug this feature exists to prevent. |
+| `bump` | Optional bump floor forced on the affected units: `"mirror"` (default), `"floor_patch"`, `"floor_minor"`, `"floor_major"`. Same vocabulary as `cascade_from`. |
+
+The table key (`apko-base`) is the input's **name**, and it is
+user-visible in three places:
+
+- it becomes a graph node, so `fix(apko-base): patch zlib` is a valid
+  commit scope for `belaf check`;
+- affected units list it in their changelog as `via apko-base — …`;
+- affected units carry it in the release manifest's `cascade_inputs`
+  array, so the dashboard can show *why* twelve services suddenly
+  bumped.
+
+The name must not collide with an existing release unit; belaf refuses
+to build the graph if it does.
+
+### The `bump` floor barely matters below `floor_minor`
+
+Any commit belaf collects for a unit is already floored to at least a
+**patch** (a binary-affecting file changed, so the artifact changed).
+`mirror` and `floor_patch` therefore change nothing in practice — for
+the CVE-patch case the default is already correct. The setting only
+starts to matter at `floor_minor` and above, where you are deliberately
+saying "a change to this input is a bigger deal than the commit type
+suggests".
+
+An input can only ever *raise* a bump, never create one. A unit with no
+commits in its window is skipped before the floor is applied, so a
+declared input never resurrects an untouched unit. A per-unit
+`max_bump` still wins: the cap is applied after the floor.
+
+### Operational warning: the blast radius of `all-deploy-units`
+
+`all-deploy-units` is not an edge case — the first real CVE patch to a
+shared base image is the *normal* case, and it fans out to every deploy
+unit at once. With 23 deploy units that is 23 tags, 23
+`release:published` events, and **23 release workflow runs starting
+simultaneously**, each with a full OCI build against a cold cache.
+
+A per-tag `concurrency` group in the consumer workflow does **not**
+throttle this. Each tag is its own group, so every run is alone in its
+group and none of them queue. Throttle it explicitly:
+
+```yaml
+# One shared group across all release runs — they queue instead of
+# stampeding. Note: with cancel-in-progress false, they run one at a time.
+concurrency:
+  group: release-runner
+  cancel-in-progress: false
+```
+
+or, if the release job is a matrix, cap the fan-out at the job level:
+
+```yaml
+jobs:
+  release:
+    strategy:
+      max-parallel: 4
+      matrix:
+        unit: ${{ fromJson(needs.plan.outputs.units) }}
+```
+
+Pick a cap your registry and build cache can actually absorb. If you'd
+rather keep the radius small, list the units explicitly instead —
+`affects = ["gate", "rig"]` — at the cost of having to remember to add
+new services to the list.
 
 ## `[ignore_paths]` and `[allow_uncovered]`
 

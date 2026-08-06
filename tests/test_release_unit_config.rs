@@ -1,15 +1,16 @@
 //! End-to-end TOML round-trip for the named-entry release_unit config.
 //! Verifies that `[release_unit.<name>]` (with optional `glob` field),
-//! `[ignore_paths]`, `[allow_uncovered]`, and `[ecosystems.*]` all
-//! parse, every field is preserved through `ConfigurationFile::get`
-//! → `into_toml` → re-parse, and all 5 `VersionFieldSpec` variants
-//! plus both source-form variants (manifests / external) survive the
-//! round-trip.
+//! `[cascade_inputs.<name>]`, `[ignore_paths]`, `[allow_uncovered]`, and
+//! `[ecosystems.*]` all parse, every field is preserved through
+//! `ConfigurationFile::get` → `into_toml` → re-parse, and all 5
+//! `VersionFieldSpec` variants plus both source-form variants
+//! (manifests / external) survive the round-trip.
 
 use std::fs;
 
-use belaf::core::config::ConfigurationFile;
+use belaf::core::config::{CascadeInputTargets, ConfigurationFile};
 use belaf::core::release_unit::syntax::ManifestList;
+use belaf::core::release_unit::CascadeBumpStrategy;
 use tempfile::TempDir;
 
 /// User-supplied overlay covering every config section the CLI accepts.
@@ -97,6 +98,18 @@ name = "{basename}"
 manifests = ["{path}/crates/bin/Cargo.toml"]
 fallback_manifests = ["{path}/crates/workers/Cargo.toml"]
 satellites = ["{path}/crates"]
+
+# ---------------------------------------------------------------------------
+# Declared path inputs — both `affects` forms plus an explicit bump floor.
+# ---------------------------------------------------------------------------
+[cascade_inputs.apko-base]
+paths = ["apko/base.yaml", "apko/*.lock", "apko/overlays/**"]
+affects = "all-deploy-units"
+bump = "floor_minor"
+
+[cascade_inputs.proto]
+paths = ["proto/**"]
+affects = ["aura", "desktop"]
 
 # ---------------------------------------------------------------------------
 # ignore_paths and allow_uncovered (distinct semantics)
@@ -349,6 +362,26 @@ fn into_toml_round_trip_preserves_all_release_units() {
 
     assert_eq!(cfg1.ignore_paths.paths, cfg2.ignore_paths.paths);
     assert_eq!(cfg1.allow_uncovered.paths, cfg2.allow_uncovered.paths);
+
+    // `[cascade_inputs]` survives the round-trip, including the untagged
+    // `affects` enum (bare string vs list) and the optional bump floor.
+    assert_eq!(cfg1.cascade_inputs.len(), 2, "\n{serialised}");
+    for (a, b) in cfg1.cascade_inputs.iter().zip(cfg2.cascade_inputs.iter()) {
+        assert_eq!(a.name, b.name, "\n{serialised}");
+        assert_eq!(a.paths, b.paths, "\n{serialised}");
+        assert_eq!(a.affects, b.affects, "\n{serialised}");
+        assert_eq!(a.bump, b.bump, "\n{serialised}");
+    }
+    let apko = &cfg1.cascade_inputs[0];
+    assert_eq!(apko.name, "apko-base");
+    assert_eq!(apko.affects, CascadeInputTargets::AllDeployUnits);
+    assert_eq!(apko.bump, Some(CascadeBumpStrategy::FloorMinor));
+    let proto = &cfg1.cascade_inputs[1];
+    assert_eq!(
+        proto.affects,
+        CascadeInputTargets::Units(vec!["aura".to_string(), "desktop".to_string()])
+    );
+    assert_eq!(proto.bump, None);
     assert_eq!(
         cfg1.ecosystems.cargo.workspace_mode,
         cfg2.ecosystems.cargo.workspace_mode

@@ -46,11 +46,39 @@ impl BumpKind {
             other
         }
     }
+
+    /// Bridge from the commit-analysis vocabulary
+    /// ([`BumpRecommendation`](crate::core::bump::BumpRecommendation)) into
+    /// this one. Used by the `[cascade_inputs]` bump floor so the strategy
+    /// semantics live in exactly one place ([`cascaded`]).
+    pub fn from_recommendation(r: crate::core::bump::BumpRecommendation) -> Self {
+        use crate::core::bump::BumpRecommendation;
+        match r {
+            BumpRecommendation::Major => Self::Major,
+            BumpRecommendation::Minor => Self::Minor,
+            BumpRecommendation::Patch => Self::Patch,
+            BumpRecommendation::None => Self::NoBump,
+        }
+    }
+
+    /// Inverse of [`Self::from_recommendation`]. `Prerelease` has no
+    /// `BumpRecommendation` counterpart and maps to `Patch`; it can only
+    /// arise from `Mirror`ing a prerelease source, which the
+    /// `[cascade_inputs]` path never produces.
+    pub fn to_recommendation(self) -> crate::core::bump::BumpRecommendation {
+        use crate::core::bump::BumpRecommendation;
+        match self {
+            Self::Major => BumpRecommendation::Major,
+            Self::Minor => BumpRecommendation::Minor,
+            Self::Patch | Self::Prerelease => BumpRecommendation::Patch,
+            Self::NoBump => BumpRecommendation::None,
+        }
+    }
 }
 
 /// Apply a [`CascadeBumpStrategy`] given the source unit's actual
 /// bump.
-fn cascaded(strategy: CascadeBumpStrategy, source: BumpKind) -> BumpKind {
+pub fn cascaded(strategy: CascadeBumpStrategy, source: BumpKind) -> BumpKind {
     if matches!(source, BumpKind::NoBump) {
         // Source didn't bump → cascade does nothing.
         return BumpKind::NoBump;

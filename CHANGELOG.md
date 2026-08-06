@@ -5,6 +5,128 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.0.0 — 2026-08-06
+
+Two things this release exists for: `prepare` can finally run on every push
+to main, and files that feed a release unit without being one can finally
+trigger it.
+
+### Idempotent `prepare`
+
+Re-running it now refreshes the open release pull request instead of opening
+another one, which is what makes `belaf prepare --ci` safe to wire into a
+push-to-main workflow: N pushes produce one release PR, not N. This is the
+pattern release-please and changesets both use, and until now belaf could
+not be used that way at all.
+
+### Declared path inputs
+
+`[cascade_inputs]`. Some files feed a release unit
+without being one: a shared OCI base image, protobuf schemas compiled by a
+`build.rs`, a shared config tree. No package manager can see those edges.
+Patch a CVE in a shared base image and, until now, nothing bumped — no tag,
+no rebuild — while the fixed definition sat in the repo and the unpatched
+images stayed in production.
+
+`[codegen_edges]` was the partial answer to this and is replaced. It only
+ever worked for directory globs: every entry was turned into a path prefix,
+so `apko/*.lock` became the prefix `apko/*.lock/`, which matches nothing —
+a silent no-op with no warning. It also had no bump control and left no
+trace in the manifest, so nothing explained *why* twelve services bumped.
+
+### Changed
+
+- **BREAKING — the release branch is stable.** `prepare` pushed to a fresh
+  `release/<timestamp>-<uuid>` branch on every run; it now reuses one branch
+  per base branch, `belaf/release--{base}` by default, and force-updates it.
+  Override with `[repo] release_branch`. `{base}` expands to the branch the
+  run started from, with `/` replaced by `-`, and the result is validated
+  with `git check-ref-format`.
+
+  The base branch is part of the name on purpose: releasing from `main` and
+  from a maintenance branch are separate release trains, and one shared
+  branch name would let each clobber the other's PR.
+
+  **Migration:** anything matching on `release/*` — branch protection rules,
+  CI path filters, automation — needs to match `belaf/release--*` instead.
+  If branch protection forbids force-pushes on that prefix, point
+  `[repo] release_branch` somewhere unprotected.
+- **`prepare` updates an existing release PR.** It looks for the open PR
+  whose head is the release branch and refreshes its title and body; only
+  when there is none does it open one. If GitHub reports that a PR already
+  exists (a concurrent run opened one between the lookup and the create),
+  the run finds and updates it rather than failing after it has already
+  pushed. The interactive wizard asks whether to update the open PR or open
+  a separate one on a throwaway branch; `--ci` always updates.
+- **`prepare --ci` refuses to start from a release branch.** A run that
+  fails after creating its branch leaves you on it; starting again from
+  there used to name the next branch after the release branch and base the
+  PR on it. It now stops with an explanation instead.
+- **BREAKING — `[codegen_edges]` is removed, replaced by
+  `[cascade_inputs.<name>]`.** A config that still has the old section fails
+  to load with a message that renders the replacement block ready to paste.
+  There is no silent migration: the semantics changed enough to be worth one
+  look.
+
+  ```toml
+  [cascade_inputs.apko-base]
+  paths   = ["apko/base.yaml", "apko/*.lock", "apko/overlays/**"]
+  affects = "all-deploy-units"        # or ["gate", "rig", "kin"]
+  bump    = "floor_minor"             # optional
+  ```
+
+- **BREAKING — the input's name is the table key.** It used to be derived
+  from the glob's last path segment. The name is user-visible in three
+  places — it is a valid commit scope for `belaf check`, it appears in
+  affected units' changelogs as `via <name>`, and it is what the manifest
+  records — so the accepted scope set shifts with it. The rendered migration
+  block keeps the old names, so existing scopes stay valid if you paste it
+  as-is.
+- **Path entries are classified, not blanket-prefixed.** An entry containing
+  `*`, `?` or `[` is matched as a glob; anything else is a literal path
+  prefix. That is what makes `apko/*.lock` work.
+- **An input that matches nothing is a hard error.** Empty `paths`, empty
+  `affects`, an unknown `affects` shorthand, or an unknown `bump` strategy
+  all fail at config load. A path that `[binary_affecting]` would filter out
+  entirely is warned about.
+
+### Added
+
+- **`[repo] release_branch`** — the release branch template. See
+  `docs/configuration.md`.
+- **`pr_action` and `release_branch` in the `--ci` JSON status.**
+  `pr_action` is `created` or `updated`, so a workflow can tell a new
+  release PR from a refreshed one.
+- **Push-to-main in the workflow template.**
+  `examples/github-actions/belaf-prepare.yml` now triggers on pushes to
+  `main` with a concurrency group, which is the setup this release exists
+  to enable.
+- **`bump` floor per input** — `mirror` (default), `floor_patch`,
+  `floor_minor`, `floor_major`, the same vocabulary as `cascade_from`. Note
+  that a collected commit is already floored to at least a patch, so the
+  setting only changes anything from `floor_minor` up. An input can only
+  raise a bump, never create one: a unit with no commits is skipped before
+  the floor applies, and a per-unit `max_bump` still caps the result.
+- **`affects = "all-deploy-units"`** — every deploy unit, without listing
+  them. See the blast-radius warning in `docs/configuration.md`: the first
+  real CVE patch fans out to every deploy unit at once, and a per-tag
+  `concurrency` group does not throttle that.
+- **`cascade_inputs` in the release manifest.** Each affected unit's release
+  entry records the inputs that pulled it in and the bump each declared, so
+  the dashboard can show why a unit bumped. Additive — `SCHEMA_VERSION`
+  stays `"1"`.
+- **`[cascade_inputs]` documentation.** `docs/configuration.md` has a
+  section for it (`[codegen_edges]` never had one), and `belaf init
+  --auto-detect` emits a stub for it.
+
+### Fixed
+
+- **Pull request creation in OIDC-only CI runs.** `prepare` loaded the API
+  token without the GitHub Actions OIDC fallback that the push path uses,
+  so on a runner with an empty keyring the release branch pushed and then
+  the pull request failed to authenticate. Both paths now exchange the OIDC
+  token the same way.
+
 ## 2.1.0 — 2026-07-18
 
 Config-aware auto-detection. `belaf init` now respects every decision

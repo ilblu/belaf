@@ -49,7 +49,13 @@ pub mod core {
     pub mod git {
         pub mod branch;
         pub mod gitignore;
+        pub mod history;
+        pub mod path_matcher;
+        pub mod refs;
+        pub mod release_info;
+        pub mod repo_path;
         pub mod repository;
+        pub mod tags;
         pub mod url;
         pub mod utils;
         pub mod validate;

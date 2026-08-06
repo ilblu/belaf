@@ -4,6 +4,11 @@
 [repo]
 # Git upstream URLs for the repository
 upstream_urls = []
+# Branch `belaf prepare` pushes the release commit to. `{base}` expands to
+# the branch the run started from. It is reused and force-updated on every
+# run, which is what keeps one release PR up to date instead of opening a
+# new one each time. Uncomment to override the default:
+# release_branch = "belaf/release--{base}"
 
 [repo.analysis]
 # Cache size for commit analysis
@@ -237,8 +242,28 @@ exclude_suffixes = [".md"]
 # Exact repo-relative file names that are NOT binary-affecting.
 exclude_names = ["CHANGELOG.md", "LICENSE", "LICENSE.md", "LICENSE.txt", "README.md", "README"]
 
-# Extra-cargo "this path feeds these crates" edges (F4). A change under the
-# glob cascades as if the listed crates changed (e.g. protobuf schemas
-# compiled by a build.rs). `cargo metadata` cannot see these edges.
-# [codegen_edges]
-# "proto/**" = ["clikd-grpc", "clikd-events"]
+# Declared path inputs: files that feed release units without being units
+# themselves — a shared OCI base image, protobuf schemas compiled by a
+# build.rs, a shared config tree. No package manager can see these edges, so
+# you declare them here. A change under `paths` cascades into every unit
+# listed in `affects`, exactly as if that unit had changed.
+#
+# The table key is the input's name. It becomes a graph node, so it is a valid
+# commit scope for `belaf check` and shows up in changelogs as `via <name>`.
+#
+# `paths` entries containing `*`, `?` or `[` are matched as globs; everything
+# else is a literal path prefix. `affects` is either the shorthand
+# "all-deploy-units" or an explicit list of unit names. `bump` is optional and
+# raises the bump floor the input forces on the units it affects:
+# "mirror" (default) | "floor_patch" | "floor_minor" | "floor_major".
+# Note that a collected commit is already floored to at least a patch, so
+# "mirror" and "floor_patch" change nothing — only "floor_minor" and up do.
+#
+# [cascade_inputs.apko-base]
+# paths   = ["apko/base.yaml", "apko/*.lock", "apko/overlays/**"]
+# affects = "all-deploy-units"
+# bump    = "floor_minor"
+#
+# [cascade_inputs.proto]
+# paths   = ["proto/**"]
+# affects = ["clikd-grpc", "clikd-events"]

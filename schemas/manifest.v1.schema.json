@@ -185,6 +185,12 @@
             { "$ref": "#/$defs/cascade_from" }
           ]
         },
+        "cascade_inputs": {
+          "description": "Declared path inputs (`[cascade_inputs]`) whose changes pulled this unit into the release — e.g. a shared base-image definition patched for a CVE. Empty or absent when the unit was released on its own changes alone.",
+          "type": "array",
+          "default": [],
+          "items": { "$ref": "#/$defs/cascade_input_ref" }
+        },
         "visibility": {
           "description": "Whether this unit is publicly published (publish to a registry) or internal-only. Stored as free-form string for forward extensibility. Standard values: `public`, `internal`.",
           "type": ["string", "null"]
@@ -283,6 +289,24 @@
           "description": "Strategy applied. Free-form string; Known values: `mirror`, `floor_patch`, `floor_minor`, `floor_major`.",
           "type": "string",
           "minLength": 1
+        },
+        "x": { "type": "object" }
+      }
+    },
+    "cascade_input_ref": {
+      "description": "One declared path input that contributed to a release: a commit touched a path the input covers, which put this unit into the release even though its own sources may not have changed.",
+      "type": "object",
+      "required": ["name"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "description": "The `[cascade_inputs.<name>]` key that matched.",
+          "type": "string",
+          "minLength": 1
+        },
+        "bump": {
+          "description": "Bump floor the input applied, when it declares one. Free-form string; Known values: `mirror`, `floor_patch`, `floor_minor`, `floor_major`.",
+          "type": ["string", "null"]
         },
         "x": { "type": "object" }
       }

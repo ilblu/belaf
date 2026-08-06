@@ -119,7 +119,7 @@ impl DetectionCounters {
 
 /// Marker comment prepended to the first emitted snippet. Its presence
 /// ([`is_initialized`]) distinguishes the first-run append (full
-/// wrapper: marker + model header + codegen stub + advice comments)
+/// wrapper: marker + model header + cascade-inputs stub + advice comments)
 /// from re-runs, and gates un-forced `--ci` re-appends. Idempotency of
 /// the content itself comes from per-path coverage filtering
 /// ([`ExistingDecisions`]), not from this marker.
@@ -129,10 +129,14 @@ const AUTO_DETECT_MARKER: &str =
 /// F1/F4 — born-correct model documentation emitted into freshly-detected
 /// configs. Auto-detect can't *classify* units (deploy/internal/ignore is a
 /// human design call), so it documents the `kind` axis and leaves a
-/// `[codegen_edges]` stub instead of guessing.
+/// `[cascade_inputs]` stub instead of guessing.
 const MODEL_HEADER: &str = "\n# Each unit below defaults to `kind = \"deploy\"` (versioned, tagged, released).\n# Add `kind = \"internal\"` to make a unit a cascade-only node — its changes bump\n# the deploy units that depend on it, but it is never released (e.g. internal\n# library crates, generated schemas). Add `kind = \"ignore\"` to exclude a unit\n# entirely (e.g. flat test crates).\n";
 
-const CODEGEN_STUB: &str = "\n# Extra-cargo \"this path feeds these crates\" edges (F4). A change under the\n# glob cascades as if the listed crates changed (e.g. protobuf schemas compiled\n# by a build.rs that `cargo metadata` cannot see). Uncomment + adjust:\n# [codegen_edges]\n# \"proto/**\" = [\"my-grpc-crate\", \"my-events-crate\"]\n";
+/// Stub for `[cascade_inputs]`. Deliberately framed as the general mechanism —
+/// "files that feed units but aren't units" — rather than as a codegen special
+/// case, because the common instances are shared base images and shared config
+/// trees, not generated code.
+const CASCADE_INPUTS_STUB: &str = "\n# Declared path inputs: files that feed release units without being units\n# themselves (a shared OCI base image, protobuf schemas, a shared config tree).\n# No package manager can see these edges, so declare them here — a change under\n# `paths` cascades into every unit in `affects`. Uncomment + adjust:\n# [cascade_inputs.apko-base]\n# paths   = [\"apko/base.yaml\", \"apko/*.lock\"]\n# affects = \"all-deploy-units\"   # or [\"my-service\", \"my-worker\"]\n# bump    = \"floor_minor\"        # optional; \"mirror\" (default) changes nothing\n";
 
 const ALLOW_UNCOVERED_HEADER: &str = "\n# Mobile apps detected — handed off to Bitrise / fastlane / Codemagic.\n# Belaf doesn't manage mobile app releases; these paths are listed in\n# allow_uncovered so the drift detector doesn't fire on them.\n[allow_uncovered]\n";
 
@@ -335,7 +339,7 @@ pub fn run_with_cascade(
     let prefixed_snippet = if full.is_empty() {
         full
     } else {
-        format!("\n{AUTO_DETECT_MARKER}\n{MODEL_HEADER}{full}{CODEGEN_STUB}")
+        format!("\n{AUTO_DETECT_MARKER}\n{MODEL_HEADER}{full}{CASCADE_INPUTS_STUB}")
     };
 
     AutoDetectResult {

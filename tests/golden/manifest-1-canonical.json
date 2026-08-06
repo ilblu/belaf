@@ -7,7 +7,10 @@
   "groups": [
     {
       "id": "schema-bundle",
-      "members": ["@org/schema", "com.org:schema"]
+      "members": [
+        "@org/schema",
+        "com.org:schema"
+      ]
     }
   ],
   "releases": [
@@ -23,8 +26,13 @@
       "compare_url": "https://github.com/org/repo/compare/@org/schema@v0.1.0...@org/schema@v0.2.0",
       "is_prerelease": false,
       "changelog": "## What's new\n\n- added optional User.preferredName",
-      "contributors": ["alice", "bob"],
-      "first_time_contributors": ["bob"],
+      "contributors": [
+        "alice",
+        "bob"
+      ],
+      "first_time_contributors": [
+        "bob"
+      ],
       "statistics": {
         "commit_count": 7,
         "days_since_last_release": 14,
@@ -44,7 +52,10 @@
       "tag_name": "com.org/schema@v0.2.0",
       "is_prerelease": false,
       "changelog": "## What's new\n\n- added optional User.preferredName",
-      "contributors": ["alice", "bob"],
+      "contributors": [
+        "alice",
+        "bob"
+      ],
       "first_time_contributors": [],
       "statistics": {
         "commit_count": 7,
@@ -62,14 +73,22 @@
       "tag_name": "solo-cli-v2.0.0",
       "is_prerelease": false,
       "changelog": "## Breaking\n\n- new architecture",
-      "contributors": ["alice"],
+      "contributors": [
+        "alice"
+      ],
       "first_time_contributors": [],
       "statistics": {
         "commit_count": 42,
         "breaking_changes_count": 5,
         "features_count": 12,
         "fixes_count": 3
-      }
+      },
+      "cascade_inputs": [
+        {
+          "name": "apko-base",
+          "bump": "floor_minor"
+        }
+      ]
     }
   ]
 }

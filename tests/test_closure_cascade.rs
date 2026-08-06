@@ -2,7 +2,7 @@
 //!
 //! A change to an `internal` library crate must bump the `deploy` services
 //! whose dependency closure contains it, while the internal crate itself is
-//! never versioned/tagged/released. A `[codegen_edges]` source behaves the
+//! never versioned/tagged/released. A `[cascade_inputs]` entry behaves the
 //! same way for crates that consume generated code.
 
 mod common;

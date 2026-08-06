@@ -18,10 +18,12 @@ use tracing::info;
 use std::path::Path;
 
 use crate::core::{
+    api::ApiPullRequest,
     bump::{BumpConfig, BumpRecommendation},
     changelog::{ChangelogConfig, Commit, GitConfig},
     config::syntax::{BumpConfiguration, ChangelogConfiguration},
     git::repository::RepoPathBuf,
+    github::client::GitHubInformation,
     session::AppBuilder,
     ui::components::toggle_panel::TogglePanel,
     wire::known::Ecosystem,
@@ -669,6 +671,18 @@ pub fn run_with_overrides_and_decisions(
         return Err(e);
     }
 
+    // An open release PR already exists for this branch. `--ci` always
+    // updates it; interactively the user may instead want this release to
+    // stand on its own, so ask.
+    if let Some(existing) = find_open_release_pr(&ctx) {
+        if !confirm_update_existing_pr(&existing)? {
+            if let Err(e) = ctx.use_separate_branch() {
+                ctx.cleanup();
+                return Err(e);
+            }
+        }
+    }
+
     println!();
     let mut spinner = spinoff::Spinner::new(
         spinoff::spinners::Dots,
@@ -676,10 +690,10 @@ pub fn run_with_overrides_and_decisions(
         spinoff::Color::Yellow,
     );
 
-    let pr_url = match ctx.finalize(selections) {
-        Ok(url) => {
+    let prepared = match ctx.finalize(selections) {
+        Ok(prepared) => {
             spinner.success("Release preparation complete!");
-            url
+            prepared
         }
         Err(e) => {
             spinner.fail("Release preparation failed!");
@@ -689,11 +703,50 @@ pub fn run_with_overrides_and_decisions(
 
     println!();
     println!();
-    println!("  {} Pull request created:", "→".cyan());
-    println!("    {}", pr_url.cyan().underline());
+    println!(
+        "  {} Pull request {}:",
+        "→".cyan(),
+        prepared.pr_action.as_str()
+    );
+    println!("    {}", prepared.pr_url.cyan().underline());
     println!();
 
     Ok(0)
+}
+
+/// The open release PR for this run's branch, if the API can tell us.
+///
+/// Best-effort on purpose: a network or auth failure here must not sink a
+/// run that would otherwise succeed. `finalize` talks to the same endpoint
+/// and reports properly if it is genuinely unreachable.
+fn find_open_release_pr(ctx: &PrepareContext<'_>) -> Option<ApiPullRequest> {
+    let github = GitHubInformation::new(ctx.sess).ok()?;
+    github.find_open_pull_request(ctx.release_branch()).ok()?
+}
+
+fn confirm_update_existing_pr(existing: &ApiPullRequest) -> Result<bool> {
+    println!();
+    println!(
+        "  {} Release PR #{} is already open for this branch{}",
+        "ℹ".cyan().bold(),
+        existing.number,
+        existing
+            .title
+            .as_deref()
+            .map(|t| format!(": {t}"))
+            .unwrap_or_default()
+    );
+
+    let choice = dialoguer::Select::with_theme(&dialoguer::theme::ColorfulTheme::default())
+        .with_prompt("What should this run do?")
+        .items([
+            "Update that pull request",
+            "Open a separate pull request on its own branch",
+        ])
+        .default(0)
+        .interact()?;
+
+    Ok(choice == 0)
 }
 
 fn print_no_changes_message() {
@@ -962,6 +1015,7 @@ mod tests {
                 suggested_bump: BumpRecommendation::Patch,
                 prerelease_version: None,
                 ecosystem: Ecosystem::classify("npm"),
+                cascade_inputs: Vec::new(),
             },
             selected: true,
             chosen_bump: None,

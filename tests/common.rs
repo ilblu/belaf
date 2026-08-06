@@ -57,6 +57,16 @@ impl TestRepo {
             .expect("failed to add remote");
     }
 
+    /// Run a raw `git` command in the repo and return its stdout, trimmed.
+    pub fn git(&self, args: &[&str]) -> String {
+        let out = Command::new("git")
+            .args(args)
+            .current_dir(&self.path)
+            .output()
+            .expect("failed to run git");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
     pub fn write_file(&self, relative_path: &str, content: &str) {
         let full_path = self.path.join(relative_path);
         if let Some(parent) = full_path.parent() {

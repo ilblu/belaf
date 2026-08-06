@@ -9,8 +9,21 @@ use super::types::{
     ApiCommit, ApiPullRequest, CheckInstallationResponse, CommitsResponse, CreatePullRequestParams,
     CreatePullRequestRequest, CreatePullRequestResponse, DeviceCodeRequest, DeviceCodeResponse,
     GitCredentialsResponse, OidcExchangeRequest, OidcExchangeResponse, PullRequestsResponse,
-    StoredToken, TokenPollRequest, TokenPollResponse, UserInfo,
+    StoredToken, TokenPollRequest, TokenPollResponse, UpdatePullRequestRequest, UserInfo,
 };
+
+/// Borrowed arguments for the paginated pulls endpoint. A struct rather
+/// than positional parameters so the two public wrappers around it stay
+/// readable — mirrors [`CreatePullRequestParams`].
+struct ListPullsQuery<'a> {
+    token: &'a StoredToken,
+    owner: &'a str,
+    repo: &'a str,
+    state: &'a str,
+    head_branch: Option<&'a str>,
+    page: u32,
+    per_page: u32,
+}
 
 #[derive(Deserialize)]
 struct LimitExceededPayload {
@@ -318,16 +331,74 @@ impl ApiClient {
         page: u32,
         per_page: u32,
     ) -> Result<Vec<ApiPullRequest>, ApiError> {
-        let per_page = per_page.min(100);
-        let url = format!(
-            "{}/api/cli/repos/{}/{}/pulls?state=closed&per_page={}&page={}",
-            self.base_url, owner, repo, per_page, page
+        self.list_pull_requests(ListPullsQuery {
+            token,
+            owner,
+            repo,
+            state: "closed",
+            head_branch: None,
+            page,
+            per_page,
+        })
+        .await
+    }
+
+    /// Finds the open pull request whose head is `head_branch`, if any.
+    ///
+    /// This is what makes `belaf prepare` idempotent: it locates the bump PR
+    /// a previous run opened so we can update it instead of stacking a second
+    /// one on top. GitHub allows at most one open PR per head branch, so at
+    /// most one result is possible.
+    pub async fn find_open_pull_request(
+        &self,
+        token: &StoredToken,
+        owner: &str,
+        repo: &str,
+        head_branch: &str,
+    ) -> Result<Option<ApiPullRequest>, ApiError> {
+        let prs = self
+            .list_pull_requests(ListPullsQuery {
+                token,
+                owner,
+                repo,
+                state: "open",
+                head_branch: Some(head_branch),
+                page: 1,
+                per_page: 100,
+            })
+            .await?;
+
+        // The server already filters by head, but it resolves the branch
+        // against the upstream owner. Re-check locally so a server-side
+        // filter that silently no-ops can never make us update a PR that
+        // belongs to a different branch.
+        Ok(prs.into_iter().find(|pr| {
+            pr.head_ref
+                .as_deref()
+                .is_none_or(|head_ref| head_ref == head_branch)
+        }))
+    }
+
+    async fn list_pull_requests(
+        &self,
+        query: ListPullsQuery<'_>,
+    ) -> Result<Vec<ApiPullRequest>, ApiError> {
+        let per_page = query.per_page.min(100);
+        let mut url = format!(
+            "{}/api/cli/repos/{}/{}/pulls?state={}&per_page={}&page={}",
+            self.base_url, query.owner, query.repo, query.state, per_page, query.page
         );
+
+        if let Some(head) = query.head_branch {
+            // Branch names contain `/` and may contain other characters that
+            // are not safe unencoded in a query value.
+            url.push_str(&format!("&head={}", urlencoding::encode(head)));
+        }
 
         let response = self
             .client
             .get(&url)
-            .bearer_auth(&token.access_token)
+            .bearer_auth(&query.token.access_token)
             .send()
             .await?;
 
@@ -352,6 +423,37 @@ impl ApiClient {
                 head: params.head.to_string(),
                 base: params.base.to_string(),
                 body: Some(params.body.to_string()),
+            })
+            .send()
+            .await?;
+
+        Self::handle_response(response).await
+    }
+
+    /// Updates an existing pull request's title and body.
+    ///
+    /// Used to refresh the open bump PR after a re-run of `belaf prepare`,
+    /// so the PR always describes the versions and changelog of the release
+    /// commit currently on its branch.
+    pub async fn update_pull_request(
+        &self,
+        token: &StoredToken,
+        owner: &str,
+        repo: &str,
+        number: i64,
+        title: &str,
+        body: &str,
+    ) -> Result<CreatePullRequestResponse, ApiError> {
+        let response = self
+            .client
+            .patch(format!(
+                "{}/api/cli/repos/{}/{}/pulls/{}",
+                self.base_url, owner, repo, number
+            ))
+            .bearer_auth(&token.access_token)
+            .json(&UpdatePullRequestRequest {
+                title: Some(title.to_string()),
+                body: Some(body.to_string()),
             })
             .send()
             .await?;

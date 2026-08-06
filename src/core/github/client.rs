@@ -1,10 +1,26 @@
 use anyhow::{anyhow, Context};
 use tracing::info;
 
-use crate::core::api::{ApiClient, CreatePullRequestParams, StoredToken};
-use crate::core::auth::token::load_token;
+use crate::core::api::{ApiClient, ApiPullRequest, CreatePullRequestParams, StoredToken};
+use crate::core::auth::token::load_or_exchange_token;
 use crate::core::errors::Result;
 use crate::core::session::AppSession;
+
+/// What `create_or_update_pull_request` did with the release PR.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrAction {
+    Created,
+    Updated,
+}
+
+impl PrAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Created => "created",
+            Self::Updated => "updated",
+        }
+    }
+}
 
 pub struct GitHubInformation {
     owner: String,
@@ -15,7 +31,15 @@ pub struct GitHubInformation {
 
 impl GitHubInformation {
     pub fn new(sess: &AppSession) -> Result<Self> {
-        let token = load_token()
+        let api_client = ApiClient::new();
+
+        // `load_or_exchange_token`, not `load_token`: on a CI runner the
+        // keyring is empty and the only credential is the GitHub Actions OIDC
+        // JWT, which this exchanges for a belaf token. Using the plain loader
+        // here used to let the push succeed (it goes through
+        // `fetch_git_credentials`, which does exchange) and then fail on the
+        // pull request.
+        let token = block_on(load_or_exchange_token(&api_client))?
             .map_err(|e| anyhow!("Failed to load token: {}", e))?
             .ok_or_else(|| {
                 anyhow!("Authentication required. Run 'belaf install' to authenticate.")
@@ -35,7 +59,7 @@ impl GitHubInformation {
         Ok(GitHubInformation {
             owner,
             repo,
-            api_client: ApiClient::new(),
+            api_client,
             token,
         })
     }
@@ -44,13 +68,36 @@ impl GitHubInformation {
         Self::new(sess)
     }
 
-    pub fn create_pull_request(
+    /// The open pull request whose head is `head`, if there is one.
+    pub fn find_open_pull_request(&self, head: &str) -> Result<Option<ApiPullRequest>> {
+        let owner = self.owner.clone();
+        let repo = self.repo.clone();
+        let token = self.token.clone();
+        let head = head.to_string();
+        let api_client = self.api_client.clone();
+
+        block_on(async move {
+            api_client
+                .find_open_pull_request(&token, &owner, &repo, &head)
+                .await
+                .map_err(map_api_error)
+        })?
+    }
+
+    /// Point the release pull request at the current state of `head`.
+    ///
+    /// Updates the open PR from that branch if there is one, otherwise opens
+    /// a new one. This is what keeps repeated `prepare` runs down to a single
+    /// release PR instead of one per run.
+    ///
+    /// Returns the PR's URL and which of the two happened.
+    pub fn create_or_update_pull_request(
         &self,
         head: &str,
         base: &str,
         title: &str,
         body: &str,
-    ) -> Result<String> {
+    ) -> Result<(String, PrAction)> {
         let owner = self.owner.clone();
         let repo = self.repo.clone();
         let token = self.token.clone();
@@ -60,44 +107,89 @@ impl GitHubInformation {
         let body = body.to_string();
         let api_client = self.api_client.clone();
 
-        let future = async move {
-            let params = CreatePullRequestParams {
-                token: &token,
-                owner: &owner,
-                repo: &repo,
-                title: &title,
-                head: &head,
-                base: &base,
-                body: &body,
-            };
-
-            let pr = api_client
-                .create_pull_request(params)
+        block_on(async move {
+            if let Some(existing) = api_client
+                .find_open_pull_request(&token, &owner, &repo, &head)
                 .await
-                .map_err(|e| match &e {
-                    crate::core::api::ApiError::ApiResponse {
-                        status: 422,
-                        message,
-                    } => {
-                        anyhow::anyhow!("pull request creation failed: {}", message)
-                    }
-                    crate::core::api::ApiError::ApiResponse { status, message } => {
-                        anyhow::anyhow!("GitHub API error ({}): {}", status, message)
-                    }
-                    _ => anyhow::anyhow!("{}", e),
-                })?;
+                .map_err(map_api_error)?
+            {
+                let updated = api_client
+                    .update_pull_request(&token, &owner, &repo, existing.number, &title, &body)
+                    .await
+                    .map_err(map_api_error)?;
 
-            info!("created pull request: {}", pr.html_url);
-            Ok(pr.html_url)
-        };
-
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
-            Err(_) => {
-                let rt =
-                    tokio::runtime::Runtime::new().context("failed to create async runtime")?;
-                rt.block_on(future)
+                info!("updated pull request: {}", updated.html_url);
+                return Ok((updated.html_url, PrAction::Updated));
             }
+
+            let create_result = api_client
+                .create_pull_request(CreatePullRequestParams {
+                    token: &token,
+                    owner: &owner,
+                    repo: &repo,
+                    title: &title,
+                    head: &head,
+                    base: &base,
+                    body: &body,
+                })
+                .await;
+
+            match create_result {
+                Ok(pr) => {
+                    info!("created pull request: {}", pr.html_url);
+                    Ok((pr.html_url, PrAction::Created))
+                }
+
+                // 422 means GitHub already has an open PR for this head. We
+                // looked and found none, so another run opened one in the
+                // meantime — take the same update path rather than failing a
+                // run that has already pushed its commit.
+                Err(crate::core::api::ApiError::ApiResponse {
+                    status: 422,
+                    message,
+                }) => {
+                    let existing = api_client
+                        .find_open_pull_request(&token, &owner, &repo, &head)
+                        .await
+                        .map_err(map_api_error)?
+                        .ok_or_else(|| anyhow!("pull request creation failed: {}", message))?;
+
+                    let updated = api_client
+                        .update_pull_request(&token, &owner, &repo, existing.number, &title, &body)
+                        .await
+                        .map_err(map_api_error)?;
+
+                    info!(
+                        "updated pull request opened by a concurrent run: {}",
+                        updated.html_url
+                    );
+                    Ok((updated.html_url, PrAction::Updated))
+                }
+
+                Err(e) => Err(map_api_error(e)),
+            }
+        })?
+    }
+}
+
+fn map_api_error(e: crate::core::api::ApiError) -> anyhow::Error {
+    match &e {
+        crate::core::api::ApiError::ApiResponse { status, message } => {
+            anyhow!("GitHub API error ({}): {}", status, message)
+        }
+        _ => anyhow!("{}", e),
+    }
+}
+
+/// Run an async call from this synchronous module, reusing the ambient
+/// runtime when there is one. The outer `Result` is the runtime itself
+/// failing to start; the future's own output stays untouched inside it.
+fn block_on<F: std::future::Future>(future: F) -> Result<F::Output> {
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => Ok(tokio::task::block_in_place(|| handle.block_on(future))),
+        Err(_) => {
+            let rt = tokio::runtime::Runtime::new().context("failed to create async runtime")?;
+            Ok(rt.block_on(future))
         }
     }
 }

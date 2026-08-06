@@ -14,20 +14,16 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::info;
 
 use crate::core::{
-    api::{ApiClient, ApiError},
-    auth::token::load_or_exchange_token,
     bump::{self, BumpConfig, BumpRecommendation},
-    changelog::{ChangelogConfig, Commit, GitConfig},
+    changelog::Commit,
     config::syntax::{BumpConfiguration, ChangelogConfiguration},
     ecosystem::format_handler::FormatHandlerRegistry,
-    git::repository::{ChangeList, RepoPathBuf, Repository},
-    github::{client::GitHubInformation, pr},
+    git::repository::RepoPathBuf,
     graph::GraphQueryBuilder,
     group::GroupSet,
-    manifest::{ReleaseEntry, ReleaseManifest, ReleaseStatistics, MANIFEST_DIR},
     resolved_release_unit::ReleaseUnitId,
     session::AppSession,
     tag_format::{format_tag, split_maven_coords, TagFormatInputs},
@@ -48,6 +44,13 @@ pub struct ReleaseUnitCandidate {
     /// `suggested_bump` normally).
     pub prerelease_version: Option<String>,
     pub ecosystem: Ecosystem,
+    /// `[cascade_inputs]` provenance: the declared inputs whose changes pulled
+    /// this unit into the release, sorted by name. Empty when the unit was
+    /// released on its own changes alone. Carried through
+    /// [`SelectedReleaseUnit`] into the manifest because manifest emission
+    /// only ever sees release candidates — the input nodes themselves are
+    /// `Internal` and never appear there.
+    pub cascade_inputs: Vec<crate::core::wire::domain::CascadeInputRefWire>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +152,13 @@ fn prerelease_counter(pre: &str, label: &str) -> Option<u64> {
     pre.strip_prefix(label)?.strip_prefix('.')?.parse().ok()
 }
 
+/// The outcome of a completed `prepare` run.
+pub struct PreparedRelease {
+    pub pr_url: String,
+    /// Whether the run opened the release PR or refreshed an existing one.
+    pub pr_action: crate::core::github::client::PrAction,
+}
+
 pub struct PrepareContext<'a> {
     pub sess: &'a mut AppSession,
     pub base_branch: String,
@@ -183,7 +193,7 @@ impl<'a> PrepareContext<'a> {
             );
         }
 
-        let (base_branch, release_branch) = create_release_branch(sess)?;
+        let (base_branch, release_branch) = create_release_branch(sess, false)?;
         let changelog_config = sess.changelog_config.clone();
         let bump_config = sess.bump_config.clone();
 
@@ -292,6 +302,20 @@ impl<'a> PrepareContext<'a> {
                 .with_patch_floor()
                 .apply_config(&bump_config, Some(&current_version));
 
+            // `[cascade_inputs]` — raise the level to the highest floor any
+            // contributing input declares.
+            //
+            // Note this can only *raise* an existing bump, never create one:
+            // `input_hits` is filled from the commits the unit collected, and a
+            // unit with zero commits was already skipped above. A declared
+            // input therefore cannot resurrect an untouched unit.
+            //
+            // Also note `mirror` and `floor_patch` are no-ops in practice: the
+            // F5 patch floor two lines up already lifts any collected commit to
+            // at least Patch. The setting only changes anything from
+            // `floor_minor` upwards.
+            let cascade_inputs = self.collect_cascade_input_refs(history, &mut suggested_bump);
+
             // F11a — cap the level at `max_bump` (never exceed it, even on
             // feat/breaking). Combined with the F5 floor → interval [patch, cap].
             if let Some(max) = unit
@@ -338,10 +362,58 @@ impl<'a> PrepareContext<'a> {
                 suggested_bump,
                 prerelease_version,
                 ecosystem,
+                cascade_inputs,
             });
         }
 
         Ok(())
+    }
+
+    /// Resolve the `[cascade_inputs]` nodes that contributed to a unit's
+    /// commits into manifest-ready references, raising `suggested_bump` to the
+    /// highest floor they declare.
+    ///
+    /// Runs *before* the `max_bump` cap so an explicit per-unit cap still wins
+    /// over an input's floor. Costs nothing when no inputs are configured —
+    /// `input_hits` is then empty for every unit.
+    fn collect_cascade_input_refs(
+        &self,
+        history: &crate::core::git::repository::RepoHistory,
+        suggested_bump: &mut BumpRecommendation,
+    ) -> Vec<crate::core::wire::domain::CascadeInputRefWire> {
+        use crate::core::release_unit::cascade::{cascaded, BumpKind};
+        use crate::core::release_unit::CascadeBumpStrategy;
+
+        let mut refs: Vec<crate::core::wire::domain::CascadeInputRefWire> = Vec::new();
+
+        for input_id in history.input_hits() {
+            let name = self
+                .sess
+                .graph()
+                .lookup(input_id)
+                .user_facing_name
+                .to_string();
+            // Node names equal the config key (collisions are rejected at
+            // graph build), so this lookup always resolves in practice.
+            let Some(cfg) = self.sess.cascade_inputs().iter().find(|c| c.name == name) else {
+                continue;
+            };
+
+            let floor = cascaded(
+                cfg.bump.unwrap_or(CascadeBumpStrategy::Mirror),
+                BumpKind::from_recommendation(*suggested_bump),
+            )
+            .to_recommendation();
+            *suggested_bump = suggested_bump.merge(floor);
+
+            refs.push(crate::core::wire::domain::CascadeInputRefWire {
+                name,
+                bump: cfg.bump.map(|b| b.wire_key().to_string()),
+            });
+        }
+
+        refs.sort_by(|a, b| a.name.cmp(&b.name));
+        refs
     }
 
     pub fn has_candidates(&self) -> bool {
@@ -352,7 +424,42 @@ impl<'a> PrepareContext<'a> {
         cleanup_release_branch(self.sess, &self.base_branch, &self.release_branch);
     }
 
-    pub fn finalize(self, selections: Vec<ReleaseUnitSelection>) -> Result<String> {
+    /// The branch this run will push to.
+    pub fn release_branch(&self) -> &str {
+        &self.release_branch
+    }
+
+    /// The branch this run started from, and the base of its pull request.
+    pub fn base_branch(&self) -> &str {
+        &self.base_branch
+    }
+
+    /// Switch from the repo's stable release branch to a throwaway
+    /// timestamped one, so this run opens a release PR of its own instead of
+    /// updating the open one.
+    ///
+    /// Safe to call any time before `finalize`: the branch created during
+    /// initialization sits on the base commit and carries no work yet.
+    pub fn use_separate_branch(&mut self) -> Result<()> {
+        let previous = std::mem::take(&mut self.release_branch);
+        let (_, separate) = create_release_branch(self.sess, true)?;
+        self.release_branch = separate;
+
+        // The stable branch was reset to the base commit during
+        // initialization and holds nothing we need. Only local state — the
+        // remote branch and its open PR are untouched.
+        if let Err(e) = self.sess.repo.delete_branch(&previous) {
+            tracing::warn!(
+                "failed to remove unused release branch '{}': {}",
+                previous,
+                e
+            );
+        }
+
+        Ok(())
+    }
+
+    pub fn finalize(self, selections: Vec<ReleaseUnitSelection>) -> Result<PreparedRelease> {
         if selections.is_empty() {
             return Err(anyhow::anyhow!("no projects selected for release"));
         }
@@ -443,6 +550,7 @@ impl<'a> PrepareContext<'a> {
                 commits: selection.candidate.commits.clone(),
                 ecosystem: selection.candidate.ecosystem.clone(),
                 cached_changelog: selection.cached_changelog.clone(),
+                cascade_inputs: selection.candidate.cascade_inputs.clone(),
             });
         }
 
@@ -469,572 +577,8 @@ pub struct SelectedReleaseUnit {
     pub commits: Vec<Commit>,
     pub ecosystem: Ecosystem,
     pub cached_changelog: Option<String>,
-}
-
-pub struct ReleasePipeline<'a> {
-    sess: &'a mut AppSession,
-    base_branch: String,
-    release_branch: String,
-}
-
-impl<'a> ReleasePipeline<'a> {
-    pub fn new(
-        sess: &'a mut AppSession,
-        base_branch: String,
-        release_branch: String,
-    ) -> Result<Self> {
-        Ok(Self {
-            sess,
-            base_branch,
-            release_branch,
-        })
-    }
-
-    pub fn execute(mut self, projects: Vec<SelectedReleaseUnit>) -> Result<String> {
-        if projects.is_empty() {
-            return Err(anyhow::anyhow!("no projects to release"));
-        }
-
-        info!("updating project files with new versions...");
-        let changes = self
-            .sess
-            .rewrite()
-            .context("failed to update project files")?;
-
-        info!("generating changelogs...");
-        let (changelog_paths, changelog_contents, processed_commits) =
-            self.generate_changelogs(&projects)?;
-
-        self.print_modified_files(&changes, &changelog_paths);
-
-        info!("creating release manifest...");
-        let (_manifest, manifest_filename, manifest_repo_path) =
-            self.create_manifest(&projects, &changelog_contents, &processed_commits)?;
-
-        info!("creating release commit...");
-        let all_changed_paths =
-            self.collect_all_paths(&changes, &changelog_paths, &manifest_repo_path);
-        self.create_commit(&projects, &all_changed_paths)?;
-
-        info!("pushing release branch to remote...");
-        self.push_branch()?;
-
-        info!("creating pull request...");
-        let pr_url =
-            self.create_pull_request(&projects, &manifest_filename, &changelog_contents)?;
-
-        self.print_summary(&projects, &pr_url);
-
-        Ok(pr_url)
-    }
-
-    fn generate_changelogs(
-        &self,
-        projects: &[SelectedReleaseUnit],
-    ) -> Result<ChangelogGenerationResult> {
-        let mut changelog_paths: Vec<RepoPathBuf> = Vec::new();
-        let mut changelog_contents: HashMap<String, String> = HashMap::new();
-        let mut processed_commits_map: HashMap<String, Vec<Commit>> = HashMap::new();
-
-        let git_config = GitConfig::from_user_config(&self.sess.changelog_config);
-        let changelog_config = ChangelogConfig::from_user_config(&self.sess.changelog_config);
-        let bump_config = BumpConfig::from_user_config(&self.sess.bump_config);
-
-        let github_remote = extract_github_remote(&self.sess.repo);
-        let github_token = load_github_token();
-
-        if github_remote.is_some() && github_token.is_some() {
-            debug!("GitHub metadata will be fetched for changelog generation");
-        }
-
-        for project in projects {
-            let params = ChangelogGenerationParams {
-                repo: &self.sess.repo,
-                project_name: &project.name,
-                prefix: &project.prefix,
-                version: Some(&project.new_version),
-                commits: &project.commits,
-                git_config: &git_config,
-                changelog_config: &changelog_config,
-                bump_config: &bump_config,
-                write_to_file: true,
-                custom_output_path: None,
-                github_owner: github_remote.as_ref().map(|r| r.owner.as_str()),
-                github_repo: github_remote.as_ref().map(|r| r.repo.as_str()),
-                github_token: github_token.clone(),
-            };
-            let result = generate_and_write_project_changelog(&params)?;
-
-            changelog_contents.insert(project.name.clone(), result.content);
-            processed_commits_map.insert(project.name.clone(), result.processed_commits);
-
-            if let Some(path) = result.path {
-                changelog_paths.push(path);
-            } else if !result.has_user_changes {
-                info!(
-                    "{}: no user-facing changes, skipping changelog file update",
-                    project.name
-                );
-            }
-        }
-
-        Ok((changelog_paths, changelog_contents, processed_commits_map))
-    }
-
-    fn print_modified_files(&self, changes: &ChangeList, changelog_paths: &[RepoPathBuf]) {
-        let paths: Vec<_> = changes
-            .paths()
-            .chain(changelog_paths.iter().map(|p| p.as_ref()))
-            .collect();
-
-        if !paths.is_empty() {
-            info!("modified files:");
-            for path in paths {
-                info!("  {}", path.escaped());
-            }
-        }
-    }
-
-    fn create_manifest(
-        &mut self,
-        projects: &[SelectedReleaseUnit],
-        changelog_contents: &HashMap<String, String>,
-        processed_commits: &HashMap<String, Vec<Commit>>,
-    ) -> Result<(ReleaseManifest, String, RepoPathBuf)> {
-        let git_user = self
-            .sess
-            .repo
-            .get_signature()
-            .map(|sig| sig.name().unwrap_or("unknown").to_string())
-            .unwrap_or_else(|_| "belaf-ci".to_string());
-
-        let github_base_url = self.get_github_compare_base_url();
-
-        let mut manifest = ReleaseManifest::new(self.base_branch.clone(), git_user);
-
-        // Emit `groups[]` entries for any group that has at least one
-        // member in this release set. The github-app reads this to drive
-        // atomic group releases (G6) — releases sharing a `group_id` are
-        // tagged + published as one transaction.
-        let groups = self.sess.graph().groups();
-        let mut emitted_groups: HashMap<String, Vec<String>> = HashMap::new();
-        for project in projects {
-            if let Some(g) = groups.group_of(project.ident) {
-                emitted_groups
-                    .entry(g.id.as_str().to_string())
-                    .or_default()
-                    .push(project.name.clone());
-            }
-        }
-        // Stable order so the manifest diff is deterministic.
-        let mut emitted_keys: Vec<&String> = emitted_groups.keys().collect();
-        emitted_keys.sort();
-        for key in emitted_keys {
-            let members = &emitted_groups[key];
-            manifest.add_group(crate::core::manifest::Group {
-                id: key.clone(),
-                members: members.clone(),
-                x: serde_json::Map::new(),
-            });
-        }
-
-        for project in projects {
-            let changelog_content = changelog_contents
-                .get(&project.name)
-                .cloned()
-                .unwrap_or_default();
-
-            let commits = processed_commits
-                .get(&project.name)
-                .map(|c| c.as_slice())
-                .unwrap_or(&project.commits);
-
-            let contributors = Self::extract_contributors(commits);
-            let first_time_contributors = Self::extract_first_time_contributors(commits);
-            let statistics = Self::extract_commit_statistics(commits);
-
-            let mut release = ReleaseEntry::new(
-                project.name.clone(),
-                project.ecosystem.as_str().to_string(),
-                project.old_version.clone(),
-                project.new_version.clone(),
-                project.bump_type.clone(),
-                changelog_content,
-                project.prefix.clone(),
-            )
-            .with_prerelease(project.is_prerelease)
-            .with_contributors(contributors)
-            .with_first_time_contributors(first_time_contributors)
-            .with_statistics(statistics);
-
-            // B10: per-ecosystem tag_format with project / group overrides.
-            // Precedence: [project."<name>".tag_format] > [group.<id>.tag_format]
-            // > ecosystem default. Validation errors fail the whole prepare —
-            // we'd rather catch a bad template here than surprise users with
-            // a github-app rollback when it tries to push the broken tag.
-            let tag_name = build_tag_name(self.sess, project, groups)?;
-            release.tag_name = tag_name;
-            // The previous_tag default uses the same prefix-based scheme,
-            // which doesn't compose with the new tag_format. Recompute it
-            // from the new tag's "shape": replace the new version with the
-            // old version textually. This is best-effort — if it doesn't
-            // produce a real tag, `with_compare_url` will catch it below
-            // and clear `previous_tag` again.
-            release.previous_tag = release.previous_tag.as_ref().map(|_| {
-                release
-                    .tag_name
-                    .replacen(&project.new_version, &project.old_version, 1)
-            });
-
-            if let Some(g) = groups.group_of(project.ident) {
-                release = release.with_group_id(g.id.as_str());
-            }
-
-            // Carry typed wire fields from the ResolvedReleaseUnit, if
-            // the user declared one. Auto-detected projects (no source
-            // unit) leave the fields at their empty defaults.
-            if let Some(unit) = self
-                .sess
-                .resolved_release_units()
-                .iter()
-                .find(|r| r.unit.name == project.name)
-            {
-                if let crate::core::release_unit::VersionSource::Manifests(ms) = &unit.unit.source {
-                    let bundle: Vec<String> =
-                        ms.iter().map(|m| m.path.escaped().to_string()).collect();
-                    if !bundle.is_empty() {
-                        release = release.with_bundle_manifests(bundle);
-                    }
-                    // version_field_spec — use the first manifest's
-                    // spec as the unit-level value (multi-manifest
-                    // bundles share the same ecosystem and so the
-                    // same spec; mixed-spec is rejected by the
-                    // resolver in Phase B).
-                    if let Some(first) = ms.first() {
-                        release = release.with_version_field_spec(first.version_field.wire_key());
-                    }
-                }
-                if let crate::core::release_unit::VersionSource::External(ext) = &unit.unit.source {
-                    release = release.with_external_versioner(
-                        crate::core::wire::domain::ExternalVersionerWire {
-                            tool: ext.tool.clone(),
-                            read_command: Some(ext.read_command.clone()),
-                            write_command: Some(ext.write_command.clone()),
-                            cwd: ext.cwd.as_ref().map(|p| p.escaped().to_string()),
-                            timeout_sec: Some(ext.timeout_sec as i64),
-                            env: if ext.env.is_empty() {
-                                None
-                            } else {
-                                Some(ext.env.clone())
-                            },
-                        },
-                    );
-                }
-                if !unit.unit.satellites.is_empty() {
-                    release = release.with_satellites(
-                        unit.unit
-                            .satellites
-                            .iter()
-                            .map(|p| p.escaped().to_string())
-                            .collect(),
-                    );
-                }
-                if let Some(cascade) = &unit.unit.cascade_from {
-                    release =
-                        release.with_cascade_from(crate::core::wire::domain::CascadeFromWire {
-                            source: cascade.source.clone(),
-                            bump: cascade.bump.wire_key().to_string(),
-                        });
-                }
-                if unit.unit.visibility != crate::core::release_unit::Visibility::Public {
-                    release = release.with_visibility(unit.unit.visibility.wire_key());
-                }
-            }
-
-            if let Some(base_url) = &github_base_url {
-                release = release.with_compare_url(base_url, |tag| self.sess.repo.tag_exists(tag));
-            }
-
-            manifest.add_release(release);
-        }
-
-        let manifest_dir = self
-            .sess
-            .repo
-            .resolve_workdir(RepoPathBuf::new(MANIFEST_DIR.as_bytes()).as_ref());
-        std::fs::create_dir_all(&manifest_dir)
-            .context(format!("failed to create {} directory", MANIFEST_DIR))?;
-
-        let manifest_filename = manifest.generate_filename();
-        let manifest_path = manifest_dir.join(&manifest_filename);
-
-        manifest
-            .save_to_file(&manifest_path)
-            .context("failed to save release manifest")?;
-
-        info!("wrote manifest to {}/{}", MANIFEST_DIR, manifest_filename);
-
-        let manifest_repo_path =
-            RepoPathBuf::new(format!("{}/{}", MANIFEST_DIR, manifest_filename).as_bytes());
-
-        Ok((manifest, manifest_filename, manifest_repo_path))
-    }
-
-    fn collect_all_paths<'b>(
-        &self,
-        changes: &'b ChangeList,
-        changelog_paths: &'b [RepoPathBuf],
-        manifest_repo_path: &'b RepoPathBuf,
-    ) -> Vec<&'b crate::core::git::repository::RepoPath> {
-        changes
-            .paths()
-            .chain(changelog_paths.iter().map(|p| p.as_ref()))
-            .chain(std::iter::once(manifest_repo_path.as_ref()))
-            .collect()
-    }
-
-    fn create_commit(
-        &self,
-        projects: &[SelectedReleaseUnit],
-        all_changed_paths: &[&crate::core::git::repository::RepoPath],
-    ) -> Result<()> {
-        let commit_message = format_commit_message(projects);
-        self.sess
-            .repo
-            .create_commit(&commit_message, all_changed_paths)
-            .context("failed to create release commit")?;
-        Ok(())
-    }
-
-    fn push_branch(&self) -> Result<()> {
-        let git_token = self.fetch_git_credentials()?;
-        self.sess
-            .repo
-            .push_branch(&self.release_branch, Some(&git_token))
-            .context("failed to push release branch")?;
-        Ok(())
-    }
-
-    fn fetch_git_credentials(&self) -> Result<String> {
-        let upstream_url = self
-            .sess
-            .repo
-            .upstream_url()
-            .context("failed to get upstream URL")?;
-
-        let (owner, repo) =
-            parse_github_url(&upstream_url).context("failed to parse GitHub URL from upstream")?;
-
-        let api_client = ApiClient::new();
-
-        let future = async {
-            let token = load_or_exchange_token(&api_client)
-                .await
-                .context("failed to load token")?
-                .context(
-                    "not authenticated — run 'belaf install' (interactive) or run from a \
-                     GitHub Actions job with `permissions: id-token: write` set",
-                )?;
-
-            api_client
-                .get_git_credentials(&token, &owner, &repo)
-                .await
-                .map_err(|e| match &e {
-                    ApiError::ApiResponse { status, message } => {
-                        anyhow::anyhow!("failed to get git credentials ({}): {}", status, message)
-                    }
-                    ApiError::Unauthorized => {
-                        anyhow::anyhow!(
-                            "authentication expired - run 'belaf login' to re-authenticate"
-                        )
-                    }
-                    _ => anyhow::anyhow!("failed to get git credentials: {}", e),
-                })
-        };
-
-        let credentials = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
-            Err(_) => {
-                let rt =
-                    tokio::runtime::Runtime::new().context("failed to create async runtime")?;
-                rt.block_on(future)
-            }
-        }?;
-
-        Ok(credentials.token)
-    }
-
-    fn create_pull_request(
-        &self,
-        projects: &[SelectedReleaseUnit],
-        manifest_filename: &str,
-        changelog_contents: &HashMap<String, String>,
-    ) -> Result<String> {
-        let github =
-            GitHubInformation::new(self.sess).context("failed to initialize GitHub client")?;
-
-        let pr_title = pr::generate_pr_title(projects);
-        let pr_body = pr::generate_pr_body(projects, manifest_filename, changelog_contents);
-
-        let pr_url = github
-            .create_pull_request(&self.release_branch, &self.base_branch, &pr_title, &pr_body)
-            .context("failed to create pull request")?;
-
-        Ok(pr_url)
-    }
-
-    fn print_summary(&self, projects: &[SelectedReleaseUnit], pr_url: &str) {
-        info!(
-            "prepared {} project{} for release",
-            projects.len(),
-            if projects.len() == 1 { "" } else { "s" }
-        );
-        info!("pull request created: {}", pr_url);
-    }
-
-    fn get_github_compare_base_url(&self) -> Option<String> {
-        self.sess.repo.upstream_url().ok().and_then(|url| {
-            let url = url
-                .trim_end_matches(".git")
-                .replace("git@github.com:", "https://github.com/");
-            if url.contains("github.com") {
-                Some(url)
-            } else {
-                None
-            }
-        })
-    }
-
-    fn extract_contributors(commits: &[Commit]) -> Vec<String> {
-        let mut contributors: Vec<String> = commits
-            .iter()
-            .filter_map(|c| c.author.name.clone())
-            .collect();
-        contributors.sort();
-        contributors.dedup();
-        contributors
-    }
-
-    fn extract_first_time_contributors(commits: &[Commit]) -> Vec<String> {
-        let mut first_timers: Vec<String> = commits
-            .iter()
-            .filter_map(|c| {
-                c.remote.as_ref().and_then(|r| {
-                    if r.is_first_time {
-                        r.username.clone()
-                    } else {
-                        None
-                    }
-                })
-            })
-            .collect();
-        first_timers.sort();
-        first_timers.dedup();
-        first_timers
-    }
-
-    fn extract_commit_statistics(commits: &[Commit]) -> ReleaseStatistics {
-        let commit_count = commits.len();
-
-        let breaking_changes_count = commits
-            .iter()
-            .filter(|c| c.conv.as_ref().map(|conv| conv.breaking).unwrap_or(false))
-            .count();
-
-        let features_count = commits
-            .iter()
-            .filter(|c| {
-                c.conv
-                    .as_ref()
-                    .map(|conv| conv.type_ == "feat")
-                    .unwrap_or(false)
-            })
-            .count();
-
-        let fixes_count = commits
-            .iter()
-            .filter(|c| {
-                c.conv
-                    .as_ref()
-                    .map(|conv| conv.type_ == "fix")
-                    .unwrap_or(false)
-            })
-            .count();
-
-        let pr_count_value = commits
-            .iter()
-            .filter(|c| c.remote.as_ref().and_then(|r| r.pr_number).is_some())
-            .count();
-
-        ReleaseStatistics {
-            commit_count: commit_count as u64,
-            days_since_last_release: None,
-            breaking_changes_count: breaking_changes_count as u64,
-            features_count: features_count as u64,
-            fixes_count: fixes_count as u64,
-            pr_count: if pr_count_value > 0 {
-                Some(pr_count_value as u64)
-            } else {
-                None
-            },
-        }
-    }
-}
-
-pub fn create_release_branch(sess: &mut AppSession) -> Result<(String, String)> {
-    let base_branch = sess
-        .repo
-        .current_branch_name()
-        .context("failed to get current branch")?
-        .ok_or_else(|| anyhow::anyhow!("not on a branch (detached HEAD state)"))?;
-
-    let release_branch = Repository::generate_release_branch_name();
-    info!("creating release branch: {}", release_branch);
-
-    sess.repo
-        .create_branch(&release_branch)
-        .context("failed to create release branch")?;
-    sess.repo
-        .checkout_branch(&release_branch)
-        .context("failed to checkout release branch")?;
-
-    Ok((base_branch, release_branch))
-}
-
-pub fn cleanup_release_branch(sess: &mut AppSession, base_branch: &str, release_branch: &str) {
-    if let Err(e) = sess.repo.checkout_branch(base_branch) {
-        tracing::warn!("failed to checkout base branch '{}': {}", base_branch, e);
-    }
-
-    if let Err(e) = sess.repo.delete_branch(release_branch) {
-        tracing::warn!(
-            "failed to delete release branch '{}': {}",
-            release_branch,
-            e
-        );
-    }
-
-    info!("cleaned up release branch, returned to '{}'", base_branch);
-}
-
-fn format_commit_message(projects: &[SelectedReleaseUnit]) -> String {
-    if projects.len() == 1 {
-        let p = &projects[0];
-        format!(
-            "chore(release): {} v{}\n\n\
-            Bump {} from {} to {}",
-            p.name, p.new_version, p.name, p.old_version, p.new_version
-        )
-    } else {
-        let mut msg = format!("chore(release): release {} packages\n\n", projects.len());
-        for p in projects {
-            msg.push_str(&format!(
-                "- {}: {} -> {}\n",
-                p.name, p.old_version, p.new_version
-            ));
-        }
-        msg
-    }
+    /// See [`ReleaseUnitCandidate::cascade_inputs`].
+    pub cascade_inputs: Vec<crate::core::wire::domain::CascadeInputRefWire>,
 }
 
 /// Resolve the per-release tag name using the precedence chain:
@@ -1097,16 +641,18 @@ fn build_tag_name(
     format_tag(&inputs)
 }
 
+mod branch;
 mod changelog_gen;
 mod github;
+mod pipeline;
 
+pub use branch::{cleanup_release_branch, create_release_branch};
 pub use changelog_gen::{
     generate_and_write_project_changelog, generate_changelog_entry, ChangelogGenerationParams,
     ChangelogResult,
 };
 pub use github::{extract_github_remote, load_github_token, GitHubRemoteInfo};
-
-use github::parse_github_url;
+pub use pipeline::ReleasePipeline;
 
 #[cfg(test)]
 mod prerelease_tests {

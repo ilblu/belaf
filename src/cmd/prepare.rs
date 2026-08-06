@@ -117,6 +117,15 @@ struct CiStatus {
     /// (and when github auth is unavailable).
     #[serde(skip_serializing_if = "Option::is_none")]
     pr_url: Option<String>,
+    /// `created` or `updated` when `status == "released"` — the run
+    /// reuses one release branch, so a re-run refreshes the open PR
+    /// instead of opening a second one. Null otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr_action: Option<&'static str>,
+    /// The branch the release commit was pushed to. Null when the run
+    /// released nothing.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release_branch: Option<String>,
     /// One entry per release_unit that the run touched. Empty when
     /// `status != "released"`.
     release_units: Vec<CiStatusUnit>,
@@ -201,6 +210,8 @@ fn run_ci_mode(
         emit_ci_status(CiStatus {
             status: "nothing_to_do",
             pr_url: None,
+            pr_action: None,
+            release_branch: None,
             release_units: vec![],
         });
         return Ok(0);
@@ -246,6 +257,8 @@ fn run_ci_mode(
         emit_ci_status(CiStatus {
             status: "no_actionable_bumps",
             pr_url: None,
+            pr_action: None,
+            release_branch: None,
             release_units: vec![],
         });
         return Ok(0);
@@ -265,11 +278,14 @@ fn run_ci_mode(
         })
         .collect();
 
-    let pr_url = ctx.finalize(selections)?;
+    let release_branch = ctx.release_branch().to_string();
+    let prepared = ctx.finalize(selections)?;
 
     emit_ci_status(CiStatus {
         status: "released",
-        pr_url: Some(pr_url),
+        pr_url: Some(prepared.pr_url),
+        pr_action: Some(prepared.pr_action.as_str()),
+        release_branch: Some(release_branch),
         release_units: units_for_status,
     });
 

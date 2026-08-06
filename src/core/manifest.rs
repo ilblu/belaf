@@ -96,6 +96,7 @@ impl ReleaseEntry {
             external_versioner: None,
             version_field_spec: None,
             cascade_from: None,
+            cascade_inputs: Vec::new(),
             visibility: None,
             satellites: Vec::new(),
             x: Map::new(),
@@ -125,6 +126,15 @@ impl ReleaseEntry {
         cascade: crate::core::wire::domain::CascadeFromWire,
     ) -> Self {
         self.cascade_from = Some(cascade);
+        self
+    }
+
+    /// Record which declared path inputs pulled this unit into the release.
+    pub fn with_cascade_inputs(
+        mut self,
+        inputs: Vec<crate::core::wire::domain::CascadeInputRefWire>,
+    ) -> Self {
+        self.cascade_inputs = inputs;
         self
     }
 

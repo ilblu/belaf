@@ -370,3 +370,205 @@ async fn test_exchange_oidc_token_401_on_bad_jwt() {
         .expect_err("401 should fail");
     assert!(matches!(err, ApiError::Unauthorized));
 }
+
+// ---------------------------------------------------------------------------
+// Pull-request lookup and update — the calls that make `prepare` idempotent.
+// ---------------------------------------------------------------------------
+
+fn pull_request_json(number: i64, head_ref: &str) -> serde_json::Value {
+    serde_json::json!({
+        "number": number,
+        "title": "chore(release): v1.2.3",
+        "labels": ["release:minor"],
+        "head_ref": head_ref,
+        "html_url": format!("https://github.com/owner/repo/pull/{number}"),
+        "state": "open"
+    })
+}
+
+#[tokio::test]
+async fn test_find_open_pull_request_filters_by_head() {
+    let mock_server = MockServer::start().await;
+    let token = create_test_token();
+
+    Mock::given(method("GET"))
+        .and(path("/api/cli/repos/owner/repo/pulls"))
+        .and(bearer_token(&token.access_token))
+        .and(query_param("state", "open"))
+        .and(query_param("head", "belaf/release--main"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "pull_requests": [pull_request_json(42, "belaf/release--main")],
+            "has_more": false
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
+    let found = client
+        .find_open_pull_request(&token, "owner", "repo", "belaf/release--main")
+        .await
+        .expect("lookup should succeed")
+        .expect("a matching PR should be found");
+
+    assert_eq!(found.number, 42);
+    assert_eq!(found.head_ref.as_deref(), Some("belaf/release--main"));
+}
+
+#[tokio::test]
+async fn test_find_open_pull_request_returns_none_when_empty() {
+    let mock_server = MockServer::start().await;
+    let token = create_test_token();
+
+    Mock::given(method("GET"))
+        .and(path("/api/cli/repos/owner/repo/pulls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "pull_requests": [],
+            "has_more": false
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
+    let found = client
+        .find_open_pull_request(&token, "owner", "repo", "belaf/release--main")
+        .await
+        .expect("lookup should succeed");
+
+    assert!(found.is_none());
+}
+
+/// A server that ignores the `head` filter must not make us update an
+/// unrelated pull request — the client re-checks `head_ref` itself.
+#[tokio::test]
+async fn test_find_open_pull_request_rejects_mismatched_head() {
+    let mock_server = MockServer::start().await;
+    let token = create_test_token();
+
+    Mock::given(method("GET"))
+        .and(path("/api/cli/repos/owner/repo/pulls"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "pull_requests": [pull_request_json(7, "feature/unrelated")],
+            "has_more": false
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
+    let found = client
+        .find_open_pull_request(&token, "owner", "repo", "belaf/release--main")
+        .await
+        .expect("lookup should succeed");
+
+    assert!(found.is_none());
+}
+
+#[tokio::test]
+async fn test_find_open_pull_request_encodes_branch_name() {
+    let mock_server = MockServer::start().await;
+    let token = create_test_token();
+
+    // `query_param` matches the decoded value, so this only passes if the
+    // slash survived the round trip intact.
+    Mock::given(method("GET"))
+        .and(path("/api/cli/repos/owner/repo/pulls"))
+        .and(query_param("head", "belaf/release--feature-x"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "pull_requests": [pull_request_json(9, "belaf/release--feature-x")],
+            "has_more": false
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
+    let found = client
+        .find_open_pull_request(&token, "owner", "repo", "belaf/release--feature-x")
+        .await
+        .expect("lookup should succeed");
+
+    assert_eq!(found.map(|pr| pr.number), Some(9));
+}
+
+#[tokio::test]
+async fn test_get_pull_requests_still_asks_for_closed() {
+    let mock_server = MockServer::start().await;
+    let token = create_test_token();
+
+    // The changelog path depends on this: it enriches entries from merged
+    // PRs, so widening it to open ones would pull in unreleased work.
+    Mock::given(method("GET"))
+        .and(path("/api/cli/repos/owner/repo/pulls"))
+        .and(query_param("state", "closed"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "pull_requests": [pull_request_json(3, "some-branch")],
+            "has_more": false
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
+    let prs = client
+        .get_pull_requests(&token, "owner", "repo", 1, 30)
+        .await
+        .expect("listing closed PRs should succeed");
+
+    assert_eq!(prs.len(), 1);
+}
+
+#[tokio::test]
+async fn test_update_pull_request_sends_title_and_body() {
+    let mock_server = MockServer::start().await;
+    let token = create_test_token();
+
+    Mock::given(method("PATCH"))
+        .and(path("/api/cli/repos/owner/repo/pulls/42"))
+        .and(bearer_token(&token.access_token))
+        .and(body_json(serde_json::json!({
+            "title": "chore(release): v2.0.0",
+            "body": "## Releases\n- foo 2.0.0"
+        })))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "number": 42,
+            "html_url": "https://github.com/owner/repo/pull/42",
+            "state": "open"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
+    let updated = client
+        .update_pull_request(
+            &token,
+            "owner",
+            "repo",
+            42,
+            "chore(release): v2.0.0",
+            "## Releases\n- foo 2.0.0",
+        )
+        .await
+        .expect("update should succeed");
+
+    assert_eq!(updated.number, 42);
+    assert_eq!(updated.html_url, "https://github.com/owner/repo/pull/42");
+}
+
+#[tokio::test]
+async fn test_update_pull_request_surfaces_not_found() {
+    let mock_server = MockServer::start().await;
+    let token = create_test_token();
+
+    Mock::given(method("PATCH"))
+        .and(path("/api/cli/repos/owner/repo/pulls/404"))
+        .respond_with(ResponseTemplate::new(404).set_body_json(serde_json::json!({
+            "error": "Pull request not found"
+        })))
+        .mount(&mock_server)
+        .await;
+
+    let client = ApiClient::with_base_url(&mock_server.uri()).unwrap();
+    let err = client
+        .update_pull_request(&token, "owner", "repo", 404, "t", "b")
+        .await
+        .expect_err("a missing PR should be an error");
+
+    assert!(matches!(err, ApiError::ApiResponse { status: 404, .. }));
+}

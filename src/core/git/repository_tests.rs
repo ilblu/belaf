@@ -188,54 +188,6 @@ fn test_escape_pathlike_null_byte() {
 }
 
 #[test]
-fn test_path_matcher_new_include() {
-    let matcher = PathMatcher::new_include(RepoPathBuf::new(b"src"));
-    let path = RepoPath::new(b"src/main.rs");
-    assert!(matcher.repo_path_matches(path));
-}
-
-#[test]
-fn test_path_matcher_no_match() {
-    let matcher = PathMatcher::new_include(RepoPathBuf::new(b"src"));
-    let path = RepoPath::new(b"test/main.rs");
-    assert!(!matcher.repo_path_matches(path));
-}
-
-#[test]
-fn test_path_matcher_exact_match() {
-    let matcher = PathMatcher::new_include(RepoPathBuf::new(b"src/main.rs"));
-    let path = RepoPath::new(b"src/main.rs");
-    assert!(matcher.repo_path_matches(path));
-}
-
-#[test]
-fn test_path_matcher_prefix_mismatch() {
-    let matcher = PathMatcher::new_include(RepoPathBuf::new(b"src"));
-    let path = RepoPath::new(b"source/file.rs");
-    assert!(!matcher.repo_path_matches(path));
-}
-
-#[test]
-fn test_path_matcher_make_disjoint() {
-    let mut matcher1 = PathMatcher::new_include(RepoPathBuf::new(b""));
-    let matcher2 = PathMatcher::new_include(RepoPathBuf::new(b"src"));
-    matcher1.make_disjoint(&matcher2);
-
-    assert!(!matcher1.repo_path_matches(RepoPath::new(b"src/main.rs")));
-    assert!(matcher1.repo_path_matches(RepoPath::new(b"test/main.rs")));
-}
-
-#[test]
-fn test_path_matcher_make_disjoint_non_overlapping() {
-    let mut matcher1 = PathMatcher::new_include(RepoPathBuf::new(b"test"));
-    let matcher2 = PathMatcher::new_include(RepoPathBuf::new(b"src"));
-    matcher1.make_disjoint(&matcher2);
-
-    assert!(matcher1.repo_path_matches(RepoPath::new(b"test/file.rs")));
-    assert!(!matcher1.repo_path_matches(RepoPath::new(b"src/file.rs")));
-}
-
-#[test]
 fn test_parse_history_ref_id_valid() {
     let repo = match Repository::open_from_env() {
         Ok(r) => r,
@@ -360,71 +312,6 @@ fn test_change_list_add_duplicate_paths() {
 }
 
 #[test]
-fn test_repo_history_n_commits() {
-    let history = RepoHistory {
-        commits: vec![CommitId(git2::Oid::zero()), CommitId(git2::Oid::zero())],
-        boundary: None,
-        provenance: Default::default(),
-    };
-    assert_eq!(history.n_commits(), 2);
-}
-
-#[test]
-fn test_repo_history_n_commits_empty() {
-    let history = RepoHistory {
-        commits: vec![],
-        boundary: None,
-        provenance: Default::default(),
-    };
-    assert_eq!(history.n_commits(), 0);
-}
-
-#[test]
-fn test_repo_history_with_release_tag() {
-    let history = RepoHistory {
-        commits: vec![],
-        boundary: Some(HistoryBoundary::ReleaseTag {
-            commit: CommitId(git2::Oid::zero()),
-            tag_name: "test-v1.0.0".to_string(),
-            version: semver::Version::new(1, 0, 0),
-        }),
-        provenance: Default::default(),
-    };
-    assert!(history.has_release_tag());
-    assert!(history.boundary_commit().is_some());
-    assert_eq!(
-        history.release_version().unwrap(),
-        &semver::Version::new(1, 0, 0)
-    );
-}
-
-#[test]
-fn test_repo_history_with_baseline() {
-    let history = RepoHistory {
-        commits: vec![],
-        boundary: Some(HistoryBoundary::Baseline {
-            commit: CommitId(git2::Oid::zero()),
-        }),
-        provenance: Default::default(),
-    };
-    assert!(!history.has_release_tag());
-    assert!(history.boundary_commit().is_some());
-    assert!(history.release_version().is_none());
-}
-
-#[test]
-fn test_repo_history_no_boundary() {
-    let history = RepoHistory {
-        commits: vec![],
-        boundary: None,
-        provenance: Default::default(),
-    };
-    assert!(!history.has_release_tag());
-    assert!(history.boundary_commit().is_none());
-    assert!(history.release_version().is_none());
-}
-
-#[test]
 fn test_commit_id_display() {
     let oid = git2::Oid::zero();
     let commit_id = CommitId(oid);
@@ -439,24 +326,6 @@ fn test_commit_id_equality() {
     let commit_id1 = CommitId(oid1);
     let commit_id2 = CommitId(oid2);
     assert_eq!(commit_id1, commit_id2);
-}
-
-#[test]
-fn test_history_boundary_release_tag() {
-    let boundary = HistoryBoundary::ReleaseTag {
-        commit: CommitId(git2::Oid::zero()),
-        tag_name: "my-package-v1.2.3".to_string(),
-        version: semver::Version::new(1, 2, 3),
-    };
-    match boundary {
-        HistoryBoundary::ReleaseTag {
-            tag_name, version, ..
-        } => {
-            assert_eq!(tag_name, "my-package-v1.2.3");
-            assert_eq!(version, semver::Version::new(1, 2, 3));
-        }
-        _ => panic!("Expected ReleaseTag variant"),
-    }
 }
 
 #[test]
@@ -872,42 +741,6 @@ fn find_latest_tag_maven_slash_form() {
 // F3 — binary-affecting path filter.
 // ---------------------------------------------------------------------------
 
-#[test]
-fn is_binary_affecting_excludes_segments_suffixes_names() {
-    let cfg = crate::core::config::syntax::BinaryAffectingConfiguration {
-        exclude_segments: vec!["tests".into(), "docs".into(), "examples".into()],
-        exclude_suffixes: vec![".md".into()],
-        exclude_names: vec!["CHANGELOG.md".into()],
-    };
-    // Affecting:
-    assert!(is_binary_affecting(b"src/lib.rs", &cfg));
-    assert!(is_binary_affecting(b"Cargo.toml", &cfg));
-    // `examples` only matches a *whole segment*, not a substring:
-    assert!(is_binary_affecting(b"src/examples_helper.rs", &cfg));
-    // Not affecting:
-    assert!(!is_binary_affecting(b"tests/it.rs", &cfg));
-    assert!(!is_binary_affecting(b"crate/docs/guide.rs", &cfg));
-    assert!(!is_binary_affecting(b"README.md", &cfg)); // .md suffix
-    assert!(!is_binary_affecting(b"CHANGELOG.md", &cfg)); // exact name
-    assert!(!is_binary_affecting(b"examples/demo.rs", &cfg));
-}
-
 // ---------------------------------------------------------------------------
 // F4-Glob (Tier-3) — residual glob matching on PathMatcher.
 // ---------------------------------------------------------------------------
-
-#[test]
-fn path_matcher_globs_match_additively() {
-    let mut m = PathMatcher::new_globs_only();
-    m.add_glob("**/*.sql").unwrap();
-    assert!(m.has_globs());
-    assert!(m.repo_path_matches(RepoPath::new(b"db/migrations/001.sql")));
-    assert!(!m.repo_path_matches(RepoPath::new(b"src/lib.rs")));
-
-    // Prefix + glob coexist: a path matches if EITHER hits.
-    let mut m2 = PathMatcher::new_include(RepoPathBuf::new(b"src/"));
-    m2.add_glob("**/*.sql").unwrap();
-    assert!(m2.repo_path_matches(RepoPath::new(b"src/lib.rs"))); // prefix
-    assert!(m2.repo_path_matches(RepoPath::new(b"other/x.sql"))); // glob
-    assert!(!m2.repo_path_matches(RepoPath::new(b"other/x.rs")));
-}

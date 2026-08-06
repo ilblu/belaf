@@ -11,5 +11,5 @@ pub use types::{
     CreatePullRequestParams, CreatePullRequestRequest, CreatePullRequestResponse,
     DeviceCodeRequest, DeviceCodeResponse, GitCredentialsResponse, OidcExchangeRequest,
     OidcExchangeResponse, PullRequestsResponse, StoredToken, TokenPollRequest, TokenPollResponse,
-    UserInfo,
+    UpdatePullRequestRequest, UserInfo,
 };

@@ -15,9 +15,19 @@
 name: belaf prepare
 
 on:
+  push:
+    branches: [main]        # keep one release PR up to date on every push
   workflow_dispatch:        # manual: "Run workflow" button in the UI
   schedule:
     - cron: '0 9 * * 1'     # every Monday 09:00 UTC
+
+# `prepare` reuses one release branch and updates the open release PR, so
+# running it on every push is safe — N pushes produce one PR, not N. Two
+# runs racing each other would still both force-push the same branch, so
+# serialize them and let the newer push win.
+concurrency:
+  group: belaf-prepare-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   id-token: write           # mint OIDC JWTs (required for the exchange)
@@ -42,6 +52,11 @@ jobs:
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Run belaf prepare
+        # No branch filter needed to avoid self-triggering: the release
+        # commit lands on belaf/release--main, which this workflow does not
+        # watch. When that PR later merges into main, this runs again and
+        # exits `nothing_to_do` — the versions it would bump were just
+        # released.
         run: belaf prepare --ci
         env:
           BELAF_NO_KEYRING: '1'   # CI runners have no usable OS keyring

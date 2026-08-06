@@ -97,6 +97,17 @@ pub struct ResolvedReleaseUnit {
 
     /// Per-unit bump-policy override (F11a). `None` = inherit global `[bump]`.
     pub bump_override: Option<crate::core::release_unit::syntax::BumpOverrideConfig>,
+
+    /// True for the synthetic nodes materialized from `[cascade_inputs.<name>]`.
+    ///
+    /// These are always [`UnitKind::Internal`], but not every `Internal` unit
+    /// is a cascade input (an internal library crate is one too), and the two
+    /// need different path-partition rules: an input's paths are *meant* to
+    /// overlap the real units they feed, so inputs are exempt from
+    /// `make_disjoint` and from the Tier-3 glob overlap guard. Keeping the
+    /// distinction explicit rather than sniffing `qnames[1]` keeps that
+    /// behaviour from silently attaching to user-declared internal units.
+    pub is_cascade_input: bool,
 }
 
 impl ResolvedReleaseUnit {
@@ -206,6 +217,8 @@ pub struct ResolvedReleaseUnitBuilder {
     pub repo_paths_no_prefix_include: bool,
     /// See [`ResolvedReleaseUnit::bump_override`].
     pub bump_override: Option<crate::core::release_unit::syntax::BumpOverrideConfig>,
+    /// See [`ResolvedReleaseUnit::is_cascade_input`].
+    pub is_cascade_input: bool,
 }
 
 /// An in-process dependency. We haven't necessarily yet resolved references to
@@ -245,6 +258,7 @@ impl ResolvedReleaseUnitBuilder {
             extra_globs: Vec::new(),
             repo_paths_no_prefix_include: false,
             bump_override: None,
+            is_cascade_input: false,
         }
     }
 
@@ -299,6 +313,7 @@ impl ResolvedReleaseUnitBuilder {
             internal_deps,
             kind: self.kind,
             bump_override: self.bump_override,
+            is_cascade_input: self.is_cascade_input,
         })
     }
 }

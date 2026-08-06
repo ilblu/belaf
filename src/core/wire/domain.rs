@@ -131,6 +131,10 @@ pub struct Release {
     /// Set when this release was bumped because a cascade source
     /// was bumped.
     pub cascade_from: Option<CascadeFromWire>,
+    /// Declared path inputs (`[cascade_inputs]`) whose changes pulled
+    /// this unit into the release. Empty when it was released on its
+    /// own changes alone.
+    pub cascade_inputs: Vec<CascadeInputRefWire>,
     /// `public` (default) | `internal`.
     pub visibility: Option<String>,
     /// Repo-relative satellite directories that belong to this unit
@@ -157,6 +161,15 @@ pub struct ExternalVersionerWire {
 pub struct CascadeFromWire {
     pub source: String,
     pub bump: String,
+}
+
+/// Domain mirror of `wire::codegen::types::CascadeInputRef`.
+#[derive(Debug, Clone)]
+pub struct CascadeInputRefWire {
+    /// The `[cascade_inputs.<name>]` key that matched.
+    pub name: String,
+    /// The bump floor the input declares, when it declares one.
+    pub bump: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -295,6 +308,18 @@ impl From<Release> for WireRelease {
                 bump: c.bump.parse().expect("cascade_from.bump must be non-empty"),
                 x: Map::new(),
             }),
+            cascade_inputs: r
+                .cascade_inputs
+                .into_iter()
+                .map(|c| codegen::CascadeInputRef {
+                    name: c
+                        .name
+                        .parse()
+                        .expect("cascade_input name must be non-empty"),
+                    bump: c.bump,
+                    x: Map::new(),
+                })
+                .collect(),
             visibility: r.visibility,
             satellites: r
                 .satellites
@@ -337,6 +362,14 @@ impl From<WireRelease> for Release {
                 source: c.source.into(),
                 bump: c.bump.into(),
             }),
+            cascade_inputs: r
+                .cascade_inputs
+                .into_iter()
+                .map(|c| CascadeInputRefWire {
+                    name: c.name.into(),
+                    bump: c.bump,
+                })
+                .collect(),
             visibility: r.visibility,
             satellites: r.satellites.into_iter().map(|p| p.into()).collect(),
             x: r.x,
@@ -413,6 +446,7 @@ mod tests {
             external_versioner: None,
             version_field_spec: None,
             cascade_from: None,
+            cascade_inputs: Vec::new(),
             visibility: None,
             satellites: Vec::new(),
             x: Map::new(),
@@ -446,6 +480,7 @@ mod tests {
             external_versioner: None,
             version_field_spec: None,
             cascade_from: None,
+            cascade_inputs: Vec::new(),
             visibility: None,
             satellites: Vec::new(),
             x: Map::new(),

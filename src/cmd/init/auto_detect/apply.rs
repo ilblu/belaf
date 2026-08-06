@@ -8,7 +8,7 @@ use anyhow::Context as _;
 
 use super::{
     advice_comments, allow_uncovered_paths_line, AutoDetectResult, ALLOW_UNCOVERED_HEADER,
-    AUTO_DETECT_MARKER, CODEGEN_STUB, MODEL_HEADER,
+    AUTO_DETECT_MARKER, CASCADE_INPUTS_STUB, MODEL_HEADER,
 };
 
 /// Coverage-filtered config update for auto-detect results (first init
@@ -26,7 +26,7 @@ use super::{
 ///   (e.g. a re-emitted unit name that already exists as a table)
 ///   aborts with an error instead of corrupting config.toml.
 ///
-/// `first_run` prepends the marker + model header + codegen stub +
+/// `first_run` prepends the marker + model header + cascade-inputs stub +
 /// advice comments, so a fresh init produces the same file as the
 /// historical single-shot append; re-runs append the bare body and
 /// leave advice to the caller's log / CI status.
@@ -65,7 +65,7 @@ pub fn apply_to_config(
         }
         if first_run {
             content.push_str(&format!(
-                "\n{AUTO_DETECT_MARKER}\n{MODEL_HEADER}{body}{CODEGEN_STUB}"
+                "\n{AUTO_DETECT_MARKER}\n{MODEL_HEADER}{body}{CASCADE_INPUTS_STUB}"
             ));
         } else {
             content.push_str(&body);

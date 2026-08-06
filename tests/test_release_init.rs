@@ -157,10 +157,10 @@ edition = "2021"
 }
 
 #[test]
-fn init_emits_kind_docs_and_codegen_stub() {
+fn init_emits_kind_docs_and_cascade_inputs_stub() {
     // F1/F4 — a freshly auto-detected config that emits a release_unit block
     // is born-correct: it documents the `kind` axis and leaves a commented
-    // `[codegen_edges]` stub. A hexagonal-cargo service triggers a snippet.
+    // `[cascade_inputs]` stub. A hexagonal-cargo service triggers a snippet.
     let repo = TestRepo::new();
     repo.write_file(
         "Cargo.toml",
@@ -192,13 +192,14 @@ fn init_emits_kind_docs_and_codegen_stub() {
     );
 
     let cfg = repo.read_file("belaf/config.toml");
-    // Unique phrases from MODEL_HEADER + CODEGEN_STUB (not the embedded default).
+    // Unique phrases from MODEL_HEADER + CASCADE_INPUTS_STUB (not the embedded
+    // default).
     assert!(
         cfg.contains("cascade-only node"),
         "config must document the `kind` axis:\n{cfg}"
     );
     assert!(
-        cfg.contains("Extra-cargo"),
-        "config must include the codegen_edges stub:\n{cfg}"
+        cfg.contains("[cascade_inputs.apko-base]"),
+        "config must include the cascade_inputs stub:\n{cfg}"
     );
 }

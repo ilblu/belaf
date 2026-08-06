@@ -29,11 +29,19 @@ pub mod syntax {
         #[serde(default)]
         pub binary_affecting: BinaryAffectingConfiguration,
 
-        /// `[codegen_edges]` (F4) — extra-cargo "this path feeds these crates"
-        /// edges, e.g. `"proto/**" = ["clikd-grpc", "clikd-events"]`. A change
-        /// under the glob cascades as if the listed crates changed.
+        /// `[cascade_inputs.<name>]` — declared path inputs that feed release
+        /// units without being units themselves (a shared OCI base image,
+        /// protobuf schemas, a shared config tree). A change under one of the
+        /// declared paths cascades into every unit the input `affects`.
         #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-        pub codegen_edges: HashMap<String, Vec<String>>,
+        pub cascade_inputs: HashMap<String, CascadeInputConfig>,
+
+        /// Removed in 4.0.0 — superseded by `[cascade_inputs]`. Captured only
+        /// so the config load can fail with a migration message instead of a
+        /// raw serde `unknown field` blob (this struct is
+        /// `deny_unknown_fields`). Never read for behaviour.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub codegen_edges: Option<HashMap<String, Vec<String>>>,
 
         /// `[group.<id>]` — bundles projects that release together with
         /// synchronised versions. Named-entry form only; the parser
@@ -76,6 +84,49 @@ pub mod syntax {
         /// `[ecosystems.*]` — per-ecosystem smart-default knobs.
         #[serde(default, skip_serializing_if = "EcosystemsConfig::is_empty")]
         pub ecosystems: EcosystemsConfig,
+    }
+
+    /// `[cascade_inputs.<name>]` named-entry — the TOML key is the input's
+    /// name. It becomes the synthetic graph node's name, so it is also a
+    /// valid commit scope for `belaf check` and shows up in changelogs as
+    /// `via <name>`.
+    ///
+    /// ```toml
+    /// [cascade_inputs.apko-base]
+    /// paths   = ["apko/base.yaml", "apko/*.lock", "apko/overlays/**"]
+    /// affects = "all-deploy-units"   # or ["gate", "rig", "kin"]
+    /// bump    = "floor_minor"        # optional
+    /// ```
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[serde(deny_unknown_fields)]
+    pub struct CascadeInputConfig {
+        /// Repo-relative paths this input owns. Entries containing `*`, `?`
+        /// or `[` are treated as globs (`apko/*.lock`); everything else is a
+        /// literal path prefix (`apko/overlays`, `apko/base.yaml`).
+        pub paths: Vec<String>,
+
+        /// Which release units a change under `paths` cascades into.
+        pub affects: CascadeInputAffects,
+
+        /// Bump floor applied to the affected units, using the same
+        /// vocabulary as `cascade_from`: `mirror` (default) | `floor_patch` |
+        /// `floor_minor` | `floor_major`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub bump: Option<String>,
+    }
+
+    /// The `affects` field of a `[cascade_inputs.<name>]` block. Untagged so
+    /// users write either a shorthand string or a plain list — precedent:
+    /// `ManifestList` in `release_unit/syntax.rs`.
+    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[serde(untagged)]
+    pub enum CascadeInputAffects {
+        /// A shorthand keyword. The only accepted value is
+        /// [`ALL_DEPLOY_UNITS`](super::ALL_DEPLOY_UNITS); anything else is a
+        /// hard config error (a typo must never silently affect nothing).
+        Shorthand(String),
+        /// An explicit list of release-unit names.
+        Units(Vec<String>),
     }
 
     /// `[group.<id>]` named-entry — the TOML key is the group id.
@@ -271,6 +322,12 @@ pub mod syntax {
         #[serde(default)]
         pub upstream_urls: Vec<String>,
 
+        /// Template for the branch `prepare` pushes the release commit to.
+        /// `{base}` expands to the branch the run started from. Defaults to
+        /// [`DEFAULT_RELEASE_BRANCH_TEMPLATE`] when unset.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pub release_branch: Option<String>,
+
         pub analysis: AnalysisConfig,
     }
 
@@ -290,6 +347,221 @@ pub struct NamedReleaseUnitConfig {
     pub config: crate::core::release_unit::syntax::ReleaseUnitConfig,
 }
 
+/// The only accepted `affects` shorthand. Spelled out here so the parser,
+/// the error message and the docs can never drift apart.
+pub const ALL_DEPLOY_UNITS: &str = "all-deploy-units";
+
+/// Which units a `[cascade_inputs.<name>]` block feeds — the validated form
+/// of [`syntax::CascadeInputAffects`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CascadeInputTargets {
+    /// Every `kind = "deploy"` unit in the repo. Internal/ignore units are
+    /// excluded (they never release, so a floor on them is meaningless).
+    AllDeployUnits,
+    /// An explicit, non-empty list of unit names.
+    Units(Vec<String>),
+}
+
+/// Runtime-adjacent shape of one `[cascade_inputs.<name>]` block: name lifted
+/// out of the HashMap key, `affects` and `bump` validated into typed values.
+/// Produced by [`resolve_cascade_inputs`] at config-load time so a bad entry
+/// fails there rather than silently matching nothing at analysis time.
+#[derive(Clone, Debug)]
+pub struct ResolvedCascadeInput {
+    pub name: String,
+    pub paths: Vec<String>,
+    pub affects: CascadeInputTargets,
+    /// `None` = the user did not declare one; the floor then defaults to
+    /// [`CascadeBumpStrategy::Mirror`](crate::core::release_unit::CascadeBumpStrategy::Mirror).
+    /// Kept distinct from `Some(Mirror)` so the manifest only reports a
+    /// `bump` the user actually wrote.
+    pub bump: Option<crate::core::release_unit::CascadeBumpStrategy>,
+}
+
+/// Parse `bump = "..."` into a [`CascadeBumpStrategy`], mirroring the
+/// `cascade_from` vocabulary.
+fn parse_cascade_bump(
+    input_name: &str,
+    raw: &str,
+) -> Result<crate::core::release_unit::CascadeBumpStrategy> {
+    use crate::core::release_unit::CascadeBumpStrategy;
+    match raw {
+        "mirror" => Ok(CascadeBumpStrategy::Mirror),
+        "floor_patch" => Ok(CascadeBumpStrategy::FloorPatch),
+        "floor_minor" => Ok(CascadeBumpStrategy::FloorMinor),
+        "floor_major" => Ok(CascadeBumpStrategy::FloorMajor),
+        other => Err(Error::msg(format!(
+            "[cascade_inputs.{input_name}] has bump = \"{other}\", which is not a known \
+             strategy. Valid values: \"mirror\" (default), \"floor_patch\", \"floor_minor\", \
+             \"floor_major\"."
+        ))),
+    }
+}
+
+/// Validate + promote the `[cascade_inputs]` table into the runtime shape,
+/// sorted by name for deterministic node creation and error output.
+///
+/// Every failure mode here is a hard error on purpose: a `[cascade_inputs]`
+/// entry that matches nothing is exactly the silent no-op this feature exists
+/// to eliminate.
+pub fn resolve_cascade_inputs(
+    table: std::collections::HashMap<String, syntax::CascadeInputConfig>,
+) -> Result<Vec<ResolvedCascadeInput>> {
+    let mut out: Vec<ResolvedCascadeInput> = Vec::with_capacity(table.len());
+
+    for (name, cfg) in table {
+        if name.trim().is_empty() {
+            return Err(Error::msg(
+                "[cascade_inputs] has an entry with an empty name; the table key becomes the \
+                 input's unit name and must be non-empty",
+            ));
+        }
+
+        if cfg.paths.is_empty() {
+            return Err(Error::msg(format!(
+                "[cascade_inputs.{name}] has `paths = []`. An input with no paths can never \
+                 match a change — declare at least one path, or remove the block."
+            )));
+        }
+        if let Some(bad) = cfg.paths.iter().find(|p| p.trim().is_empty()) {
+            let _ = bad;
+            return Err(Error::msg(format!(
+                "[cascade_inputs.{name}] has an empty string in `paths`. Every entry must be a \
+                 repo-relative path or glob."
+            )));
+        }
+
+        let affects = match cfg.affects {
+            syntax::CascadeInputAffects::Shorthand(s) if s == ALL_DEPLOY_UNITS => {
+                CascadeInputTargets::AllDeployUnits
+            }
+            syntax::CascadeInputAffects::Shorthand(s) => {
+                return Err(Error::msg(format!(
+                    "[cascade_inputs.{name}] has affects = \"{s}\", which is not a known \
+                     shorthand. The only accepted string is \"{ALL_DEPLOY_UNITS}\"; to target \
+                     specific units, write a list: affects = [\"unit-a\", \"unit-b\"]."
+                )));
+            }
+            syntax::CascadeInputAffects::Units(units) => {
+                if units.is_empty() {
+                    return Err(Error::msg(format!(
+                        "[cascade_inputs.{name}] has `affects = []`. An input that affects \
+                         nothing is a no-op — list at least one release unit, or use \
+                         affects = \"{ALL_DEPLOY_UNITS}\"."
+                    )));
+                }
+                if let Some(bad) = units.iter().find(|u| u.trim().is_empty()) {
+                    let _ = bad;
+                    return Err(Error::msg(format!(
+                        "[cascade_inputs.{name}] has an empty string in `affects`."
+                    )));
+                }
+                CascadeInputTargets::Units(units)
+            }
+        };
+
+        let bump = match &cfg.bump {
+            Some(raw) => Some(parse_cascade_bump(&name, raw)?),
+            None => None,
+        };
+
+        out.push(ResolvedCascadeInput {
+            name,
+            paths: cfg.paths,
+            affects,
+            bump,
+        });
+    }
+
+    out.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(out)
+}
+
+/// Turn a legacy `[codegen_edges]` glob into the `[cascade_inputs]` key it
+/// used to produce as a node name (`"proto/**"` → `proto`). Keeping the old
+/// derivation means a migrated config keeps the same unit name, so existing
+/// commit scopes and changelog `via` prefixes stay valid.
+fn codegen_edge_key(glob: &str) -> String {
+    let mut prefix = glob.trim_end_matches('*').to_string();
+    if !prefix.ends_with('/') {
+        prefix.push('/');
+    }
+    prefix
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Hard migration for the removed `[codegen_edges]` section: abort the config
+/// load with a message that renders the equivalent `[cascade_inputs]` block.
+/// Deliberately not a silent rewrite — the semantics changed (file globs now
+/// work, the node name is the table key, and a bump floor is available), so
+/// the user must look at the result once.
+fn reject_codegen_edges(
+    edges: &Option<std::collections::HashMap<String, Vec<String>>>,
+) -> Result<()> {
+    let Some(edges) = edges else {
+        return Ok(());
+    };
+
+    let mut rendered = String::new();
+    let mut globs: Vec<&String> = edges.keys().collect();
+    globs.sort();
+    let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+    for glob in globs {
+        let crates = &edges[glob];
+        let base = {
+            let k = codegen_edge_key(glob);
+            if k.is_empty() {
+                "input".to_string()
+            } else {
+                k
+            }
+        };
+        // Two globs can derive the same key ("a/proto/**" and "b/proto/**").
+        // Suffix duplicates so the rendered block is valid TOML.
+        let count = seen.entry(base.clone()).or_insert(0);
+        *count += 1;
+        let key = if *count == 1 {
+            base
+        } else {
+            format!("{base}-{count}")
+        };
+
+        let crate_list = crates
+            .iter()
+            .map(|c| format!("\"{c}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        rendered.push_str(&format!(
+            "\n[cascade_inputs.{key}]\npaths   = [\"{glob}\"]\naffects = [{crate_list}]\n"
+        ));
+    }
+
+    if rendered.is_empty() {
+        rendered.push_str(
+            "\n[cascade_inputs.my-input]\npaths   = [\"proto/**\"]\naffects = [\"my-crate\"]\n",
+        );
+    }
+
+    Err(Error::msg(format!(
+        "`[codegen_edges]` was removed in belaf 4.0.0 and replaced by `[cascade_inputs]`, which \
+         also matches file globs (`apko/*.lock`), supports a per-input bump floor, and records \
+         provenance in the release manifest.\n\n\
+         Delete the `[codegen_edges]` section from belaf/config.toml and add:\n{rendered}\n\
+         Notes:\n\
+         \x20 - The table key is now the input's unit name (it used to be derived from the \
+         glob's last path segment). The keys above keep the old names, so existing commit \
+         scopes such as `fix(<name>):` and changelog `via <name>` prefixes stay valid.\n\
+         \x20 - `affects = \"{ALL_DEPLOY_UNITS}\"` targets every deploy unit at once.\n\
+         \x20 - Optional: `bump = \"floor_minor\"` to raise the bump the input forces on the \
+         units it affects."
+    )))
+}
+
 #[derive(Clone, Debug)]
 pub struct ConfigurationFile {
     pub repo: syntax::RepoConfiguration,
@@ -297,7 +569,8 @@ pub struct ConfigurationFile {
     pub bump: syntax::BumpConfiguration,
     pub commit_attribution: syntax::CommitAttributionConfiguration,
     pub binary_affecting: syntax::BinaryAffectingConfiguration,
-    pub codegen_edges: std::collections::HashMap<String, Vec<String>>,
+    /// `[cascade_inputs.<name>]`, validated and sorted by name.
+    pub cascade_inputs: Vec<ResolvedCascadeInput>,
     pub groups: Vec<syntax::ResolvedGroupConfig>,
     pub bump_sources: Vec<syntax::BumpSourceConfig>,
     pub release_units: Vec<NamedReleaseUnitConfig>,
@@ -324,6 +597,12 @@ impl ConfigurationFile {
             .map_err(|e| Error::new(e).context("failed to build configuration"))?
             .try_deserialize()
             .map_err(|e| Error::new(e).context("failed to deserialize configuration"))?;
+
+        // `[codegen_edges]` is gone — fail here with a rendered replacement
+        // block rather than letting a stale config silently do nothing.
+        reject_codegen_edges(&cfg.codegen_edges)?;
+
+        let cascade_inputs = resolve_cascade_inputs(cfg.cascade_inputs)?;
 
         // Promote the HashMap keys into runtime-adjacent shapes with a
         // stable iteration order. Sort by name for deterministic
@@ -352,7 +631,7 @@ impl ConfigurationFile {
             bump: cfg.bump,
             commit_attribution: cfg.commit_attribution,
             binary_affecting: cfg.binary_affecting,
-            codegen_edges: cfg.codegen_edges,
+            cascade_inputs,
             groups,
             bump_sources: cfg.bump_sources,
             release_units,
@@ -382,13 +661,33 @@ impl ConfigurationFile {
                 .into_iter()
                 .map(|u| (u.name, u.config))
                 .collect();
+        let cascade_inputs: HashMap<String, syntax::CascadeInputConfig> = self
+            .cascade_inputs
+            .into_iter()
+            .map(|c| {
+                (
+                    c.name,
+                    syntax::CascadeInputConfig {
+                        paths: c.paths,
+                        affects: match c.affects {
+                            CascadeInputTargets::AllDeployUnits => {
+                                syntax::CascadeInputAffects::Shorthand(ALL_DEPLOY_UNITS.to_string())
+                            }
+                            CascadeInputTargets::Units(u) => syntax::CascadeInputAffects::Units(u),
+                        },
+                        bump: c.bump.map(|b| b.wire_key().to_string()),
+                    },
+                )
+            })
+            .collect();
         let cfg = syntax::ReleaseConfiguration {
             repo: self.repo,
             changelog: self.changelog,
             bump: self.bump,
             commit_attribution: self.commit_attribution,
             binary_affecting: self.binary_affecting,
-            codegen_edges: self.codegen_edges,
+            cascade_inputs,
+            codegen_edges: None,
             groups,
             bump_sources: self.bump_sources,
             release_units,
