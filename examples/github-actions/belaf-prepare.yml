@@ -42,13 +42,25 @@ jobs:
         with:
           fetch-depth: 0    # belaf needs full history to compute bumps
 
+      - name: Configure git identity
+        # belaf falls back to a `belaf <belaf@devnull>` identity when none is
+        # configured, so this is not required — but without it that fallback
+        # is what shows up as the author of every release commit.
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
       - name: Install belaf
         # Uses the cargo-dist-published installer script which auto-detects
         # the runner's target triple and drops the binary into ~/.cargo/bin.
-        # Pin a specific version (e.g. v1.0.0/...) for reproducible builds.
+        #
+        # Pinned on purpose: `latest` means a belaf release can change what
+        # your CI does without a commit on your side. Bump it deliberately.
+        env:
+          BELAF_VERSION: v3.0.0
         run: |
           set -euo pipefail
-          curl -fsSL https://github.com/ilblu/belaf/releases/latest/download/belaf-installer.sh | sh
+          curl -fsSL "https://github.com/ilblu/belaf/releases/download/${BELAF_VERSION}/belaf-installer.sh" | sh
           echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
 
       - name: Run belaf prepare

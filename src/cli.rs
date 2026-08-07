@@ -104,6 +104,12 @@ pub enum Commands {
     Doctor(DoctorArgs),
 
     #[command(
+        about = "Report release units that need a history baseline",
+        long_about = "List every `kind = \"deploy\"` release unit that has no matching release tag\nin a repository that already carries version-shaped tags — the exact set\n`belaf prepare` refuses to analyze, because walking their full history\nwould over-count old commits and inflate the bump.\n\nWhy this exists:\n  • The repo-wide `belaf-baseline` git tag answers the question for EVERY\n    unit at once, present and future, from a place nobody reviews.\n  • `baseline = \"...\"` on `[release_unit.<name>]` answers it for one unit,\n    in a file that shows up in a diff.\n\nThe two accepted values:\n  • baseline = \"first-release\"  analyze from repo start; the unit has\n                                genuinely never been released\n  • baseline = \"<commit-sha>\"   start the commit window at this commit\n                                (short shas and any git ref work)\n\nA real release tag always wins over the key, so it becomes a no-op after\nthe unit's first release.\n\nModes:\n  • (default)  human-readable report; exit 4 while any unit is unanswered\n  • --ci       the same set as JSON on stdout; exit 4 likewise\n  • --fix      write `baseline = \"first-release\"` for each reported unit\n               into belaf/config.toml, preserving formatting and comments.\n               Units that already have a `baseline` are left alone."
+    )]
+    Baseline(BaselineArgs),
+
+    #[command(
         about = "Validate commit labels against the release model",
         long_about = "Check that commits are labelled consistently with the release model (F8).\n\nValidates:\n  • the conventional commit scope names a known release unit (deploy or internal)\n  • the commit's binary-affecting changed paths fall within that unit's\n    dependency closure (its own crate, or an internal crate it cascades through)\n\nThis only validates the *label* — it never affects what releases. A failing\ncheck blocks a mislabeled PR, never a correct release.\n\nModes:\n  • --message <MSG>   validate a single message (commit-msg hook; scope only)\n  • --range <A>..<B>  validate every commit in the range (CI)\n  • (default)         validate HEAD\n\nUse --ci to fail (exit 1) on any violation; without it, violations are warnings."
     )]
@@ -159,6 +165,21 @@ pub struct DoctorArgs {
         help = "Emit a structured JSON payload instead of human-readable text."
     )]
     pub json: bool,
+}
+
+#[derive(Args)]
+pub struct BaselineArgs {
+    #[arg(
+        long,
+        help = "CI/CD mode: emit the report as JSON on stdout, no prompts."
+    )]
+    pub ci: bool,
+
+    #[arg(
+        long,
+        help = "Write `baseline = \"first-release\"` into belaf/config.toml for every reported unit. Idempotent."
+    )]
+    pub fix: bool,
 }
 
 #[derive(Args)]

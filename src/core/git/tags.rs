@@ -126,7 +126,7 @@ impl Repository {
     /// tags at all) vs. "the configured template doesn't match the
     /// existing tags" (the bug class). Uses a permissive regex by
     /// design — false positives just relax the safety net.
-    pub(super) fn repo_has_any_version_tags(&self) -> Result<bool> {
+    pub fn repo_has_any_version_tags(&self) -> Result<bool> {
         let tags = self.repo.tag_names(None)?;
         let re = regex::Regex::new(r"\d+\.\d+\.\d+").expect("BUG: literal regex compiles");
         for tag_name in tags.iter().flatten() {

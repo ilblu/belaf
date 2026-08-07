@@ -9,8 +9,6 @@ use std::collections::HashMap;
 use tracing::{debug, info};
 
 use crate::core::{
-    api::{ApiClient, ApiError},
-    auth::token::load_or_exchange_token,
     bump::BumpConfig,
     changelog::{ChangelogConfig, Commit, GitConfig},
     git::repository::{ChangeList, RepoPathBuf},
@@ -24,7 +22,6 @@ use crate::core::{
 
 use super::branch::format_commit_message;
 use super::changelog_gen::{generate_and_write_project_changelog, ChangelogGenerationParams};
-use super::github::parse_github_url;
 use super::{
     build_tag_name, extract_github_remote, load_github_token, ChangelogGenerationResult,
     PreparedRelease, SelectedReleaseUnit,
@@ -393,52 +390,7 @@ impl<'a> ReleasePipeline<'a> {
     }
 
     fn fetch_git_credentials(&self) -> Result<String> {
-        let upstream_url = self
-            .sess
-            .repo
-            .upstream_url()
-            .context("failed to get upstream URL")?;
-
-        let (owner, repo) =
-            parse_github_url(&upstream_url).context("failed to parse GitHub URL from upstream")?;
-
-        let api_client = ApiClient::new();
-
-        let future = async {
-            let token = load_or_exchange_token(&api_client)
-                .await
-                .context("failed to load token")?
-                .context(
-                    "not authenticated — run 'belaf install' (interactive) or run from a \
-                     GitHub Actions job with `permissions: id-token: write` set",
-                )?;
-
-            api_client
-                .get_git_credentials(&token, &owner, &repo)
-                .await
-                .map_err(|e| match &e {
-                    ApiError::ApiResponse { status, message } => {
-                        anyhow::anyhow!("failed to get git credentials ({}): {}", status, message)
-                    }
-                    ApiError::Unauthorized => {
-                        anyhow::anyhow!(
-                            "authentication expired - run 'belaf login' to re-authenticate"
-                        )
-                    }
-                    _ => anyhow::anyhow!("failed to get git credentials: {}", e),
-                })
-        };
-
-        let credentials = match tokio::runtime::Handle::try_current() {
-            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
-            Err(_) => {
-                let rt =
-                    tokio::runtime::Runtime::new().context("failed to create async runtime")?;
-                rt.block_on(future)
-            }
-        }?;
-
-        Ok(credentials.token)
+        crate::core::github::client::fetch_git_credentials(&self.sess.repo)
     }
 
     fn create_pull_request(

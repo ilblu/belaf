@@ -163,4 +163,22 @@ impl TestRepo {
 
         cmd.output().expect("failed to run belaf command")
     }
+
+    /// Run belaf with the pre-flight tag fetch **enabled**.
+    ///
+    /// Every other helper here sets `BELAF_NO_FETCH=1`, which is what kept a
+    /// broken fetch path invisible to the whole suite. Tests that care about
+    /// that path have to opt back in.
+    #[must_use]
+    pub fn run_belaf_command_with_fetch(&self, args: &[&str]) -> std::process::Output {
+        let belaf_bin = env!("CARGO_BIN_EXE_belaf");
+
+        Command::new(belaf_bin)
+            .args(args)
+            .current_dir(&self.path)
+            .env("GITHUB_TOKEN", "test-token-for-tests")
+            .env_remove("BELAF_NO_FETCH")
+            .output()
+            .expect("failed to run belaf command")
+    }
 }

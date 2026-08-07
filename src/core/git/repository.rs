@@ -566,7 +566,11 @@ impl Repository {
         let tree = self.repo.find_tree(tree_id)?;
 
         let parent_commit = self.repo.head()?.peel_to_commit()?;
-        let signature = self.repo.signature()?;
+        // Not `repo.signature()` directly: that errors when `user.name` /
+        // `user.email` are unset, which is the default on a fresh CI runner —
+        // `prepare` would push nothing and fail at the commit. `get_signature`
+        // falls back to a belaf identity instead.
+        let signature = self.get_signature()?;
 
         self.repo.commit(
             Some("HEAD"),

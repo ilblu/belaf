@@ -49,6 +49,7 @@ manifests = [
 ecosystem = "jvm-library"
 satellites = ["sdks/kotlin"]
 cascade_from = { source = "schema", bump = "floor_minor" }
+baseline = "first-release"
 manifests = [
   { path = "sdks/kotlin/gradle.properties", version_field = "gradle_properties" },
 ]
@@ -83,6 +84,7 @@ manifests = [
 ecosystem = "cargo"
 satellites = ["packages/internal"]
 visibility = "hidden"
+baseline = "8eb3e3cf78ac6e"
 manifests = [
   { path = "packages/internal/Cargo.toml", version_field = "cargo_toml" },
 ]
@@ -358,7 +360,28 @@ fn into_toml_round_trip_preserves_all_release_units() {
         assert_eq!(a.config.satellites, b.config.satellites);
         assert_eq!(a.config.tag_format, b.config.tag_format);
         assert_eq!(a.config.visibility, b.config.visibility);
+        assert_eq!(
+            a.config.baseline, b.config.baseline,
+            "`baseline` must survive the round-trip for `{}`\n--- serialised ---\n{serialised}",
+            a.name
+        );
     }
+
+    // Both accepted forms must be present in the fixture, or the assertion
+    // above proves nothing.
+    let baselines: Vec<Option<&str>> = cfg1
+        .release_units
+        .iter()
+        .map(|u| u.config.baseline.as_deref())
+        .collect();
+    assert!(
+        baselines.contains(&Some("first-release")),
+        "fixture must exercise the keyword form: {baselines:?}"
+    );
+    assert!(
+        baselines.contains(&Some("8eb3e3cf78ac6e")),
+        "fixture must exercise the sha form: {baselines:?}"
+    );
 
     assert_eq!(cfg1.ignore_paths.paths, cfg2.ignore_paths.paths);
     assert_eq!(cfg1.allow_uncovered.paths, cfg2.allow_uncovered.paths);

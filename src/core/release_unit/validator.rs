@@ -160,6 +160,15 @@ pub enum ResolverError {
     #[error("release_unit `{unit}`: unknown cascade bump strategy `{strategy}` (allowed: mirror, floor_patch, floor_minor, floor_major)")]
     UnknownCascadeBumpStrategy { unit: String, strategy: String },
 
+    /// `baseline = ""` (or only whitespace). Silently treating this as
+    /// "no baseline" would hide a typo that costs a whole release run.
+    #[error(
+        "release_unit `{unit}`: `baseline` is empty — set it to \"first-release\" to analyze \
+         from repo start, or to a commit sha to start the window there; remove the key entirely \
+         to keep the default behaviour"
+    )]
+    BaselineEmpty { unit: String },
+
     /// Path normalization or canonicalization failure.
     #[error("release_unit `{unit}`: path `{path}` is invalid: {reason}")]
     InvalidPath {
@@ -245,6 +254,7 @@ impl ResolverError {
             Self::SourceBothSet { .. } => "source_both_set",
             Self::SourceNotSet { .. } => "source_not_set",
             Self::UnknownEnumValue { .. } => "unknown_enum_value",
+            Self::BaselineEmpty { .. } => "baseline_empty",
             Self::PartialOverrideNoMatch { .. } => "partial_override_no_match",
             Self::PartialOverrideStructuralField { .. } => "partial_override_structural_field",
             Self::PartialOverrideEmpty { .. } => "partial_override_empty",
@@ -358,6 +368,7 @@ mod tests {
                 unit: "x".into(),
                 strategy: "y".into(),
             },
+            ResolverError::BaselineEmpty { unit: "x".into() },
             ResolverError::InvalidPath {
                 unit: "x".into(),
                 path: "y".into(),

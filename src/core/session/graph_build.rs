@@ -126,6 +126,7 @@ impl AppBuilder {
         unit_node.extra_includes = extra_includes;
         unit_node.kind = unit.kind;
         unit_node.bump_override = unit.bump_override.clone();
+        unit_node.baseline = unit.baseline.clone();
 
         // Tier-3 (F4-Glob) — glob-shaped `paths` become residual glob matchers.
         // A unit with no literal paths skips the prefix `Include` (it would
@@ -171,10 +172,15 @@ impl AppBuilder {
     /// become residual glob matchers. That is what makes `apko/*.lock` work —
     /// the predecessor (`[codegen_edges]`) turned every entry into a prefix and
     /// so produced the never-matching prefix `apko/*.lock/`.
+    /// `glob_expansions` maps a glob-form `[release_unit.<key>]` config key to
+    /// the unit names it expanded into, so `affects` can name the key instead
+    /// of restating every unit — a list that would otherwise drift out of sync
+    /// with the glob it duplicates.
     pub(super) fn materialize_cascade_inputs(
         &mut self,
         inputs: &[crate::core::config::ResolvedCascadeInput],
         binary_affecting: &crate::core::config::syntax::BinaryAffectingConfiguration,
+        glob_expansions: &std::collections::BTreeMap<String, Vec<String>>,
     ) -> Result<()> {
         use crate::core::config::CascadeInputTargets;
         use crate::core::git::{path_matcher::is_binary_affecting, repository::RepoPathBuf};
@@ -267,7 +273,39 @@ impl AppBuilder {
                     .iter()
                     .filter_map(|&did| self.graph.lookup(did).qnames.first().cloned())
                     .collect(),
-                CascadeInputTargets::Units(names) => names.clone(),
+                CascadeInputTargets::Units(names) => {
+                    let mut resolved = Vec::new();
+                    for entry in names {
+                        let is_unit = self.graph.id_for_qname(entry).is_some();
+                        let expanded = glob_expansions.get(entry);
+
+                        match (is_unit, expanded) {
+                            // A release unit and a glob key of the same name:
+                            // guessing either way would silently release the
+                            // wrong set.
+                            (true, Some(units)) => anyhow::bail!(
+                                "[cascade_inputs.{name}] `affects` lists `{entry}`, which is \
+                                 ambiguous: it is both a release unit and the key of a \
+                                 glob-form `[release_unit.{entry}]` covering {}. Rename one \
+                                 of them.",
+                                units.join(", ")
+                            ),
+                            (true, None) => resolved.push(entry.clone()),
+                            (false, Some(units)) => resolved.extend(units.iter().cloned()),
+                            // Previously a warning, which meant a typo here
+                            // released nothing and said so only in a log line
+                            // nobody reads — the same silent no-op this whole
+                            // section exists to eliminate.
+                            (false, None) => anyhow::bail!(
+                                "[cascade_inputs.{name}] `affects` lists `{entry}`, which is \
+                                 neither a known release unit nor the key of a glob-form \
+                                 `[release_unit]`. Fix the name, or use \
+                                 `affects = \"all-deploy-units\"`."
+                            ),
+                        }
+                    }
+                    resolved
+                }
             };
 
             for target in &targets {

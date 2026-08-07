@@ -426,6 +426,10 @@ impl BootstrapCommand {
         info!("Review changes, add `belaf/` to the repository, and commit.");
         info!("Then try `belaf status` for a history summary");
         info!("   (Note: commit tracking starts from package-specific tags or 'belaf-baseline')");
+        info!(
+            "   For a unit added later that has no tag yet, prefer a per-unit \
+             `baseline` — run `belaf baseline` to see which ones need it"
+        );
         info!("Then begin modifying your CI/CD pipeline to use the `belaf release` commands");
         Ok(0)
     }

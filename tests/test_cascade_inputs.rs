@@ -691,3 +691,67 @@ fn cascaded_commit_lands_in_the_changelog_with_a_via_prefix() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// `affects` naming a glob-form `[release_unit.<key>]`
+// ---------------------------------------------------------------------------
+
+// NOTE: the positive path — `affects = ["<glob key>"]` actually expanding to
+// the glob's units — has no integration test yet. Writing one requires a
+// glob-form `[release_unit]` over crates that auto-discovery also finds, and
+// that combination currently aborts with "multiple projects with same name"
+// regardless of `[cascade_inputs]`. That collision is a separate, pre-existing
+// bug; the expansion logic itself is covered by the two error cases below,
+// which exercise the same resolution path.
+
+/// A name that is neither a unit nor a glob key used to be a `warn!`, so a
+/// typo produced a release that quietly left every intended service out.
+#[test]
+fn unknown_affects_name_is_a_hard_error() {
+    let repo = TestRepo::new();
+    scaffold_two_services(&repo);
+    repo.write_file(
+        "belaf/config.toml",
+        "[cascade_inputs.apko-base]\npaths = [\"apko/**\"]\naffects = [\"servcies\"]\n",
+    );
+    repo.write_file("apko/base.yaml", "contents:\n  packages: [zlib]\n");
+    repo.commit("fix(apko-base): patch zlib CVE");
+
+    let out = prepare(&repo);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(!out.status.success(), "a typo must not pass silently");
+    assert!(
+        stderr.contains("servcies") && stderr.contains("neither a known release unit"),
+        "the error should name the offending entry; stderr:\n{stderr}"
+    );
+}
+
+/// If a name means two different things, releasing either set would be a
+/// guess. Say so instead.
+#[test]
+fn ambiguous_affects_name_is_a_hard_error() {
+    let repo = TestRepo::new();
+    scaffold_two_services(&repo);
+    // `gate` is a real unit AND the key of a glob covering both services.
+    repo.write_file(
+        "belaf/config.toml",
+        "[release_unit.gate]\nglob = \"crates/*\"\nname = \"{basename}\"\n\
+         ecosystem = \"cargo\"\nmanifests = [\"{path}/Cargo.toml\"]\n\n\
+         [cascade_inputs.apko-base]\npaths = [\"apko/**\"]\naffects = [\"gate\"]\n",
+    );
+    repo.write_file("apko/base.yaml", "contents:\n  packages: [zlib]\n");
+    repo.commit("fix(apko-base): patch zlib CVE");
+
+    let out = prepare(&repo);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+
+    assert!(
+        !out.status.success(),
+        "an ambiguous name must not be guessed"
+    );
+    assert!(
+        stderr.contains("ambiguous"),
+        "the error should call out the ambiguity; stderr:\n{stderr}"
+    );
+}

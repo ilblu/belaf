@@ -144,6 +144,83 @@ external = { tool = "gradle", read_command = "./gradlew -q :sdk:printVersion", w
 | `cascade_from` | `{ source = "schema-unit", bump = "floor_minor" }` — auto-bump this unit when `source` bumps. Strategies: `mirror`, `floor_patch`, `floor_minor`, `floor_major`. |
 | `visibility` | `"public"` (publishes to a registry), `"internal"`, or `"hidden"`. Surfaced on the dashboard. |
 | `tag_format` | Override the ecosystem default. See "Tag-format precedence" below. |
+| `baseline` | Where this unit's history starts when no release tag matches it. See "`baseline`" below. |
+
+### `baseline`
+
+When belaf can't find a release tag for a `kind = "deploy"` unit **and**
+the repo already carries version-shaped tags, `belaf prepare` refuses to
+run. That refusal is correct: analyzing from repo start would count every
+commit the unit ever had and inflate the bump — usually straight to a
+major.
+
+`baseline` is how you answer it, per unit:
+
+```toml
+# Genuinely never released. Analyze from repo start; you have looked at
+# it and accepted the result.
+[release_unit.docs]
+baseline = "first-release"
+
+# Released before belaf existed (or under tags belaf can't reconstruct).
+# Start the commit window at this commit instead.
+[release_unit.desktop]
+baseline = "8eb3e3cf78ac6e"
+```
+
+Which one:
+
+- **`"first-release"`** — the unit has no release history at all. Every
+  commit that ever touched it belongs in the first changelog, so "analyze
+  everything" is the right answer rather than a bug.
+- **a commit-ish** — the unit *was* released, you just can't point belaf
+  at the tag. Anything `git rev-parse` accepts works: full sha, short sha,
+  a tag, a branch. The commit itself is excluded; the window starts after
+  it.
+
+There is a third case neither value covers: the tags **do** exist and
+belaf's template simply doesn't match them (`v1.2.3` vs `docs-v1.2.3`).
+Fix `tag_format` for that — a `baseline` would paper over a template bug
+and silently mis-bump forever.
+
+Semantics worth knowing:
+
+- **A real release tag always wins.** `baseline` is only consulted on a
+  tag-lookup miss, so the key becomes a no-op after the unit's first
+  release and can be deleted then. Leaving it costs nothing.
+- **It scopes to exactly one unit.** Every other unit keeps the guard.
+- On a **glob-form** block it applies to every unit the glob expands to —
+  blunt by construction, so prefer a per-unit block.
+
+#### It replaces reaching for the `belaf-baseline` tag
+
+The older escape hatch is a repo-wide `git tag belaf-baseline <commit>`.
+Prefer `baseline` over it, for two reasons:
+
+1. The tag silences the guard for **every** unit at once — including
+   units added months later, which then get no protection at all and no
+   one notices.
+2. It lives in a git tag. Nobody reviews git tags. `baseline` shows up in
+   a `belaf/config.toml` diff with the unit's name next to it.
+
+`belaf-baseline` still works and still applies as a fallback *after* the
+per-unit key, so existing repos are unaffected. Treat it as the
+bootstrap-only tool it is: fine for the very first run of a brand-new
+repo, wrong as a standing answer.
+
+#### Finding the units that need one
+
+```bash
+belaf baseline          # list the units prepare would refuse on
+belaf baseline --ci     # ...as JSON
+belaf baseline --fix    # write baseline = "first-release" for each of them
+```
+
+`belaf prepare` reports **all** offending units in one error, so this is
+a single pass rather than one unit per run. `--fix` preserves the
+formatting and comments of `belaf/config.toml`, validates the merged
+result before writing, and leaves any unit that already has a `baseline`
+untouched.
 
 ### Glob form
 
@@ -248,15 +325,7 @@ A per-tag `concurrency` group in the consumer workflow does **not**
 throttle this. Each tag is its own group, so every run is alone in its
 group and none of them queue. Throttle it explicitly:
 
-```yaml
-# One shared group across all release runs — they queue instead of
-# stampeding. Note: with cancel-in-progress false, they run one at a time.
-concurrency:
-  group: release-runner
-  cancel-in-progress: false
-```
-
-or, if the release job is a matrix, cap the fan-out at the job level:
+The safe way to cap it is at the job level, with a matrix:
 
 ```yaml
 jobs:
@@ -271,6 +340,26 @@ Pick a cap your registry and build cache can actually absorb. If you'd
 rather keep the radius small, list the units explicitly instead —
 `affects = ["gate", "rig"]` — at the cost of having to remember to add
 new services to the list.
+
+> **Do not throttle release runs with a shared `concurrency` group unless
+> you also set `queue: max`.** A concurrency group holds exactly *one*
+> pending run by default: "any existing `pending` job or workflow in the
+> same concurrency group will be canceled and the new queued job or
+> workflow will take its place." `cancel-in-progress: false` protects the
+> run that is *already executing* — it does nothing for the queue. Point
+> 23 simultaneous release runs at one group and you get one running, one
+> pending, and **21 silently cancelled**: 21 services tagged as released
+> whose images were never built, with nothing failing to tell you.
+>
+> ```yaml
+> concurrency:
+>   group: release-runner
+>   cancel-in-progress: false
+>   queue: max          # up to 100 pending; without this, all but one are dropped
+> ```
+>
+> Even with `queue: max` the cap is 100 pending runs, beyond which runs
+> are cancelled again. For a fan-out this wide, prefer `max-parallel`.
 
 ## `[ignore_paths]` and `[allow_uncovered]`
 
@@ -325,6 +414,12 @@ belaf config explain --format json
 `config explain` prints the full resolved view: every Release Unit,
 its source, tag format, group membership, cascade edges, and the
 ecosystem default that applied.
+
+```bash
+# Which units have no release tag and no `baseline` — i.e. what would
+# stop the next `belaf prepare`. Exits 4 while any are unanswered.
+belaf baseline
+```
 
 ## Reference
 

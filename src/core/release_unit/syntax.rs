@@ -26,9 +26,15 @@
 //!
 //! # Partial override — omit `ecosystem` / `manifests` to inherit them
 //! # from auto-detection. Only override fields are allowed in this form
-//! # (`tag_format`, `visibility`, `satellites`, `cascade_from`).
+//! # (`tag_format`, `visibility`, `satellites`, `cascade_from`,
+//! # `baseline`).
 //! [release_unit.discord-bot]
 //! tag_format = "v{version}"
+//!
+//! # Never released before — analyze from repo start instead of
+//! # refusing because the repo has version tags for other units.
+//! [release_unit.docs]
+//! baseline = "first-release"
 //! ```
 
 use std::collections::HashMap;
@@ -192,7 +198,8 @@ pub struct ReleaseUnitConfig {
     /// when omitted, the entry is a **partial override** that inherits
     /// ecosystem + manifests from the auto-detected unit with the same
     /// name. In that mode only override fields (`tag_format`,
-    /// `visibility`, `satellites`, `cascade_from`) may be set.
+    /// `visibility`, `satellites`, `cascade_from`, `baseline`) may be
+    /// set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ecosystem: Option<String>,
 
@@ -265,6 +272,22 @@ pub struct ReleaseUnitConfig {
     /// Optional cascade rule.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cascade_from: Option<CascadeRuleConfig>,
+
+    /// Where this unit's commit history starts when **no release tag
+    /// matches** it. Scopes what used to require the repo-wide
+    /// `belaf-baseline` git tag down to a single unit, in a place that
+    /// gets code-reviewed.
+    ///
+    /// Two accepted forms:
+    ///   - `"first-release"` — analyze from repo start; the user has
+    ///     explicitly accepted that this unit has never been released.
+    ///   - any other string — a commit-ish (full or short sha, or any
+    ///     ref `git rev-parse` accepts) to bound the window at.
+    ///
+    /// A real release tag always wins over this key; it only applies on
+    /// a tag-lookup miss.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub baseline: Option<String>,
 
     /// `[release_unit.<name>.bump]` — per-unit bump-policy override (F11a).
     /// Each field overrides the global `[bump]` field-wise; unset fields inherit

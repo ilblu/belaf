@@ -541,19 +541,42 @@ impl AppSession {
     }
 
     pub fn analyze_histories(&self) -> Result<RepoHistories> {
-        let registry = FormatHandlerRegistry::with_defaults();
-        let project_refs: Vec<&ResolvedReleaseUnit> = self.graph.projects_slice().iter().collect();
-        let matchers = build_matchers_for_runtime_units(
-            &project_refs,
-            &self.resolved_release_units,
-            self.graph.groups(),
-            &registry,
-        )?;
+        let matchers = self.build_runtime_tag_matchers()?;
         // F-decouple — `analyze_histories` no longer consumes the scope matcher;
         // WHETHER is path-based only. The `[commit_attribution]` config is still
         // held on the session and consumed by `belaf check` (F8).
         self.graph
             .analyze_histories(&self.repo, &matchers, &self.binary_affecting)
+    }
+
+    /// One [`TagMatcher`] per graph unit, in graph order — the exact input
+    /// [`Self::analyze_histories`] feeds the boundary resolution.
+    fn build_runtime_tag_matchers(&self) -> Result<Vec<TagMatcher>> {
+        let registry = FormatHandlerRegistry::with_defaults();
+        let project_refs: Vec<&ResolvedReleaseUnit> = self.graph.projects_slice().iter().collect();
+        build_matchers_for_runtime_units(
+            &project_refs,
+            &self.resolved_release_units,
+            self.graph.groups(),
+            &registry,
+        )
+    }
+
+    /// The `Deploy` units that `belaf prepare` would refuse to analyze:
+    /// no matching release tag, no per-unit `baseline`, no repo-wide
+    /// `belaf-baseline`, in a repo that already carries version-shaped tags.
+    ///
+    /// Exactly the set [`Self::analyze_histories`] turns into an error —
+    /// same call, same precedence — but returned as data so `belaf baseline`
+    /// can report or fix it without running a release.
+    pub fn untagged_deploy_units(
+        &self,
+    ) -> Result<Vec<crate::core::git::history::UntaggedDeployUnit>> {
+        let matchers = self.build_runtime_tag_matchers()?;
+        Ok(self
+            .repo
+            .resolve_history_boundaries(self.graph.projects_slice(), &matchers)?
+            .untagged)
     }
 }
 

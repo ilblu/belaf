@@ -39,6 +39,7 @@ fn pypa_unit(name: &str, manifest_path: &str, version_field: &str) -> NamedRelea
             paths: vec![],
             cascade_from: None,
             bump: None,
+            baseline: None,
         },
     }
 }
@@ -106,6 +107,7 @@ fn pep_621_rejects_non_pypa_ecosystem() {
             paths: vec![],
             cascade_from: None,
             bump: None,
+            baseline: None,
         },
     };
     let err = resolve(&r, &[bad]).unwrap_err();

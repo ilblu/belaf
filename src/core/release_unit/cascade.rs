@@ -233,6 +233,7 @@ mod tests {
                 }),
                 kind: Default::default(),
                 bump_override: None,
+                baseline: None,
             },
             origin: ResolveOrigin::Explicit { config_index: 0 },
         }

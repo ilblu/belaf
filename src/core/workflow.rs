@@ -120,16 +120,39 @@ fn compute_prerelease_version(
     })?;
     let current_base = semver::Version::new(current_sv.major, current_sv.minor, current_sv.patch);
 
-    // Base on the last stable release (counts accumulated changes once), else
-    // fall back to the current base.
-    let base_src = stable.cloned().unwrap_or_else(|| current_base.clone());
-    let new_base = match level {
-        BumpRecommendation::Major => semver::Version::new(base_src.major + 1, 0, 0),
-        BumpRecommendation::Minor => semver::Version::new(base_src.major, base_src.minor + 1, 0),
-        // `None` shouldn't reach here (F5 floors to patch); treat as patch.
-        BumpRecommendation::Patch | BumpRecommendation::None => {
-            semver::Version::new(base_src.major, base_src.minor, base_src.patch + 1)
-        }
+    let new_base = match stable {
+        // Anchored on the last stable release, so changes accumulated across
+        // several betas are counted once.
+        Some(stable) => match level {
+            BumpRecommendation::Major => semver::Version::new(stable.major + 1, 0, 0),
+            BumpRecommendation::Minor => semver::Version::new(stable.major, stable.minor + 1, 0),
+            // `None` shouldn't reach here (F5 floors to patch); treat as patch.
+            BumpRecommendation::Patch | BumpRecommendation::None => {
+                semver::Version::new(stable.major, stable.minor, stable.patch + 1)
+            }
+        },
+        // No stable release has ever shipped — a package kept permanently in
+        // beta. There is nothing to bump *from*: `0.6.0-beta.N` already means
+        // "heading for 0.6.0", so further commits before 0.6.0 ships move the
+        // counter, not the target. Bumping here instead would walk the base
+        // forward on every run and reset the counter each time.
+        //
+        // Mirrors release-please's prerelease strategy: hold the base while
+        // the components below the bump level are still zero, and only break
+        // out when they are not.
+        None => match level {
+            BumpRecommendation::Patch | BumpRecommendation::None => current_base.clone(),
+            BumpRecommendation::Minor if current_base.major == 0 && current_base.patch == 0 => {
+                current_base.clone()
+            }
+            BumpRecommendation::Minor => {
+                semver::Version::new(current_base.major, current_base.minor + 1, 0)
+            }
+            BumpRecommendation::Major if current_base.minor == 0 && current_base.patch == 0 => {
+                current_base.clone()
+            }
+            BumpRecommendation::Major => semver::Version::new(current_base.major + 1, 0, 0),
+        },
     };
 
     // Counter: continue iff current is a prerelease of the same base + label.
@@ -661,6 +684,60 @@ mod prerelease_tests {
 
     fn sv(s: &str) -> semver::Version {
         semver::Version::parse(s).unwrap()
+    }
+
+    // --- no stable release has ever shipped (permanent beta) ---------------
+    //
+    // There is nothing to bump from, so the base holds and the counter moves.
+    // Mirrors release-please's prerelease strategy; without it the base walked
+    // forward every run and the counter reset to 1 each time.
+
+    #[test]
+    fn no_stable_patch_holds_the_base() {
+        let v = compute_prerelease_version("beta", None, BumpRecommendation::Patch, "0.6.0-beta.3")
+            .unwrap();
+        assert_eq!(v, "0.6.0-beta.4");
+    }
+
+    #[test]
+    fn no_stable_minor_holds_the_base_while_pre_major() {
+        // 0.x with patch == 0: the base already represents an unreleased
+        // minor, so a feature does not move it again.
+        let v = compute_prerelease_version("beta", None, BumpRecommendation::Minor, "0.6.0-beta.3")
+            .unwrap();
+        assert_eq!(v, "0.6.0-beta.4");
+    }
+
+    #[test]
+    fn no_stable_minor_bumps_once_patch_is_nonzero() {
+        // 0.6.1 is a patch line; a feature has to move to 0.7.0.
+        let v = compute_prerelease_version("beta", None, BumpRecommendation::Minor, "0.6.1-beta.2")
+            .unwrap();
+        assert_eq!(v, "0.7.0-beta.1");
+    }
+
+    #[test]
+    fn no_stable_major_breaks_out_when_minor_is_nonzero() {
+        // A real break is the one thing that still shows up in the number.
+        let v = compute_prerelease_version("beta", None, BumpRecommendation::Major, "0.6.0-beta.3")
+            .unwrap();
+        assert_eq!(v, "1.0.0-beta.1");
+    }
+
+    #[test]
+    fn no_stable_major_holds_the_base_at_x_0_0() {
+        // 1.0.0-beta.N is already the breaking release being prepared.
+        let v = compute_prerelease_version("beta", None, BumpRecommendation::Major, "1.0.0-beta.2")
+            .unwrap();
+        assert_eq!(v, "1.0.0-beta.3");
+    }
+
+    #[test]
+    fn no_stable_first_beta_from_a_plain_version() {
+        // Never tagged at all: 0.6.0 in the manifest, no prerelease suffix.
+        let v =
+            compute_prerelease_version("beta", None, BumpRecommendation::Patch, "0.6.0").unwrap();
+        assert_eq!(v, "0.6.0-beta.1");
     }
 
     #[test]

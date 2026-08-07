@@ -445,6 +445,7 @@ fn release_unit_tag_format_lookup_by_name() {
             paths: vec![],
             cascade_from: None,
             bump: None,
+            baseline: None,
         },
     };
 

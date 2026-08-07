@@ -105,6 +105,7 @@ impl ExplicitBuilder {
                 paths: self.paths,
                 cascade_from: self.cascade_from,
                 bump: None,
+                baseline: None,
             },
         }
     }
@@ -166,6 +167,7 @@ impl GlobBuilder {
                 paths: vec![],
                 cascade_from: None,
                 bump: None,
+                baseline: None,
             },
         }
     }

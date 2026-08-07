@@ -72,6 +72,48 @@ pub struct ReleaseUnit {
     /// Per-unit bump-policy override (F11a). `None` = inherit the global
     /// `[bump]` policy.
     pub bump_override: Option<syntax::BumpOverrideConfig>,
+
+    /// Where this unit's history starts when no release tag matches it.
+    /// `None` = no opinion; the repo-wide `belaf-baseline` tag (if any)
+    /// and the untagged-deploy-unit guard apply as before.
+    pub baseline: Option<BaselineSpec>,
+}
+
+// ---------------------------------------------------------------------------
+// BaselineSpec
+// ---------------------------------------------------------------------------
+
+/// Parsed form of `baseline = "..."` on a `[release_unit.<name>]` block.
+///
+/// This is the **per-unit** replacement for the repo-wide `belaf-baseline`
+/// git tag. That tag silences the untagged-deploy-unit guard for every unit
+/// at once — present and future — and lives somewhere nobody reviews. This
+/// key scopes the same decision to exactly one unit and puts it in the
+/// config file, where it shows up in a diff.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BaselineSpec {
+    /// `baseline = "first-release"` — analyze from repo start. The user has
+    /// explicitly accepted that this unit has never been released, so
+    /// counting every commit is the correct window rather than a bug.
+    FirstRelease,
+
+    /// `baseline = "<commit-ish>"` — bound the window at this commit. The
+    /// string is passed to `git rev-parse` semantics, so short shas, tags
+    /// and branch names all resolve.
+    Commit(String),
+}
+
+impl BaselineSpec {
+    /// The reserved keyword that selects [`Self::FirstRelease`].
+    pub const FIRST_RELEASE: &'static str = "first-release";
+
+    /// Render back to the wire form written in `belaf/config.toml`.
+    pub fn wire_value(&self) -> &str {
+        match self {
+            Self::FirstRelease => Self::FIRST_RELEASE,
+            Self::Commit(sha) => sha,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

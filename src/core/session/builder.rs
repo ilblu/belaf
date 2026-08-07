@@ -82,6 +82,50 @@ impl AppBuilder {
         self
     }
 
+    /// Refresh tags from the upstream before deciding anything.
+    ///
+    /// Authenticated when it can be: a private repo over HTTPS rejects an
+    /// anonymous fetch, and this runs before any other network call, so an
+    /// unauthenticated attempt used to kill the run before it started. The
+    /// credential is the same short-lived installation token the release push
+    /// uses; obtaining it is best-effort, because public repos and SSH remotes
+    /// work fine without one and a pre-install checkout has no token at all.
+    ///
+    /// Fail-soft: this is a refresh, not a prerequisite. If it fails while the
+    /// repo already has version tags locally, warn and continue with what we
+    /// have — a stale-by-one-release view is far better than a dead run, and
+    /// in CI `actions/checkout` with `fetch-depth: 0` has already brought the
+    /// tags anyway. Only a repo with *no* tags at all still errors: there the
+    /// baseline decision would be made blind.
+    fn fetch_tags_before_release_prep(&mut self) -> Result<()> {
+        let git_token = match crate::core::github::client::fetch_git_credentials(&self.repo) {
+            Ok(token) => Some(token),
+            Err(e) => {
+                info!("continuing tag fetch without credentials: {e}");
+                None
+            }
+        };
+
+        let Err(e) = self.repo.fetch_tags(git_token.as_deref()) else {
+            return Ok(());
+        };
+
+        if self.repo.repo_has_any_version_tags().unwrap_or(false) {
+            warn!(
+                "could not refresh tags from the upstream ({e}) — continuing with the tags \
+                 already in this clone. Release decisions may be based on a stale view if a \
+                 release landed since the last fetch. Set BELAF_NO_FETCH=1 to skip this step."
+            );
+            return Ok(());
+        }
+
+        Err(e).context(
+            "failed to fetch upstream tags before release prep, and this clone has no version \
+             tags to fall back on — every unit would look brand-new and the computed bumps \
+             would be wrong",
+        )
+    }
+
     /// Walk every project whose manifest reported version `0.0.0` and
     /// try to recover the real current version from an existing git
     /// tag. Uses the same template-driven lookup as the post-init code
@@ -177,9 +221,7 @@ impl AppBuilder {
             .with_context(|| "failed to finalize repository setup")?;
 
         if self.fetch_tags_first && std::env::var_os("BELAF_NO_FETCH").is_none() {
-            self.repo
-                .fetch_tags(None)
-                .with_context(|| "failed to fetch upstream tags before release prep")?;
+            self.fetch_tags_before_release_prep()?;
         }
 
         let ignore_paths = config.ignore_paths.paths.clone();
@@ -305,7 +347,30 @@ impl AppBuilder {
             // dependency edges, now that all real units are registered (so their
             // ids are resolvable). Must run before `complete_loading_with_groups`,
             // which resolves the `Text` dependency targets and builds the petgraph.
-            self.materialize_cascade_inputs(&config.cascade_inputs, &config.binary_affecting)?;
+            // `affects` may name a glob-form `[release_unit.<key>]` instead of
+            // listing every unit it expands to. The config key is not stored
+            // on the resolved unit — `ResolveOrigin::Glob` keeps the index of
+            // the entry it came from — so recover it from the same slice the
+            // resolver indexed into.
+            let mut glob_expansions: std::collections::BTreeMap<String, Vec<String>> =
+                std::collections::BTreeMap::new();
+            for r in &resolved_units {
+                if let crate::core::release_unit::ResolveOrigin::Glob { glob_index, .. } = &r.origin
+                {
+                    if let Some(named) = config.release_units.get(*glob_index) {
+                        glob_expansions
+                            .entry(named.name.clone())
+                            .or_default()
+                            .push(r.unit.name.clone());
+                    }
+                }
+            }
+
+            self.materialize_cascade_inputs(
+                &config.cascade_inputs,
+                &config.binary_affecting,
+                &glob_expansions,
+            )?;
 
             self.resolve_versions_from_tags(&resolved_units)?;
         }
@@ -327,6 +392,7 @@ impl AppBuilder {
                     let node = graph.lookup_mut(id);
                     node.kind = ru.unit.kind;
                     node.bump_override = ru.unit.bump_override.clone();
+                    node.baseline = ru.unit.baseline.clone();
                 }
             }
         }

@@ -98,6 +98,11 @@ pub struct ResolvedReleaseUnit {
     /// Per-unit bump-policy override (F11a). `None` = inherit global `[bump]`.
     pub bump_override: Option<crate::core::release_unit::syntax::BumpOverrideConfig>,
 
+    /// Per-unit history baseline from `[release_unit.<name>] baseline = "..."`.
+    /// Consulted by `Repository::resolve_history_boundaries` only when no
+    /// release tag matched the unit; a real tag always wins.
+    pub baseline: Option<crate::core::release_unit::BaselineSpec>,
+
     /// True for the synthetic nodes materialized from `[cascade_inputs.<name>]`.
     ///
     /// These are always [`UnitKind::Internal`], but not every `Internal` unit
@@ -217,6 +222,8 @@ pub struct ResolvedReleaseUnitBuilder {
     pub repo_paths_no_prefix_include: bool,
     /// See [`ResolvedReleaseUnit::bump_override`].
     pub bump_override: Option<crate::core::release_unit::syntax::BumpOverrideConfig>,
+    /// See [`ResolvedReleaseUnit::baseline`].
+    pub baseline: Option<crate::core::release_unit::BaselineSpec>,
     /// See [`ResolvedReleaseUnit::is_cascade_input`].
     pub is_cascade_input: bool,
 }
@@ -258,6 +265,7 @@ impl ResolvedReleaseUnitBuilder {
             extra_globs: Vec::new(),
             repo_paths_no_prefix_include: false,
             bump_override: None,
+            baseline: None,
             is_cascade_input: false,
         }
     }
@@ -313,6 +321,7 @@ impl ResolvedReleaseUnitBuilder {
             internal_deps,
             kind: self.kind,
             bump_override: self.bump_override,
+            baseline: self.baseline,
             is_cascade_input: self.is_cascade_input,
         })
     }

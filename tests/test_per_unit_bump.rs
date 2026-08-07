@@ -184,3 +184,58 @@ fn prerelease_base_is_last_stable_across_multiple_betas() {
         "base must NOT rise off the last prerelease tag; got:\n{cargo}"
     );
 }
+
+/// A prerelease unit that has **never** had a stable release — a package kept
+/// permanently in beta until its 1.0.
+///
+/// This used to abort the entire run: the boundary lookup only accepted a
+/// stable tag, and the "repo already has version-shaped tags" guard matches
+/// prerelease tags too, so one such unit took every other unit's release down
+/// with it. Now the last prerelease tag bounds the commit window, the base
+/// holds, and the counter advances.
+#[test]
+fn prerelease_unit_without_any_stable_tag_still_releases() {
+    let repo = TestRepo::new();
+    repo.write_file(
+        "Cargo.toml",
+        "[package]\nname = \"mc\"\nversion = \"0.6.0-beta.3\"\nedition = \"2021\"\n",
+    );
+    repo.write_file("src/lib.rs", "pub fn hello() {}\n");
+    repo.write_file(
+        "belaf/config.toml",
+        "[release_unit.mc.bump]\nprerelease = \"beta\"\nfeatures_always_bump_minor = true\n",
+    );
+    repo.commit("Initial commit");
+    let lock = std::process::Command::new("cargo")
+        .args(["generate-lockfile"])
+        .current_dir(&repo.path)
+        .output()
+        .expect("lockfile");
+    assert!(lock.status.success());
+    repo.commit("chore: lockfile");
+
+    // Only ever prereleases — no stable tag has existed at any point.
+    repo.tag("mc-v0.6.0-beta.3");
+
+    repo.write_file("src/f1.rs", "pub fn f1() {}\n");
+    repo.commit("fix: a fix during the beta");
+
+    let output =
+        repo.run_belaf_command_with_env(&["prepare", "--ci"], &[("BELAF_NO_KEYRING", "1")]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !stderr.contains("could not locate a previous-release tag"),
+        "a prerelease unit with no stable tag must not abort the run; stderr:\n{stderr}"
+    );
+
+    let cargo = repo.read_file("Cargo.toml");
+    assert!(
+        cargo.contains("0.6.0-beta.4"),
+        "the base must hold at 0.6.0 and the counter advance; got:\n{cargo}"
+    );
+    assert!(
+        !cargo.contains("0.6.1"),
+        "the base must not creep off the prerelease tag; got:\n{cargo}"
+    );
+}

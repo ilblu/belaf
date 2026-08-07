@@ -142,6 +142,15 @@ const WORKFLOWS: &[WorkflowDoc] = &[
         ],
     },
     WorkflowDoc {
+        name: "unblock-untagged-units",
+        description:
+            "`belaf prepare` refuses to analyze a deploy unit that has no matching release tag while the repo already has version tags. This lists every such unit and writes the per-unit `baseline` key that answers it. Exit code 4 means units are still unanswered.",
+        steps: &[
+            "belaf baseline --ci",
+            "belaf baseline --fix  # writes baseline = \"first-release\" into belaf/config.toml",
+        ],
+    },
+    WorkflowDoc {
         name: "preview-changelog",
         description:
             "Preview the changelog that `belaf prepare` would emit for the next release without writing files or opening a PR.",

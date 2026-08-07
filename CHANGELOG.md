@@ -5,6 +5,73 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 3.1.0 — 2026-08-07
+
+Answering "this unit has no release tag" per unit instead of repo-wide.
+
+The guard that refuses to analyze a deploy unit with no matching tag is right —
+analyzing from repo start inflates the bump, usually straight to a major. But
+the only way to answer it was a `belaf-baseline` git tag, which silences the
+guard for **every** unit at once, present and future, and lives somewhere no
+review ever looks. And because the run aborted on the first offender, finding
+out which units were actually affected meant re-running once per unit.
+
+### Added
+
+- **`baseline` on `[release_unit.<name>]`** — `"first-release"` to analyze from
+  repo start (deliberately, for a unit that genuinely never shipped), or a
+  commit-ish to start the window there. A real release tag always wins, so the
+  key becomes a no-op after the first release. It scopes to one unit; every
+  other unit keeps the guard.
+- **`belaf baseline`** — lists every deploy unit still missing a tag or a
+  `baseline` (JSON under `--ci`, exit 4 while anything is unanswered so it works
+  as a CI gate). `--fix` writes `baseline = "first-release"` for each,
+  format- and comment-preserving, validating the result before touching the
+  file, and is idempotent.
+
+### Changed
+
+- **All untagged units are reported in one error**, with the unit name and the
+  tag template it tried, instead of aborting on the first.
+- **`affects` accepts a glob-form `[release_unit.<key>]`** instead of restating
+  every unit the glob covers — a list that drifts the moment a service is added.
+  Resolution is unit name, then glob key. A name that is neither is now a hard
+  error rather than a warning: a typo used to silently release nothing.
+  Ambiguity (a unit and a glob key of the same name) is also an error.
+- **`prepare`'s pre-flight tag fetch authenticates**, using the same short-lived
+  installation token the release push uses. It ran unauthenticated, so on a
+  private repo over HTTPS the run died before doing anything. It is also
+  fail-soft now: if the refresh fails while the clone already has version tags,
+  it warns and continues on those. Only a clone with no tags at all still errors.
+
+### Fixed
+
+- **A prerelease unit with no stable tag no longer aborts the whole run.** A
+  package kept permanently in beta never gets a stable tag, so one such unit
+  took every other unit's release down with it. Its last prerelease tag now
+  bounds the commit window, and the version follows release-please's rule: the
+  base holds while the components below the bump level are zero
+  (`0.6.0-beta.3` + fix → `0.6.0-beta.4`), and a breaking change still breaks
+  out (→ `1.0.0-beta.1`). Previously the base crept forward every run and the
+  counter reset each time.
+- **An explicitly declared path is no longer claimed — or warned about — by a
+  glob that also matches it.** `paths = [...]` units, the only shape
+  `kind = "ignore"` can take, contributed nothing to the covered set, so they
+  shadowed nothing at all; the warning also fired before the shadow check ran.
+- **Release commits no longer need a configured git identity.** `create_commit`
+  bypassed the fallback that already existed, so `prepare` failed at the commit
+  on a fresh CI runner.
+
+### Documentation
+
+- The `all-deploy-units` throttling advice recommended a shared `concurrency`
+  group. That was wrong and dangerous: a group holds exactly one pending run,
+  so 23 simultaneous release runs would have left one running, one pending and
+  **21 silently cancelled**. Replaced with `max-parallel`, plus an explicit
+  warning about `queue: max`.
+- `examples/github-actions/belaf-prepare.yml` sets a git identity and pins the
+  installer to a version instead of `latest`.
+
 ## 3.0.0 — 2026-08-06
 
 Two things this release exists for: `prepare` can finally run on every push

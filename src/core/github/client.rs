@@ -4,6 +4,7 @@ use tracing::info;
 use crate::core::api::{ApiClient, ApiPullRequest, CreatePullRequestParams, StoredToken};
 use crate::core::auth::token::load_or_exchange_token;
 use crate::core::errors::Result;
+use crate::core::git::repository::Repository;
 use crate::core::session::AppSession;
 
 /// What `create_or_update_pull_request` did with the release PR.
@@ -170,6 +171,47 @@ impl GitHubInformation {
             }
         })?
     }
+}
+
+/// Mint a short-lived installation token for git operations against the
+/// upstream remote.
+///
+/// This is *not* the belaf API bearer token: that one authenticates against
+/// `api.belaf.dev`, while git needs a GitHub installation token. The API
+/// token is only the credential used to ask for this one.
+///
+/// Used by both the release push and the pre-flight tag fetch — a private
+/// repo over HTTPS rejects an unauthenticated fetch, so the fetch needs the
+/// same credential the push does.
+pub fn fetch_git_credentials(repo: &Repository) -> Result<String> {
+    let upstream_url = repo.upstream_url().context("failed to get upstream URL")?;
+    let (owner, name) =
+        parse_github_url(&upstream_url).context("failed to parse GitHub URL from upstream")?;
+
+    let api_client = ApiClient::new();
+
+    let credentials = block_on(async {
+        let token = load_or_exchange_token(&api_client)
+            .await
+            .context("failed to load token")?
+            .context(
+                "not authenticated — run 'belaf install' (interactive) or run from a \
+                 GitHub Actions job with `permissions: id-token: write` set",
+            )?;
+
+        api_client
+            .get_git_credentials(&token, &owner, &name)
+            .await
+            .map_err(|e| {
+                if matches!(e, crate::core::api::ApiError::Unauthorized) {
+                    anyhow!("authentication expired - run 'belaf login' to re-authenticate")
+                } else {
+                    map_api_error(e)
+                }
+            })
+    })??;
+
+    Ok(credentials.token)
 }
 
 fn map_api_error(e: crate::core::api::ApiError) -> anyhow::Error {

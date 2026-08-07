@@ -2,6 +2,7 @@ pub mod cli;
 pub mod error;
 
 pub mod cmd {
+    pub mod baseline;
     pub mod changelog;
     pub mod check;
     pub mod completions;
@@ -215,6 +216,13 @@ pub async fn execute(cli: Cli) -> Result<()> {
         }
         Commands::Doctor(args) => {
             let exit_code = cmd::doctor::run(args.json).await?;
+            if exit_code != 0 {
+                std::process::exit(exit_code);
+            }
+            Ok(())
+        }
+        Commands::Baseline(args) => {
+            let exit_code = cmd::baseline::run(args.ci, args.fix)?;
             if exit_code != 0 {
                 std::process::exit(exit_code);
             }

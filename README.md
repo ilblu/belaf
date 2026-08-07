@@ -131,6 +131,7 @@ cargo install belaf
 | `belaf prepare` | Prepare releases with version bumps and changelogs |
 | `belaf changelog` | Generate changelogs from conventional commits |
 | `belaf graph` | Visualize project dependency graph |
+| `belaf baseline` | List release units with no release tag and no `baseline` (`--fix` writes one) |
 | `belaf auth status` | Show authentication status |
 | `belaf auth whoami` | Show current authenticated user |
 | `belaf auth logout` | Log out and remove stored credentials |

@@ -5,7 +5,7 @@
 //! [`Repository::analyze_histories`], which walks the commit graph once and
 //! fills in a history for every unit.
 
-use anyhow::bail;
+use anyhow::{anyhow, bail, Context as _};
 use tracing::{info, warn};
 
 use crate::core::{
@@ -14,6 +14,7 @@ use crate::core::{
         path_matcher::is_binary_affecting,
         repository::{CommitId, ReleaseCommitInfo, RepoPath, Repository},
     },
+    release_unit::BaselineSpec,
     resolved_release_unit::{ReleaseUnitId, ResolvedReleaseUnit, UnitKind},
     tag_format::TagMatcher,
 };
@@ -25,9 +26,103 @@ pub enum HistoryBoundary {
         tag_name: String,
         version: semver::Version,
     },
+    /// The last *prerelease* tag of a prerelease unit that has never had a
+    /// stable release.
+    ///
+    /// Separate from [`Self::ReleaseTag`] on purpose. It plays only one of
+    /// that variant's two roles: it bounds the commit window, but it is not a
+    /// stable anchor to compute a new base version from — so
+    /// [`RepoHistory::release_version`] deliberately reports `None` for it.
+    /// Feeding a prerelease version in as the "last stable" would make the
+    /// base creep on every run and reset the prerelease counter each time.
+    PrereleaseTag {
+        commit: CommitId,
+        tag_name: String,
+        version: semver::Version,
+    },
     Baseline {
         commit: CommitId,
     },
+}
+
+/// A `Deploy` unit with no matching release tag in a repo that already has
+/// version-shaped tags.
+///
+/// Analyzing such a unit from repo start would over-count old commits and
+/// inflate its bump, so the run refuses — but the refusal has to name
+/// **every** offender at once. Collecting them into values instead of
+/// `bail!`ing on the first is what lets `belaf baseline` report and fix the
+/// whole set in one pass rather than one unit per run.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UntaggedDeployUnit {
+    /// Disambiguated, user-facing unit name — for display.
+    pub name: String,
+
+    /// The `[release_unit.<key>]` key a `baseline` has to be written under.
+    /// This is the unit's narrow (unqualified) name, which is what both an
+    /// explicit block and a partial-override block key on. It equals
+    /// [`Self::name`] unless two units of different ecosystems share a name.
+    pub config_key: String,
+
+    /// The tag template the lookup tried and missed.
+    pub tag_template: String,
+}
+
+/// Per-unit history boundaries plus the units that could not get one.
+///
+/// Produced by [`Repository::resolve_history_boundaries`], consumed both by
+/// [`Repository::analyze_histories`] (which turns a non-empty `untagged`
+/// into a hard error) and by `belaf baseline` (which reports/fixes it
+/// without running a release). One implementation, two callers.
+#[derive(Clone, Debug)]
+pub struct HistoryBoundaries {
+    /// Parallel to the `projects` slice passed in. `None` = analyze from
+    /// repo start.
+    pub boundaries: Vec<Option<HistoryBoundary>>,
+
+    /// Every offending unit, in `projects` order.
+    pub untagged: Vec<UntaggedDeployUnit>,
+}
+
+/// Render the one error that names every untagged deploy unit.
+///
+/// The diagnostic (why belaf refuses, the likely causes, the fixes) appears
+/// once at the top; the units are a plain list underneath. Repeating the
+/// paragraph per unit would bury the list, which is the part the user has to
+/// act on.
+pub fn untagged_deploy_units_error(units: &[UntaggedDeployUnit]) -> crate::core::errors::Error {
+    let listing = units
+        .iter()
+        .map(|u| format!("  • `{}` (tried template `{}`)", u.name, u.tag_template))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let first_key = units
+        .first()
+        .map(|u| u.config_key.as_str())
+        .unwrap_or("<name>");
+
+    anyhow!(
+        "could not locate a previous-release tag for {n} release unit{plural}, \
+         but this repo already has version-shaped tags. \
+         Refusing to analyze the full history — that would over-count old commits and inflate the bump.\n\
+         \n{listing}\n\
+         \n\
+         Likely causes: (1) the unit's `tag_format` in `belaf/config.toml` doesn't match how previous \
+         tags were written; (2) the unit is genuinely new and has never been released.\n\
+         \n\
+         Fixes, per unit, in `belaf/config.toml`:\n\
+         \x20 • never released    → [release_unit.{first_key}]\n\
+         \x20                        baseline = \"first-release\"\n\
+         \x20 • released before   → [release_unit.{first_key}]\n\
+         \x20                        baseline = \"<commit-sha>\"   # start the window here\n\
+         \x20 • tags exist, template is wrong → set `tag_format = \"...\"` to match them\n\
+         \n\
+         `belaf baseline` lists exactly these units; `belaf baseline --fix` writes \
+         `baseline = \"first-release\"` for all of them.",
+        n = units.len(),
+        plural = if units.len() == 1 { "" } else { "s" },
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -54,8 +149,9 @@ pub struct RepoHistory {
 impl RepoHistory {
     pub fn boundary_commit(&self) -> Option<CommitId> {
         match &self.boundary {
-            Some(HistoryBoundary::ReleaseTag { commit, .. }) => Some(*commit),
-            Some(HistoryBoundary::Baseline { commit }) => Some(*commit),
+            Some(HistoryBoundary::ReleaseTag { commit, .. })
+            | Some(HistoryBoundary::PrereleaseTag { commit, .. })
+            | Some(HistoryBoundary::Baseline { commit }) => Some(*commit),
             None => None,
         }
     }
@@ -109,6 +205,184 @@ impl RepoHistory {
 }
 
 impl Repository {
+    /// Decide where each unit's commit window starts, and collect the units
+    /// that cannot get a window at all.
+    ///
+    /// Split out of [`Self::analyze_histories`] so `belaf baseline` can ask
+    /// the same question without running a release. It walks tags only — no
+    /// revwalk, no diffing — so it is cheap enough to call on its own.
+    ///
+    /// Precedence, highest first:
+    /// 1. the unit's latest matching release tag (stable only, for a
+    ///    prerelease unit),
+    /// 2. for a prerelease unit with no stable tag: its latest prerelease tag,
+    /// 3. the unit's own `baseline` key,
+    /// 4. the repo-wide `belaf-baseline` git tag,
+    /// 5. nothing — which is a hard stop for a `Deploy` unit in a repo that
+    ///    already has version-shaped tags, and simply "analyze from repo
+    ///    start" otherwise.
+    pub fn resolve_history_boundaries(
+        &self,
+        projects: &[ResolvedReleaseUnit],
+        matchers: &[TagMatcher],
+    ) -> Result<HistoryBoundaries> {
+        if projects.len() != matchers.len() {
+            bail!(
+                "internal error: resolve_history_boundaries got {} projects and {} matchers; \
+                 lengths must match",
+                projects.len(),
+                matchers.len()
+            );
+        }
+
+        let baseline_tag_oid = self.find_baseline_tag()?;
+        let repo_has_any_version_tags = self.repo_has_any_version_tags()?;
+
+        let mut boundaries: Vec<Option<HistoryBoundary>> = vec![None; projects.len()];
+        let mut untagged: Vec<UntaggedDeployUnit> = Vec::new();
+
+        for (i, unit) in projects.iter().enumerate() {
+            let matcher = &matchers[i];
+            // F11b — a prerelease unit's boundary is its last STABLE tag, so the
+            // base level is computed from all commits since stable (across any
+            // intervening prereleases), not just since the last prerelease.
+            let is_prerelease_unit = unit
+                .bump_override
+                .as_ref()
+                .and_then(|o| o.prerelease.as_ref())
+                .is_some();
+            let latest = if is_prerelease_unit {
+                self.find_latest_stable_tag_for_project(matcher)?
+            } else {
+                self.find_latest_tag_for_project(matcher)?
+            };
+            if let Some((tag_oid, tag_name, version)) = latest {
+                info!(
+                    "found release tag for {}: {} (v{}) via template `{}`",
+                    unit.user_facing_name,
+                    tag_name,
+                    version,
+                    matcher.template()
+                );
+                boundaries[i] = Some(HistoryBoundary::ReleaseTag {
+                    commit: CommitId(tag_oid),
+                    tag_name,
+                    version,
+                });
+            } else if let Some((tag_oid, tag_name, version)) = is_prerelease_unit
+                .then(|| self.find_latest_tag_for_project(matcher))
+                .transpose()?
+                .flatten()
+            {
+                // A prerelease unit with no stable tag at all — a package kept
+                // permanently in beta until its 1.0. Its last prerelease tag is
+                // a perfectly good commit boundary; without this the run would
+                // fall through to the guard below and one such unit would take
+                // the whole repo's release down with it.
+                info!(
+                    "no stable tag for prerelease unit {}, using last prerelease tag {} (v{})",
+                    unit.user_facing_name, tag_name, version
+                );
+                boundaries[i] = Some(HistoryBoundary::PrereleaseTag {
+                    commit: CommitId(tag_oid),
+                    tag_name,
+                    version,
+                });
+            } else if let Some(spec) = unit.baseline.as_ref() {
+                // Per-unit `baseline` — the reviewed, one-unit-wide form of
+                // what `belaf-baseline` does repo-wide. Only consulted after
+                // the tag lookups above: a real tag always wins, so leaving
+                // the key in place after the first release is harmless.
+                match spec {
+                    BaselineSpec::FirstRelease => {
+                        info!(
+                            "no release tag for {}, but `baseline = \"first-release\"` is set — \
+                             analyzing from repo start as explicitly accepted",
+                            unit.user_facing_name
+                        );
+                        // boundary stays None; explicitly NOT a violation.
+                    }
+                    BaselineSpec::Commit(commit_ish) => {
+                        let oid =
+                            self.resolve_baseline_commit(&unit.user_facing_name, commit_ish)?;
+                        info!(
+                            "no release tag for {}, using `baseline = \"{}\"` → {}",
+                            unit.user_facing_name, commit_ish, oid
+                        );
+                        boundaries[i] = Some(HistoryBoundary::Baseline {
+                            commit: CommitId(oid),
+                        });
+                    }
+                }
+            } else if let Some(baseline_oid) = baseline_tag_oid {
+                info!(
+                    "no release tag for {}, using baseline tag belaf-baseline",
+                    unit.user_facing_name
+                );
+                boundaries[i] = Some(HistoryBoundary::Baseline {
+                    commit: CommitId(baseline_oid),
+                });
+            } else if repo_has_any_version_tags && unit.kind == UnitKind::Deploy {
+                // Defensive guard. If the repo already has version-shaped
+                // tags but none matched THIS unit's template, falling back to
+                // "all commits since repo start" is almost certainly going to
+                // inflate the recommended bump.
+                //
+                // Collected rather than raised: bailing on the first offender
+                // makes adoption a whack-a-mole loop, one unit surfaced per
+                // run. The caller raises one error naming all of them.
+                //
+                // F1 — only `Deploy` units count: `Internal`/`Ignore` units have
+                // no tags by design. Their own history is never used for
+                // candidacy (deploy units collect their commits within the
+                // *deploy* unit's tag window via the closure), so analyzing
+                // from repo start for them is harmless.
+                untagged.push(UntaggedDeployUnit {
+                    name: unit.user_facing_name.clone(),
+                    config_key: unit
+                        .qualified_names()
+                        .first()
+                        .cloned()
+                        .unwrap_or_else(|| unit.user_facing_name.clone()),
+                    tag_template: matcher.template().to_string(),
+                });
+            } else if unit.kind == UnitKind::Deploy {
+                warn!(
+                    "no release tag or baseline found for {}, and the repo has no version tags at all — analyzing all commits since repo start. This is correct only for a brand-new repo.",
+                    unit.user_facing_name
+                );
+            }
+            // else: Internal/Ignore unit with no tag — expected, analyze from
+            // repo start silently (boundary stays None).
+        }
+
+        Ok(HistoryBoundaries {
+            boundaries,
+            untagged,
+        })
+    }
+
+    /// Resolve a `baseline = "<commit-ish>"` value against this repo.
+    ///
+    /// `revparse_single` accepts short shas, full shas, tags and branch
+    /// names. A value that resolves to something that is not a commit (a
+    /// blob, say) is as much a config error as one that resolves to nothing,
+    /// so both land in the same message.
+    fn resolve_baseline_commit(&self, unit_name: &str, commit_ish: &str) -> Result<git2::Oid> {
+        self.repo
+            .revparse_single(commit_ish)
+            .and_then(|obj| obj.peel_to_commit())
+            .map(|c| c.id())
+            .with_context(|| {
+                format!(
+                    "release_unit `{unit_name}`: `baseline = \"{commit_ish}\"` does not resolve \
+                     to a commit in this repository. Use a commit sha that exists on the \
+                     analyzed branch (short shas are fine), or `baseline = \"first-release\"` \
+                     to analyze from repo start."
+                )
+            })
+    }
+
     /// Figure out which commits in the history affect each project since its
     /// last release.
     ///
@@ -142,77 +416,12 @@ impl Repository {
             projects.len()
         ];
 
-        let baseline_tag_oid = self.find_baseline_tag()?;
-        let repo_has_any_version_tags = self.repo_has_any_version_tags()?;
-
-        for (i, unit) in projects.iter().enumerate() {
-            let matcher = &matchers[i];
-            // F11b — a prerelease unit's boundary is its last STABLE tag, so the
-            // base level is computed from all commits since stable (across any
-            // intervening prereleases), not just since the last prerelease.
-            let is_prerelease_unit = unit
-                .bump_override
-                .as_ref()
-                .and_then(|o| o.prerelease.as_ref())
-                .is_some();
-            let latest = if is_prerelease_unit {
-                self.find_latest_stable_tag_for_project(matcher)?
-            } else {
-                self.find_latest_tag_for_project(matcher)?
-            };
-            if let Some((tag_oid, tag_name, version)) = latest {
-                info!(
-                    "found release tag for {}: {} (v{}) via template `{}`",
-                    unit.user_facing_name,
-                    tag_name,
-                    version,
-                    matcher.template()
-                );
-                histories[i].boundary = Some(HistoryBoundary::ReleaseTag {
-                    commit: CommitId(tag_oid),
-                    tag_name,
-                    version,
-                });
-            } else if let Some(baseline_oid) = baseline_tag_oid {
-                info!(
-                    "no release tag for {}, using baseline tag belaf-baseline",
-                    unit.user_facing_name
-                );
-                histories[i].boundary = Some(HistoryBoundary::Baseline {
-                    commit: CommitId(baseline_oid),
-                });
-            } else if repo_has_any_version_tags && unit.kind == UnitKind::Deploy {
-                // Defensive guard. If the repo already has version-shaped
-                // tags but none matched THIS project's template, falling
-                // back to "all commits since repo start" is almost
-                // certainly going to inflate the recommended bump. The
-                // legacy code path hit this bug for every npm/maven/pypa/go
-                // project. Surface the diagnostic loudly, do NOT fall
-                // through silently.
-                //
-                // F1 — only `Deploy` units bail: `Internal`/`Ignore` units have
-                // no tags by design. Their own history is never used for
-                // candidacy (deploy units collect their commits within the
-                // *deploy* unit's tag window via the closure), so analyzing
-                // from repo start for them is harmless.
-                bail!(
-                    "could not locate a previous-release tag for `{name}` (tried template `{tmpl}`), \
-                     but this repo already has version-shaped tags. \
-                     Refusing to analyze the full history — that would over-count old commits and inflate the bump. \
-                     Likely causes: (1) the project's `tag_format` in `belaf/config.toml` doesn't match how previous tags were written; \
-                     (2) the project is genuinely new — in that case, create a baseline with `git tag belaf-baseline <commit>` to mark the starting point. \
-                     Override-only path: set `tag_format = \"...\"` on the `[release_unit.<name>]` block to match the existing tag shape.",
-                    name = unit.user_facing_name,
-                    tmpl = matcher.template(),
-                );
-            } else if unit.kind == UnitKind::Deploy {
-                warn!(
-                    "no release tag or baseline found for {}, and the repo has no version tags at all — analyzing all commits since repo start. This is correct only for a brand-new repo.",
-                    unit.user_facing_name
-                );
-            }
-            // else: Internal/Ignore unit with no tag — expected, analyze from
-            // repo start silently (boundary stays None).
+        let resolved = self.resolve_history_boundaries(projects, matchers)?;
+        if !resolved.untagged.is_empty() {
+            return Err(untagged_deploy_units_error(&resolved.untagged));
+        }
+        for (history, boundary) in histories.iter_mut().zip(resolved.boundaries) {
+            history.boundary = boundary;
         }
 
         let commit_cache_size = std::num::NonZeroUsize::new(self.analysis_config.commit_cache_size)
