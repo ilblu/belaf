@@ -444,6 +444,20 @@ impl Repository {
         Ok(index.len())
     }
 
+    /// Whether `path` is tracked by git — i.e. present in the index.
+    ///
+    /// Distinct from "exists on disk": a generated file the repo deliberately
+    /// gitignores (a library crate's `Cargo.lock`, say) is on disk but is not
+    /// part of what a release commits. `libgit2`'s `add_path` bypasses ignore
+    /// rules, so anything staged for the release commit has to be checked
+    /// here first rather than relying on `git add` to refuse it.
+    pub fn is_tracked(&self, path: &RepoPath) -> Result<bool> {
+        let index = self.repo.index()?;
+        Ok(index
+            .get_path(std::path::Path::new(std::str::from_utf8(&path.0)?), 0)
+            .is_some())
+    }
+
     /// Scan the paths in the repository index with progress information.
     /// The callback receives: (path, current_index, total_count)
     pub fn scan_paths_with_progress<F>(&self, mut f: F) -> Result<()>

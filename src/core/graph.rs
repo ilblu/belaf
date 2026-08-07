@@ -329,6 +329,43 @@ impl ReleaseUnitGraphBuilder {
             .position(|p| p.qnames.first().map(String::as_str) == Some(name))
     }
 
+    /// Resolve a dependency target read out of a manifest to a graph node.
+    ///
+    /// Prefers an exact `(qnames[0], qnames[1])` match so a cargo crate never
+    /// binds to a same-named npm package. Falls back to a *unique* narrow-name
+    /// match, which is what makes a configured unit resolvable when its
+    /// declared `ecosystem` differs from the manifest the edge came from — a
+    /// `tauri` unit holding a `Cargo.toml`, say.
+    ///
+    /// An ambiguous narrow name is an error rather than a first-match guess:
+    /// picking the wrong node here silently wires a release to the wrong
+    /// dependency.
+    pub fn resolve_dep_target(&self, name: &str, ecosystem: &str) -> Result<ReleaseUnitId> {
+        let exact = self.projects.iter().position(|p| {
+            p.qnames.first().map(String::as_str) == Some(name)
+                && p.qnames.get(1).map(String::as_str) == Some(ecosystem)
+        });
+        if let Some(id) = exact {
+            return Ok(id);
+        }
+
+        let mut by_name = self
+            .projects
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.qnames.first().map(String::as_str) == Some(name));
+        match (by_name.next(), by_name.next()) {
+            (Some((id, _)), None) => Ok(id),
+            (Some((_, a)), Some((_, b))) => Err(anyhow::anyhow!(
+                "dependency target `{name}` (from a {ecosystem} manifest) is ambiguous: it \
+                 matches both `{}` and `{}`. Give the units distinct names.",
+                a.qnames.join(":"),
+                b.qnames.join(":"),
+            )),
+            (None, _) => Err(NoSuchProjectError(name.to_owned()).into()),
+        }
+    }
+
     /// Add a dependency between two projects in the graph.
     pub fn add_dependency(
         &mut self,

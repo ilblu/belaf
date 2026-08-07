@@ -12,7 +12,7 @@ use super::AppBuilder;
 
 /// Whether a `paths = [...]` entry is a glob pattern (Tier-3, F4-Glob) rather
 /// than a literal directory prefix. Conservative: any of `*`, `?`, `[`.
-fn path_is_glob(s: &str) -> bool {
+pub(super) fn path_is_glob(s: &str) -> bool {
     s.contains(['*', '?', '['])
 }
 
@@ -118,6 +118,22 @@ impl AppBuilder {
                 (version, prefix, Vec::new(), Vec::new())
             }
         };
+
+        // `satellites` are declared as "paths whose commits attribute to this
+        // unit but receive no version writes" — the hexagonal service shape,
+        // where the released `crates/bin` is a thin wrapper and the real work
+        // lands in `crates/api`, `crates/core`, `crates/infrastructure`.
+        // Attribution is what a path matcher does, so they have to become
+        // includes; without that the declaration reached the ownership map and
+        // the drift detector but nothing that decides whether a unit bumped,
+        // and a commit in a satellite attributed to no unit at all.
+        let mut extra_includes = extra_includes;
+        for sat in &unit.satellites {
+            // `External` already uses the first satellite as the prefix.
+            if *sat != prefix {
+                extra_includes.push(sat.clone());
+            }
+        }
 
         let id = self.graph.add_project(qnames);
         let unit_node = self.graph.lookup_mut(id);
@@ -323,6 +339,61 @@ impl AppBuilder {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Attach the dependency edges discovery found for **configured** units.
+    ///
+    /// `add_configured_unit_to_graph` can only register the node: a
+    /// `[release_unit.X]` block states where the version lives, never what the
+    /// unit depends on. That comes out of the ecosystem's own dependency
+    /// graph, which is only walked during discovery — so the edges arrive
+    /// afterwards, once every node exists and each target is resolvable.
+    ///
+    /// Targets are bound to a concrete [`ReleaseUnitId`] here rather than left
+    /// as `DependencyTarget::Text`. Text targets are resolved much later
+    /// against the *disambiguated* user-facing names, which is a different
+    /// namespace from the package names a manifest speaks in; binding now
+    /// keeps the edge correct when two ecosystems host a same-named package.
+    pub(super) fn apply_claimed_deps(
+        &mut self,
+        claimed_deps: Vec<crate::core::ecosystem::format_handler::ClaimedDep>,
+    ) -> Result<()> {
+        use crate::core::resolved_release_unit::DependencyTarget;
+
+        for claimed in claimed_deps {
+            let Some(depender_id) = self.graph.id_for_qname(&claimed.depender_unit) else {
+                // The owner was read off the ownership map, which is built
+                // from the same resolved units that were just registered.
+                return Err(anyhow!(
+                    "internal error: `{}` owns a {} package but is not a graph node",
+                    claimed.depender_unit,
+                    claimed.ecosystem
+                ));
+            };
+
+            let target_id = self
+                .graph
+                .resolve_dep_target(&claimed.dep.target_package_name, claimed.ecosystem)
+                .with_context(|| {
+                    format!(
+                        "resolving the {} dependency `{}` declared by release unit `{}`",
+                        claimed.ecosystem, claimed.dep.target_package_name, claimed.depender_unit
+                    )
+                })?;
+
+            if target_id == depender_id {
+                continue;
+            }
+
+            self.graph.add_dependency(
+                depender_id,
+                DependencyTarget::Ident(target_id),
+                claimed.dep.literal,
+                claimed.dep.requirement,
+            );
+        }
+
         Ok(())
     }
 

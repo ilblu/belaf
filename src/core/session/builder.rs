@@ -235,7 +235,6 @@ impl AppBuilder {
                 FormatHandlerRegistry, WorkspaceDiscovererRegistry,
             };
             use crate::core::release_unit::discovery::discover_implicit_release_units;
-            use crate::core::release_unit::VersionSource;
 
             let registry = FormatHandlerRegistry::with_defaults();
             let discoverers = WorkspaceDiscovererRegistry::with_defaults();
@@ -253,47 +252,26 @@ impl AppBuilder {
                     })?;
             resolved_units = resolve_output.resolved;
 
-            let mut configured_skip_paths: Vec<crate::core::git::repository::RepoPathBuf> =
-                Vec::new();
-            for r in &resolved_units {
-                if let VersionSource::Manifests(ms) = &r.unit.source {
-                    for m in ms {
-                        let escaped = m.path.escaped().to_string();
-                        if let Some(parent) = std::path::Path::new(&escaped).parent() {
-                            let parent_str = parent.to_string_lossy().to_string();
-                            if !parent_str.is_empty() {
-                                configured_skip_paths.push(
-                                    crate::core::git::repository::RepoPathBuf::new(
-                                        parent_str.as_bytes(),
-                                    ),
-                                );
-                            }
-                        }
-                    }
-                }
-                for sat in &r.unit.satellites {
-                    configured_skip_paths.push(sat.clone());
-                }
-            }
-            for p in &config.ignore_paths.paths {
-                configured_skip_paths.push(crate::core::git::repository::RepoPathBuf::new(
-                    p.trim_end_matches('/').as_bytes(),
-                ));
-            }
+            // Every path a configured unit covers, mapped back to the unit
+            // that covers it. Auto-discovery filters its walk against these,
+            // and the workspace discoverers use the mapping to route a claimed
+            // package's dependency edges onto the claiming unit instead of
+            // emitting a second node for the package itself.
+            let ownership = crate::core::release_unit::ownership::ownership_for(
+                &resolved_units,
+                &config.ignore_paths.paths,
+            );
 
             for resolved in &resolved_units {
                 self.add_configured_unit_to_graph(&registry, resolved)?;
             }
 
-            // The skip-list keeps auto-discovery from claiming the
-            // same manifest paths that a `[release_unit.X]` block
-            // already covers.
-            let discovered = discover_implicit_release_units(
-                &self.repo,
-                &registry,
-                &discoverers,
-                &configured_skip_paths,
-            )?;
+            // Ownership keeps auto-discovery from claiming the same
+            // manifest paths that a `[release_unit.X]` block already covers.
+            let discovered_batch =
+                discover_implicit_release_units(&self.repo, &registry, &discoverers, &ownership)?;
+            let discovered = discovered_batch.units;
+            let claimed_deps = discovered_batch.claimed_deps;
 
             // Match partial-override specs against the discovered set
             // and synthesize ResolvedReleaseUnits whose override fields
@@ -324,6 +302,13 @@ impl AppBuilder {
                     Self::register_discovered_unit(&mut self.graph, du);
                 }
             }
+
+            // Configured units are registered as bare nodes — a
+            // `[release_unit.X]` block says where the version lives, never
+            // what the unit depends on. Their edges come out of the
+            // ecosystem's dependency graph during discovery and are attached
+            // now that every node exists.
+            self.apply_claimed_deps(claimed_deps)?;
 
             // Partial-override `kind`s are normally applied after the graph is
             // built (see below), but `affects = "all-deploy-units"` needs the

@@ -5,6 +5,83 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 4.0.0 — 2026-08-07
+
+Configured release units were not in the dependency graph.
+
+A `[release_unit.<name>]` block — explicit or glob-form — was registered as a
+graph node and nothing else. The only two places that draw dependency edges ran
+for `[cascade_inputs]` and for **auto-discovered** units, so in a repo where
+both sides of a dependency are configured there was no edge between them at
+all. A fix in a shared library reached no service, and `prepare` said
+`nothing_to_do` — no error, because there was no unresolved dependency to
+complain about. Nothing was missing; nothing had ever been drawn.
+
+Everything below follows from that one hole, and from the three other things
+that were quietly compensating for it.
+
+### Fixed
+
+- **Configured units get their dependency edges.** Discovery now receives a
+  map of the paths each `[release_unit.X]` covers, and routes the edges of any
+  package inside them onto the owning unit. A hexagonal service spanning a bin
+  crate plus a tree of satellites collects the dependencies of all of them;
+  edges between its own crates collapse to nothing. Edges bind to a concrete
+  unit id rather than a name, so a cargo crate can no longer bind to a
+  same-named npm package, and an ambiguous name is an error instead of a
+  first-match guess.
+- **`satellites` attribute their commits.** The key is documented as "paths
+  whose commits attribute to this unit" and reached the ownership map and the
+  drift detector, but never the unit's path matcher. For a hexagonal service —
+  where the released `crates/bin` is a thin wrapper and the work lands in
+  `crates/api`, `crates/core`, `crates/infrastructure` — that means essentially
+  every real change attributed to no unit at all.
+- **A configured unit is no longer also auto-discovered.** Workspace protocols
+  enumerate every member from one call on the workspace root, which the
+  path-level skip-list could not filter. Both nodes landed on the same
+  directory, and when the unit name equalled the package name the two were
+  indistinguishable: `multiple projects with same name`.
+- **`Cargo.lock` is refreshed and committed.** Configured units write their
+  versions through a different rewriter than auto-discovered ones, and that
+  one never went near the lockfile — in a repo where every cargo unit is
+  configured, the lock was never updated at all. The sync now runs once per
+  affected workspace after the rewrites, from what actually changed, and the
+  lockfile is added to the release commit. A release commit carrying bumped
+  manifests against a stale lock is not untidy, it is terminal: the next
+  checkout regenerates the lock, and `prepare` refuses to run in a dirty tree.
+- **A failed lockfile update is an error.** It used to be a `warn!` nobody
+  reads, which is how the above went unnoticed for days.
+- **The Scoop bucket updates itself.** `update-scoop.yml` listened on
+  `release: published`, which never fires for a release created with the
+  workflow's own `GITHUB_TOKEN` — GitHub's recursion guard. Two releases in a
+  row shipped a stale manifest and were fixed by hand. It is now a job in
+  `release.yml`, on the same tag push that already works.
+
+### Changed
+
+- **A cargo workspace counts as one project only if every member actually
+  inherits its version.** The test was the mere presence of
+  `[workspace.package].version`, which is version *inheritance being offered*,
+  not taken — practically every modern workspace sets it. That collapsed
+  ordinary multi-crate repos into a single unit owning no `[package]`, named
+  after the repo directory, which nothing releases and which trips the
+  untagged-unit guard.
+- **A gitignored `Cargo.lock` is left alone** — not refreshed, not committed.
+
+### Migration
+
+Both changes below surface config that was only ever describing a bug.
+
+- If you added a `[release_unit.<name>]` block to suppress a unit named after
+  your repo directory, **delete it**. That unit no longer exists, and a
+  partial-override block matching nothing is a hard error.
+- Expect **more units to bump**. Cascades that silently did nothing now work,
+  including `[cascade_inputs]` reaching units transitively through a configured
+  library. Run `belaf status --ci` before the first `prepare` to see the new
+  set. If a unit bumps that you never intended to release, declare it:
+  `kind = "ignore"` keeps it out of the release set entirely, `kind =
+  "internal"` keeps it as a graph node that cascades but is never tagged.
+
 ## 3.1.0 — 2026-08-07
 
 Answering "this unit has no release tag" per unit instead of repo-wide.

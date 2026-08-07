@@ -521,6 +521,23 @@ impl AppSession {
             }
         }
 
+        // `Cargo.lock` records the versions the manifests just moved, so it is
+        // stale the moment any of them is written — and a release commit that
+        // carries bumped manifests against a stale lock leaves every later
+        // checkout with a dirty working tree, which `prepare` refuses to run
+        // in. Syncing here rather than inside a rewriter covers both the
+        // auto-discovered (`CargoRewriter`) and the configured
+        // (`MultiManifestRewriter`) paths, and lets one `cargo update
+        // --workspace` settle however many crates bumped.
+        let written: Vec<crate::core::git::repository::RepoPathBuf> =
+            changes.paths().map(|p| p.to_owned()).collect();
+        for lockfile in crate::core::cargo_lock::sync_after_rewrite(
+            &self.repo,
+            written.iter().map(|p| p.as_ref()),
+        )? {
+            changes.add_path(&lockfile);
+        }
+
         Ok(changes)
     }
 

@@ -211,11 +211,15 @@ async fn build_report() -> DoctorReport {
             use crate::core::release_unit::discovery::discover_implicit_release_units;
             let handlers = FormatHandlerRegistry::with_defaults();
             let discoverers = WorkspaceDiscovererRegistry::with_defaults();
-            match discover_implicit_release_units(&repo, &handlers, &discoverers, &[]) {
-                Ok(units) => {
-                    let by_eco = ecosystem_breakdown(&units);
-                    Check::ok(format!("{} ReleaseUnit(s) auto-detected", units.len()))
-                        .with_detail(by_eco)
+            let ownership = crate::core::ecosystem::format_handler::UnitOwnership::default();
+            match discover_implicit_release_units(&repo, &handlers, &discoverers, &ownership) {
+                Ok(batch) => {
+                    let by_eco = ecosystem_breakdown(&batch.units);
+                    Check::ok(format!(
+                        "{} ReleaseUnit(s) auto-detected",
+                        batch.units.len()
+                    ))
+                    .with_detail(by_eco)
                 }
                 Err(e) => Check::warn(format!("auto-detect failed: {e}")),
             }

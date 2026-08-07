@@ -5,7 +5,7 @@
 
 use crate::core::config::ConfigurationFile;
 use crate::core::ecosystem::format_handler::{FormatHandlerRegistry, WorkspaceDiscovererRegistry};
-use crate::core::git::repository::{RepoPathBuf, Repository};
+use crate::core::git::repository::Repository;
 use crate::core::release_unit::detector;
 use crate::core::release_unit::discovery::discover_implicit_release_units;
 use crate::core::release_unit::resolver;
@@ -73,17 +73,18 @@ impl ExistingDecisions {
         // block for a unit that already exists as an override. The
         // discovery walk only runs when such blocks are present.
         if !output.partial_overrides.is_empty() {
-            let mut skip = detector::unit_coverage_paths(&resolved);
-            for p in &cfg.ignore_paths.paths {
-                skip.push(RepoPathBuf::new(p.trim_end_matches('/').as_bytes()));
-            }
+            let ownership = crate::core::release_unit::ownership::ownership_for(
+                &resolved,
+                &cfg.ignore_paths.paths,
+            );
             let handlers = FormatHandlerRegistry::with_defaults();
             let discoverers = WorkspaceDiscovererRegistry::with_defaults();
-            let discovered = discover_implicit_release_units(repo, &handlers, &discoverers, &skip)
-                .map_err(|e| anyhow::anyhow!("implicit unit discovery: {e}"))?;
+            let discovered =
+                discover_implicit_release_units(repo, &handlers, &discoverers, &ownership)
+                    .map_err(|e| anyhow::anyhow!("implicit unit discovery: {e}"))?;
             let partial = resolver::resolve_partial_against_discovered(
                 &output.partial_overrides,
-                &discovered,
+                &discovered.units,
             )
             .map_err(|e| anyhow::anyhow!("partial-override resolution: {e}"))?;
             resolved.extend(partial);

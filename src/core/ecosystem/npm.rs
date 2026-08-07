@@ -23,7 +23,8 @@ use crate::{
     atry,
     core::{
         ecosystem::format_handler::{
-            DiscoveredUnit, FormatHandler, RawInternalDep, WorkspaceDiscoverer,
+            ClaimedDep, DiscoveredUnit, DiscoveryBatch, FormatHandler, PathOwner, RawInternalDep,
+            UnitOwnership, WorkspaceDiscoverer,
         },
         errors::Result,
         git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
@@ -205,7 +206,12 @@ impl WorkspaceDiscoverer for NpmWorkspaceDiscoverer {
         pkg.get("workspaces").is_some()
     }
 
-    fn discover(&self, repo: &Repository, root_path: &RepoPath) -> Result<Vec<DiscoveredUnit>> {
+    fn discover(
+        &self,
+        repo: &Repository,
+        root_path: &RepoPath,
+        ownership: &UnitOwnership,
+    ) -> Result<DiscoveryBatch> {
         // Read root manifest, expand `workspaces` globs, parse each
         // member's package.json, wire internal deps. Top-level
         // package.json itself is treated as a unit only if it has a
@@ -213,11 +219,11 @@ impl WorkspaceDiscoverer for NpmWorkspaceDiscoverer {
         let root_abs = repo.resolve_workdir(root_path);
         let root_content = match std::fs::read_to_string(&root_abs) {
             Ok(c) => c,
-            Err(_) => return Ok(Vec::new()),
+            Err(_) => return Ok(DiscoveryBatch::default()),
         };
         let root_json: serde_json::Value = match serde_json::from_str(&root_content) {
             Ok(v) => v,
-            Err(_) => return Ok(Vec::new()),
+            Err(_) => return Ok(DiscoveryBatch::default()),
         };
         let workspace_globs = match root_json.get("workspaces") {
             Some(serde_json::Value::Array(arr)) => arr
@@ -283,20 +289,31 @@ impl WorkspaceDiscoverer for NpmWorkspaceDiscoverer {
         }
 
         let mut units: Vec<DiscoveredUnit> = Vec::new();
-        let mut loads: Vec<PackageLoadData> = Vec::new();
-        let mut name_to_index: HashMap<String, usize> = HashMap::new();
+        let mut loads: Vec<(PackageLoadData, PackageOwner)> = Vec::new();
+        let mut name_to_owner: HashMap<String, PackageOwner> = HashMap::new();
 
         for p in &member_paths {
-            if let Some((unit, load)) = self.dummy_loader().parse_one(repo, p)? {
-                let idx = units.len();
-                name_to_index.insert(load.package_name.clone(), idx);
-                units.push(unit);
-                loads.push(load);
-            }
+            let Some((unit, load)) = self.dummy_loader().parse_one(repo, p)? else {
+                continue;
+            };
+            // A member a `[release_unit.X]` block already covers must not
+            // become a second graph node on the same directory — but its
+            // dependency edges still belong to the claiming unit.
+            let owner = match ownership.owner_of(p) {
+                Some(PathOwner::Unit(name)) => PackageOwner::Claimed(name.to_owned()),
+                Some(PathOwner::Ignored) => continue,
+                None => {
+                    units.push(unit);
+                    PackageOwner::Discovered(units.len() - 1)
+                }
+            };
+            name_to_owner.insert(load.package_name.clone(), owner.clone());
+            loads.push((load, owner));
         }
 
+        let mut claimed_deps: Vec<ClaimedDep> = Vec::new();
         let strict_validation = false;
-        for (idx, load) in loads.iter().enumerate() {
+        for (load, depender) in &loads {
             let maybe_internal_specs = load
                 .pkg_data
                 .get("internalDepVersions")
@@ -306,9 +323,17 @@ impl WorkspaceDiscoverer for NpmWorkspaceDiscoverer {
                     continue;
                 };
                 for (dep_name, dep_spec) in dep_map {
-                    if !name_to_index.contains_key(dep_name) {
+                    let Some(dependee) = name_to_owner.get(dep_name) else {
+                        continue;
+                    };
+                    // Two packages of the same unit — no edge to draw.
+                    if dependee == depender {
                         continue;
                     }
+                    let target_name = match dependee {
+                        PackageOwner::Discovered(idx) => units[*idx].qnames[0].clone(),
+                        PackageOwner::Claimed(name) => name.clone(),
+                    };
                     let req = if let Some(belaf_spec) = maybe_internal_specs
                         .and_then(|d| d.get(dep_name))
                         .and_then(|v| v.as_str())
@@ -337,17 +362,38 @@ impl WorkspaceDiscoverer for NpmWorkspaceDiscoverer {
                     } else {
                         DepRequirement::Unavailable
                     };
-                    units[idx].internal_deps.push(RawInternalDep {
-                        target_package_name: dep_name.clone(),
+                    let raw = RawInternalDep {
+                        target_package_name: target_name,
                         literal: dep_spec.as_str().unwrap_or("UNDEFINED").to_owned(),
                         requirement: req,
-                    });
+                    };
+                    match depender {
+                        PackageOwner::Discovered(idx) => units[*idx].internal_deps.push(raw),
+                        PackageOwner::Claimed(name) => claimed_deps.push(ClaimedDep {
+                            depender_unit: name.clone(),
+                            ecosystem: "npm",
+                            dep: raw,
+                        }),
+                    }
                 }
             }
         }
 
-        Ok(units)
+        Ok(DiscoveryBatch {
+            units,
+            claimed_deps,
+        })
     }
+}
+
+/// Which release unit an npm workspace member belongs to. Mirrors the cargo
+/// side; ignored members are dropped before this point rather than carried, as
+/// npm's dep wiring is keyed on package name and an ignored package must not
+/// be nameable as a target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum PackageOwner {
+    Discovered(usize),
+    Claimed(String),
 }
 
 impl NpmWorkspaceDiscoverer {

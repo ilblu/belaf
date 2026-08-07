@@ -22,6 +22,7 @@ pub mod bundle;
 pub mod cascade;
 pub mod detector;
 pub mod discovery;
+pub mod ownership;
 pub mod resolver;
 pub mod shape;
 pub mod syntax;

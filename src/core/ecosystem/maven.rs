@@ -44,7 +44,8 @@ use crate::{
     atry,
     core::{
         ecosystem::format_handler::{
-            DiscoveredUnit, FormatHandler, RawInternalDep, WorkspaceDiscoverer,
+            ClaimedDep, DiscoveredUnit, DiscoveryBatch, FormatHandler, PathOwner, RawInternalDep,
+            UnitOwnership, WorkspaceDiscoverer,
         },
         errors::Result,
         git::repository::{RepoPath, RepoPathBuf, Repository},
@@ -168,7 +169,12 @@ impl WorkspaceDiscoverer for MavenWorkspaceDiscoverer {
         basename.as_ref() == b"pom.xml"
     }
 
-    fn discover(&self, repo: &Repository, _root_path: &RepoPath) -> Result<Vec<DiscoveredUnit>> {
+    fn discover(
+        &self,
+        repo: &Repository,
+        _root_path: &RepoPath,
+        ownership: &UnitOwnership,
+    ) -> Result<DiscoveryBatch> {
         let mut pom_paths: Vec<RepoPathBuf> = Vec::new();
         repo.scan_paths(|p| {
             let (_, basename) = p.split_basename();
@@ -178,7 +184,7 @@ impl WorkspaceDiscoverer for MavenWorkspaceDiscoverer {
             Ok(())
         })?;
         if pom_paths.is_empty() {
-            return Ok(Vec::new());
+            return Ok(DiscoveryBatch::default());
         }
 
         info!("loading {} pom.xml file(s)", pom_paths.len());
@@ -211,17 +217,38 @@ impl WorkspaceDiscoverer for MavenWorkspaceDiscoverer {
             resolved.push(r);
         }
 
-        let mut resolved_coord_to_name: HashMap<(String, String), String> = HashMap::new();
-        for r in &resolved {
-            resolved_coord_to_name.insert(
-                (r.group_id.clone(), r.artifact_id.clone()),
-                format!("{}:{}", r.group_id, r.artifact_id),
-            );
+        // A pom a `[release_unit.X]` block covers keeps its place in the
+        // coordinate map — it is still a valid dependency target — but the
+        // edge has to name the owning unit, and the pom must not become a
+        // second graph node on the same directory.
+        let mut coord_to_owner: HashMap<(String, String), Option<String>> = HashMap::new();
+        for (idx, r) in resolved.iter().enumerate() {
+            let owner = match ownership.owner_of(&parsed[idx].repo_path) {
+                Some(PathOwner::Unit(name)) => Some(name.to_owned()),
+                Some(PathOwner::Ignored) => continue,
+                None => None,
+            };
+            coord_to_owner.insert((r.group_id.clone(), r.artifact_id.clone()), owner);
         }
+        let target_name_for = |gid: &str, aid: &str| -> Option<String> {
+            coord_to_owner
+                .get(&(gid.to_owned(), aid.to_owned()))
+                .map(|owner| owner.clone().unwrap_or_else(|| format!("{gid}:{aid}")))
+        };
 
         let mut units: Vec<DiscoveredUnit> = Vec::with_capacity(resolved.len());
+        let mut claimed_deps: Vec<ClaimedDep> = Vec::new();
         for (idx, r) in resolved.iter().enumerate() {
+            let coord = (r.group_id.clone(), r.artifact_id.clone());
+            let Some(owner) = coord_to_owner.get(&coord) else {
+                // Ignored path — not a unit, not a dependency source.
+                continue;
+            };
+            let owner = owner.clone();
             let user_name = format!("{}:{}", r.group_id, r.artifact_id);
+            // The name this pom's own edges resolve against: the owning unit
+            // when claimed, the coordinate otherwise.
+            let self_name = owner.clone().unwrap_or_else(|| user_name.clone());
             let version = atry!(
                 semver::Version::parse(&r.version)
                     .map_err(|e| anyhow!("not semver: {e}"));
@@ -236,12 +263,10 @@ impl WorkspaceDiscoverer for MavenWorkspaceDiscoverer {
             let mut internal_deps = Vec::new();
             let pom = &parsed[idx];
             if let Some(p) = &pom.parent {
-                if let Some(target_name) =
-                    resolved_coord_to_name.get(&(p.group_id.clone(), p.artifact_id.clone()))
-                {
-                    if target_name != &user_name {
+                if let Some(target_name) = target_name_for(&p.group_id, &p.artifact_id) {
+                    if target_name != self_name {
                         internal_deps.push(RawInternalDep {
-                            target_package_name: target_name.clone(),
+                            target_package_name: target_name,
                             literal: p.version.clone(),
                             requirement: DepRequirement::Manual(p.version.clone()),
                         });
@@ -252,34 +277,44 @@ impl WorkspaceDiscoverer for MavenWorkspaceDiscoverer {
                 let Some(dep_version) = &dep.version else {
                     continue;
                 };
-                let Some(target_name) =
-                    resolved_coord_to_name.get(&(dep.group_id.clone(), dep.artifact_id.clone()))
-                else {
+                let Some(target_name) = target_name_for(&dep.group_id, &dep.artifact_id) else {
                     continue;
                 };
-                if target_name == &user_name {
+                if target_name == self_name {
                     continue;
                 }
                 internal_deps.push(RawInternalDep {
-                    target_package_name: target_name.clone(),
+                    target_package_name: target_name,
                     literal: dep_version.clone(),
                     requirement: DepRequirement::Manual(dep_version.clone()),
                 });
             }
 
-            units.push(DiscoveredUnit {
-                qnames: vec![user_name, "maven".to_owned()],
-                version: Version::Semver(version),
-                prefix: prefix.to_owned(),
-                anchor_manifest: manifest.clone(),
-                rewriter_factories: vec![Box::new(move |id| {
-                    Box::new(MavenRewriter::new(id, manifest))
-                })],
-                internal_deps,
-            });
+            match owner {
+                Some(unit_name) => {
+                    claimed_deps.extend(internal_deps.into_iter().map(|dep| ClaimedDep {
+                        depender_unit: unit_name.clone(),
+                        ecosystem: "maven",
+                        dep,
+                    }))
+                }
+                None => units.push(DiscoveredUnit {
+                    qnames: vec![user_name, "maven".to_owned()],
+                    version: Version::Semver(version),
+                    prefix: prefix.to_owned(),
+                    anchor_manifest: manifest.clone(),
+                    rewriter_factories: vec![Box::new(move |id| {
+                        Box::new(MavenRewriter::new(id, manifest))
+                    })],
+                    internal_deps,
+                }),
+            }
         }
 
-        Ok(units)
+        Ok(DiscoveryBatch {
+            units,
+            claimed_deps,
+        })
     }
 }
 

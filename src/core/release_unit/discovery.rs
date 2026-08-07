@@ -15,34 +15,41 @@ use std::collections::HashSet;
 
 use crate::core::{
     ecosystem::format_handler::{
-        is_path_inside_any, DiscoveredUnit, FormatHandlerRegistry, WorkspaceDiscovererRegistry,
+        is_path_inside_any, DiscoveryBatch, FormatHandlerRegistry, UnitOwnership,
+        WorkspaceDiscovererRegistry,
     },
     errors::Result,
     git::repository::{RepoPathBuf, Repository},
 };
 
-/// Walk the repo for every unconfigured manifest. `configured_skip_paths`
-/// is the union of every `[release_unit.X]` block's manifest-parent +
-/// satellites + `[ignore_paths]`.
+/// Walk the repo for every unconfigured manifest.
+///
+/// `ownership` carries every path a `[release_unit.X]` block already covers
+/// (manifest directories, satellites, literal `paths`) plus the
+/// `[ignore_paths]` list. It filters the walk *and* is handed to the workspace
+/// discoverers, which enumerate members from a single root call and therefore
+/// cannot be filtered by the walk alone.
 pub fn discover_implicit_release_units(
     repo: &Repository,
     handlers: &FormatHandlerRegistry,
     discoverers: &WorkspaceDiscovererRegistry,
-    configured_skip_paths: &[RepoPathBuf],
-) -> Result<Vec<DiscoveredUnit>> {
+    ownership: &UnitOwnership,
+) -> Result<DiscoveryBatch> {
+    let skip_paths: Vec<RepoPathBuf> = ownership.paths().cloned().collect();
+
     // Collect index paths once. We can't easily do per-path dispatch
     // inline because workspace discoverers consume multiple paths in
     // one call (cargo metadata enumerates every workspace member from
     // one Cargo.toml).
     let mut paths: Vec<RepoPathBuf> = Vec::new();
     repo.scan_paths(|p| {
-        if !is_path_inside_any(p, configured_skip_paths) {
+        if !is_path_inside_any(p, &skip_paths) {
             paths.push(p.to_owned());
         }
         Ok(())
     })?;
 
-    let mut units: Vec<DiscoveredUnit> = Vec::new();
+    let mut batch = DiscoveryBatch::default();
     let mut consumed: HashSet<RepoPathBuf> = HashSet::new();
 
     // First pass: workspace discoverers. They get the chance to claim
@@ -56,12 +63,12 @@ pub fn discover_implicit_release_units(
         }
         for ws in discoverers.discoverers() {
             if ws.claims(repo, path) {
-                let new_units = ws.discover(repo, path)?;
+                let new_batch = ws.discover(repo, path, ownership)?;
                 consumed.insert(path.clone());
-                for u in &new_units {
+                for u in &new_batch.units {
                     consumed.insert(u.anchor_manifest.clone());
                 }
-                units.extend(new_units);
+                batch.extend(new_batch);
                 break;
             }
         }
@@ -87,9 +94,9 @@ pub fn discover_implicit_release_units(
         }
         if let Some(unit) = handler.discover_single(repo, path)? {
             claimed_dirs.insert(parent_buf);
-            units.push(unit);
+            batch.units.push(unit);
         }
     }
 
-    Ok(units)
+    Ok(batch)
 }

@@ -111,9 +111,130 @@ pub trait WorkspaceDiscoverer: Send + Sync + std::fmt::Debug {
     /// table, `package.json` with a `workspaces` field).
     fn claims(&self, repo: &Repository, manifest_path: &RepoPath) -> bool;
 
-    /// Discover every unit reachable from `root_path`. Returns the
-    /// full set including the root if it's itself a unit.
-    fn discover(&self, repo: &Repository, root_path: &RepoPath) -> Result<Vec<DiscoveredUnit>>;
+    /// Discover every unit reachable from `root_path`.
+    ///
+    /// A workspace protocol enumerates *every* member, including the ones a
+    /// `[release_unit.X]` block already covers — the orchestrator's path-level
+    /// skip-list cannot filter those, because they arrive from one call on the
+    /// workspace root rather than as separate scanned paths. `ownership` is how
+    /// an implementation tells the two apart: a member it claims must not be
+    /// emitted as a unit of its own (that would put a second graph node on the
+    /// same directory), but its dependency edges still belong to the claiming
+    /// unit and are returned as [`DiscoveryBatch::claimed_deps`].
+    fn discover(
+        &self,
+        repo: &Repository,
+        root_path: &RepoPath,
+        ownership: &UnitOwnership,
+    ) -> Result<DiscoveryBatch>;
+}
+
+// ---------------------------------------------------------------------------
+// UnitOwnership — which repo paths a configured `[release_unit.X]` covers.
+// ---------------------------------------------------------------------------
+
+/// Who owns a repo path, as far as discovery is concerned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PathOwner<'a> {
+    /// A configured `[release_unit.<name>]` block covers this path. The
+    /// payload is that block's unit name — the name its graph node carries,
+    /// which is what a dependency edge onto it must target.
+    Unit(&'a str),
+
+    /// An `[ignore_paths]` entry covers this path. Nothing here is a unit and
+    /// nothing here is a valid dependency target.
+    Ignored,
+}
+
+/// The repo paths already spoken for before auto-discovery runs: every
+/// configured unit's manifest directories, satellites and literal `paths`,
+/// plus the `[ignore_paths]` list.
+///
+/// Doubles as the scan skip-list (via [`Self::paths`]) and as the
+/// package→unit map workspace discoverers use to redirect dependency edges
+/// onto the owning unit.
+#[derive(Debug, Default, Clone)]
+pub struct UnitOwnership {
+    /// Sorted longest-path-first so [`Self::owner_of`] resolves the most
+    /// specific claim: a satellite nested inside another unit's tree belongs
+    /// to the satellite's owner, not the outer one.
+    claims: Vec<(RepoPathBuf, Option<String>)>,
+}
+
+impl UnitOwnership {
+    /// Build from `(path, owner)` pairs. `None` marks an ignored path.
+    pub fn new(claims: impl IntoIterator<Item = (RepoPathBuf, Option<String>)>) -> Self {
+        let mut claims: Vec<_> = claims.into_iter().collect();
+        claims.sort_by(|a, b| {
+            let (a_bytes, b_bytes): (&[u8], &[u8]) = (a.0.as_ref(), b.0.as_ref());
+            b_bytes.len().cmp(&a_bytes.len()).then(a_bytes.cmp(b_bytes))
+        });
+        Self { claims }
+    }
+
+    /// The owner of `path`, where "owner" means a claim that is `path` itself
+    /// or one of its ancestor directories. `None` when nothing claims it.
+    pub fn owner_of(&self, path: &RepoPath) -> Option<PathOwner<'_>> {
+        self.claims
+            .iter()
+            .find(|(claim, _)| is_path_inside_any(path, std::slice::from_ref(claim)))
+            .map(|(_, owner)| match owner {
+                Some(name) => PathOwner::Unit(name),
+                None => PathOwner::Ignored,
+            })
+    }
+
+    /// Every claimed path — the skip-list the repo walk filters against.
+    pub fn paths(&self) -> impl Iterator<Item = &RepoPathBuf> {
+        self.claims.iter().map(|(p, _)| p)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.claims.is_empty()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// DiscoveryBatch — what one discovery pass produced.
+// ---------------------------------------------------------------------------
+
+/// The output of a discovery pass: units discovery owns outright, plus
+/// dependency edges whose *depender* is a configured unit that is already a
+/// graph node by the time discovery runs.
+#[derive(Debug, Default)]
+pub struct DiscoveryBatch {
+    pub units: Vec<DiscoveredUnit>,
+    pub claimed_deps: Vec<ClaimedDep>,
+}
+
+impl DiscoveryBatch {
+    /// Convenience for the single-manifest paths that never produce claimed
+    /// edges.
+    pub fn from_units(units: Vec<DiscoveredUnit>) -> Self {
+        Self {
+            units,
+            claimed_deps: Vec::new(),
+        }
+    }
+
+    pub fn extend(&mut self, other: DiscoveryBatch) {
+        self.units.extend(other.units);
+        self.claimed_deps.extend(other.claimed_deps);
+    }
+}
+
+/// A dependency edge belonging to a configured `[release_unit.X]`.
+#[derive(Debug, Clone)]
+pub struct ClaimedDep {
+    /// Name of the configured unit the edge hangs off.
+    pub depender_unit: String,
+
+    /// Ecosystem the edge was read from — the discoverer's
+    /// [`WorkspaceDiscoverer::name`]. Used to bind `dep.target_package_name`
+    /// to the right node when two ecosystems host a same-named package.
+    pub ecosystem: &'static str,
+
+    pub dep: RawInternalDep,
 }
 
 // ---------------------------------------------------------------------------

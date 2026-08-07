@@ -356,15 +356,49 @@ jobs:
           done
           git push
 
+  # Hand-added on top of what dist generates (`allow-dirty = ["ci"]` in
+  # dist-workspace.toml keeps `dist generate` from reverting it).
+  #
+  # This lives here, next to the Homebrew job, rather than in a separate
+  # workflow keyed on `release: published`. That event never fires for our
+  # releases: `dist host` creates the GitHub Release with this workflow's
+  # `GITHUB_TOKEN`, and GitHub does not start workflow runs from events raised
+  # by a `GITHUB_TOKEN`. Two releases in a row (v3.0.0, v3.1.0) shipped with a
+  # stale Scoop manifest and had to be fixed by hand. Hanging off the tag push
+  # — which does trigger, because it carries user credentials — removes the
+  # manual step.
+  publish-scoop-manifest:
+    needs:
+      - plan
+      - host
+    runs-on: "ubuntu-22.04"
+    # Same prerelease gate as Homebrew: a prerelease must not become the
+    # version `scoop install belaf` hands out.
+    if: ${{ !fromJson(needs.plan.outputs.val).announcement_is_prerelease || fromJson(needs.plan.outputs.val).publish_prereleases }}
+    steps:
+      - name: Checkout belaf (for the manifest script)
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Checkout scoop-bucket
+        uses: actions/checkout@v6
+        with:
+          repository: "ilblu/scoop-bucket"
+          token: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          path: scoop-bucket
+      - name: Update Scoop manifest
+        run: .github/scripts/update-scoop.sh "${{ needs.plan.outputs.tag }}" scoop-bucket
+
   announce:
     needs:
       - plan
       - host
       - publish-homebrew-formula
+      - publish-scoop-manifest
     # use "always() && ..." to allow us to wait for all publish jobs while
     # still allowing individual publish jobs to skip themselves (for prereleases).
     # "host" however must run to completion, no skipping allowed!
-    if: ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') }}
+    if: ${{ always() && needs.host.result == 'success' && (needs.publish-homebrew-formula.result == 'skipped' || needs.publish-homebrew-formula.result == 'success') && (needs.publish-scoop-manifest.result == 'skipped' || needs.publish-scoop-manifest.result == 'success') }}
     runs-on: "ubuntu-22.04"
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

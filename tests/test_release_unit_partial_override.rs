@@ -30,7 +30,10 @@ fn partial(name: &str, mutate: impl FnOnce(&mut ReleaseUnitConfig)) -> NamedRele
 fn discover(repo: &Repository) -> Vec<belaf::core::ecosystem::format_handler::DiscoveredUnit> {
     let handlers = FormatHandlerRegistry::with_defaults();
     let discoverers = WorkspaceDiscovererRegistry::with_defaults();
-    discover_implicit_release_units(repo, &handlers, &discoverers, &[]).expect("discover")
+    let ownership = belaf::core::ecosystem::format_handler::UnitOwnership::default();
+    discover_implicit_release_units(repo, &handlers, &discoverers, &ownership)
+        .expect("discover")
+        .units
 }
 
 // ---------------------------------------------------------------------------

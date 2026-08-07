@@ -140,7 +140,7 @@ external = { tool = "gradle", read_command = "./gradlew -q :sdk:printVersion", w
 
 | Key | Notes |
 |-----|-------|
-| `satellites` | Repo-relative dirs that belong to this unit but carry no manifest of their own (e.g. `crates/foo/` for a hexagonal Cargo service). Drift detection counts these as covered. |
+| `satellites` | Repo-relative dirs that belong to this unit but carry no manifest of their own (e.g. `crates/foo/` for a hexagonal Cargo service). Commits touching them attribute to this unit, their package-manager dependencies count as this unit's dependencies, and drift detection counts them as covered. |
 | `cascade_from` | `{ source = "schema-unit", bump = "floor_minor" }` — auto-bump this unit when `source` bumps. Strategies: `mirror`, `floor_patch`, `floor_minor`, `floor_major`. |
 | `visibility` | `"public"` (publishes to a registry), `"internal"`, or `"hidden"`. Surfaced on the dashboard. |
 | `tag_format` | Override the ecosystem default. See "Tag-format precedence" below. |

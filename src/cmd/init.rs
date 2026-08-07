@@ -189,8 +189,10 @@ fn run_auto_detect(force: bool) -> Result<InitSummary> {
     use crate::core::release_unit::discovery::discover_implicit_release_units;
     let handlers = FormatHandlerRegistry::with_defaults();
     let discoverers = WorkspaceDiscovererRegistry::with_defaults();
-    let units =
-        discover_implicit_release_units(&repo, &handlers, &discoverers, &[]).unwrap_or_default();
+    let ownership = crate::core::ecosystem::format_handler::UnitOwnership::default();
+    let units = discover_implicit_release_units(&repo, &handlers, &discoverers, &ownership)
+        .map(|b| b.units)
+        .unwrap_or_default();
     let mut ecosystems: Vec<String> = units
         .iter()
         .filter_map(|u| u.qnames.get(1).cloned())

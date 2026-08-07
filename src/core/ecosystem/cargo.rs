@@ -14,7 +14,8 @@ use tracing::info;
 
 use crate::core::{
     ecosystem::format_handler::{
-        is_path_inside_any, DiscoveredUnit, FormatHandler, RawInternalDep, WorkspaceDiscoverer,
+        ClaimedDep, DiscoveredUnit, DiscoveryBatch, FormatHandler, PathOwner, RawInternalDep,
+        UnitOwnership, WorkspaceDiscoverer,
     },
     errors::Result,
     git::repository::{ChangeList, RepoPath, RepoPathBuf, Repository},
@@ -93,58 +94,106 @@ impl CargoLoader {
         }))
     }
 
-    fn is_workspace_project(&self, doc: &DocumentMut) -> bool {
-        doc.get("workspace")
+    /// Whether this workspace releases as **one** project.
+    ///
+    /// A root `[workspace.package].version` on its own does not answer that.
+    /// It declares a value members *may* inherit, and Cargo lets each member
+    /// decide: `version.workspace = true` takes it, `version = "1.2.3"` opts
+    /// out. Practically every modern workspace sets the key, so reading it as
+    /// "this workspace is a single project" collapses ordinary multi-crate
+    /// repos into one unit — one that owns no `[package]`, and whose name can
+    /// only come from the directory-name fallback, because `name` is not an
+    /// inheritable field and so never appears under `[workspace.package]`.
+    ///
+    /// The honest test is whether every member actually inherits. If it does,
+    /// the members can only ever carry one version and one release unit is the
+    /// truthful model. If even one member pins its own version, they release
+    /// independently.
+    fn is_single_project_workspace(
+        &self,
+        root_doc: &DocumentMut,
+        cargo_meta: &cargo_metadata::Metadata,
+    ) -> bool {
+        let has_inheritable_version = root_doc
+            .get("workspace")
             .and_then(|ws| ws.as_table())
             .and_then(|ws_table| ws_table.get("package"))
             .and_then(|pkg| pkg.as_table())
             .and_then(|pkg_table| pkg_table.get("version"))
-            .is_some()
+            .is_some();
+        if !has_inheritable_version {
+            return false;
+        }
+
+        let member_ids: std::collections::HashSet<_> =
+            cargo_meta.workspace_members.iter().collect();
+        let members: Vec<_> = cargo_meta
+            .packages
+            .iter()
+            .filter(|pkg| pkg.source.is_none() && member_ids.contains(&pkg.id))
+            .collect();
+
+        // A workspace with no members has nothing to collapse into one unit.
+        if members.is_empty() {
+            return false;
+        }
+
+        members
+            .iter()
+            .all(|pkg| member_inherits_workspace_version(&pkg.manifest_path))
     }
 
     /// Build `DiscoveredUnit`s for one cargo workspace.
     ///
-    /// Returns a map (cargo PackageId → index in the returned Vec) so
-    /// the caller's dependency-resolution pass can wire `internal_deps`
-    /// without re-walking metadata.
+    /// Returns the ownership verdict for every workspace member so the
+    /// caller's dependency-resolution pass can wire `internal_deps` without
+    /// re-walking metadata — including for members a configured
+    /// `[release_unit.X]` claimed, which produce no unit here but whose edges
+    /// still belong to the claiming unit.
     fn units_from_workspace(
         &self,
         repo: &Repository,
         cargo_meta: &cargo_metadata::Metadata,
         workspace_root: &Path,
-        skip_list: &[RepoPathBuf],
+        ownership: &UnitOwnership,
     ) -> Result<(
         Vec<DiscoveredUnit>,
-        HashMap<cargo_metadata::PackageId, usize>,
+        HashMap<cargo_metadata::PackageId, PackageOwner>,
     )> {
         let content = read_config_file(workspace_root)?;
         let doc: DocumentMut = content.parse()?;
-        let is_ws_project = self.is_workspace_project(&doc);
+        let is_ws_project = self.is_single_project_workspace(&doc, cargo_meta);
 
         let mut units: Vec<DiscoveredUnit> = Vec::new();
-        let mut pkgid_to_index: HashMap<cargo_metadata::PackageId, usize> = HashMap::new();
+        let mut pkgid_to_owner: HashMap<cargo_metadata::PackageId, PackageOwner> = HashMap::new();
+
+        let workspace_member_ids: std::collections::HashSet<_> =
+            cargo_meta.workspace_members.iter().collect();
 
         if is_ws_project {
             info!(
-                "workspace {} is a single project (has [workspace.package].version)",
+                "workspace {} is a single project (every member inherits [workspace.package].version)",
                 workspace_root.display()
             );
 
-            let ws_name = doc
-                .get("workspace")
-                .and_then(|ws| ws.as_table())
-                .and_then(|ws_table| ws_table.get("package"))
-                .and_then(|pkg| pkg.as_table())
-                .and_then(|pkg_table| pkg_table.get("name"))
-                .and_then(|n| n.as_str())
-                .map(|s| s.to_string())
-                .or_else(|| {
-                    workspace_root
-                        .parent()
-                        .and_then(|p| p.file_name())
-                        .and_then(|n| n.to_str())
-                        .map(|s| s.to_string())
-                });
+            let manifest_repopath = repo.convert_path(workspace_root)?;
+
+            // Every member shares the root's version, so the root manifest's
+            // ownership decides for all of them.
+            let root_owner = match ownership.owner_of(&manifest_repopath) {
+                Some(PathOwner::Ignored) => Some(PackageOwner::Ignored),
+                Some(PathOwner::Unit(name)) => Some(PackageOwner::Claimed(name.to_owned())),
+                None => None,
+            };
+
+            // `name` is not an inheritable field, so it can never come from
+            // `[workspace.package]`. The directory name is the only identity a
+            // virtual root offers.
+            let ws_name = workspace_root
+                .parent()
+                .and_then(|p| p.file_name())
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_string());
 
             let ws_version = doc
                 .get("workspace")
@@ -155,39 +204,40 @@ impl CargoLoader {
                 .and_then(|v| v.as_str())
                 .and_then(|v| v.parse::<semver::Version>().ok());
 
-            if let (Some(name), Some(version)) = (ws_name, ws_version) {
-                let manifest_repopath = repo.convert_path(workspace_root)?;
-                let (prefix, _) = manifest_repopath.split_basename();
-
-                let unit_index = units.len();
-                let workspace_member_ids: std::collections::HashSet<_> =
-                    cargo_meta.workspace_members.iter().collect();
-                for pkg in &cargo_meta.packages {
-                    if pkg.source.is_none() && workspace_member_ids.contains(&pkg.id) {
-                        pkgid_to_index.insert(pkg.id.clone(), unit_index);
+            let owner = match root_owner {
+                Some(o) => o,
+                None => match (ws_name, ws_version) {
+                    (Some(name), Some(version)) => {
+                        let (prefix, _) = manifest_repopath.split_basename();
+                        let manifest = manifest_repopath.clone();
+                        units.push(DiscoveredUnit {
+                            qnames: vec![name, "cargo".to_owned()],
+                            version: Version::Semver(version),
+                            prefix: prefix.to_owned(),
+                            anchor_manifest: manifest_repopath,
+                            rewriter_factories: vec![Box::new(move |id| {
+                                Box::new(CargoRewriter::new(id, manifest))
+                            })],
+                            internal_deps: Vec::new(),
+                        });
+                        PackageOwner::Discovered(units.len() - 1)
                     }
-                }
+                    // No name or no parseable version — nothing to attach the
+                    // members to.
+                    _ => return Ok((units, pkgid_to_owner)),
+                },
+            };
 
-                let manifest = manifest_repopath.clone();
-                units.push(DiscoveredUnit {
-                    qnames: vec![name, "cargo".to_owned()],
-                    version: Version::Semver(version),
-                    prefix: prefix.to_owned(),
-                    anchor_manifest: manifest_repopath,
-                    rewriter_factories: vec![Box::new(move |id| {
-                        Box::new(CargoRewriter::new(id, manifest))
-                    })],
-                    internal_deps: Vec::new(),
-                });
+            for pkg in &cargo_meta.packages {
+                if pkg.source.is_none() && workspace_member_ids.contains(&pkg.id) {
+                    pkgid_to_owner.insert(pkg.id.clone(), owner.clone());
+                }
             }
         } else {
             info!(
                 "workspace {} has separate projects for each member",
                 workspace_root.display()
             );
-
-            let workspace_member_ids: std::collections::HashSet<_> =
-                cargo_meta.workspace_members.iter().collect();
 
             for pkg in &cargo_meta.packages {
                 if pkg.source.is_some() {
@@ -198,24 +248,36 @@ impl CargoLoader {
                     continue;
                 }
 
-                if pkgid_to_index.contains_key(&pkg.id) {
+                if pkgid_to_owner.contains_key(&pkg.id) {
                     continue;
                 }
 
                 let manifest_repopath = repo.convert_path(&pkg.manifest_path)?;
 
-                // If this member's manifest is inside any ReleaseUnit's
-                // skip-list path, the ReleaseUnit owns it (as satellite
-                // or primary manifest). Skip standalone registration so
-                // the unit's atomic claim on the directory is respected.
-                if is_path_inside_any(&manifest_repopath, skip_list) {
-                    continue;
+                // A configured `[release_unit.X]` that covers this member's
+                // directory owns it — as primary manifest or as satellite.
+                // Registering it standalone would put a second graph node on
+                // the same directory; when the unit name happens to equal the
+                // crate name the two are indistinguishable and the naming
+                // round fails outright. Record the claim so the dependency
+                // pass can still route this package's edges to that unit.
+                match ownership.owner_of(&manifest_repopath) {
+                    Some(PathOwner::Unit(name)) => {
+                        pkgid_to_owner
+                            .insert(pkg.id.clone(), PackageOwner::Claimed(name.to_owned()));
+                        continue;
+                    }
+                    Some(PathOwner::Ignored) => {
+                        pkgid_to_owner.insert(pkg.id.clone(), PackageOwner::Ignored);
+                        continue;
+                    }
+                    None => {}
                 }
 
                 let (prefix, _) = manifest_repopath.split_basename();
 
                 let unit_index = units.len();
-                pkgid_to_index.insert(pkg.id.clone(), unit_index);
+                pkgid_to_owner.insert(pkg.id.clone(), PackageOwner::Discovered(unit_index));
 
                 let manifest = manifest_repopath.clone();
                 units.push(DiscoveredUnit {
@@ -231,19 +293,25 @@ impl CargoLoader {
             }
         }
 
-        Ok((units, pkgid_to_index))
+        Ok((units, pkgid_to_owner))
     }
 
-    /// Wire `internal_deps` on every workspace member from cargo's
-    /// resolve graph. Mutates `units` in place using `pkgid_to_index`
-    /// to find the right unit per package.
+    /// Wire dependency edges from cargo's resolve graph.
+    ///
+    /// Edges land on whoever *owns* the two packages, not on the packages
+    /// themselves. That is what lets a hexagonal service — one unit spanning a
+    /// bin crate plus a tree of satellite crates — collect the dependencies of
+    /// all of them as its own, while edges between two crates of the same
+    /// service collapse to nothing. Edges whose depender is a configured unit
+    /// are returned rather than pushed, because that unit is already a graph
+    /// node and is not part of `units`.
     fn fill_internal_deps(
         &self,
         repo: &Repository,
         cargo_meta: &cargo_metadata::Metadata,
         units: &mut [DiscoveredUnit],
-        pkgid_to_index: &HashMap<cargo_metadata::PackageId, usize>,
-    ) -> Result<()> {
+        pkgid_to_owner: &HashMap<cargo_metadata::PackageId, PackageOwner>,
+    ) -> Result<Vec<ClaimedDep>> {
         let mut cargoid_to_pkgindex = HashMap::new();
         for (index, pkg) in cargo_meta.packages[..].iter().enumerate() {
             cargoid_to_pkgindex.insert(pkg.id.clone(), index);
@@ -254,15 +322,19 @@ impl CargoLoader {
             .as_ref()
             .ok_or_else(|| anyhow!("cargo metadata did not include dependency resolution"))?;
 
-        let mut added_pairs: std::collections::HashSet<(usize, String)> =
+        let mut claimed_deps: Vec<ClaimedDep> = Vec::new();
+        let mut added_pairs: std::collections::HashSet<(PackageOwner, String)> =
             std::collections::HashSet::new();
 
         for node in &resolve.nodes {
             let pkg = &cargo_meta.packages[cargoid_to_pkgindex[&node.id]];
 
-            let Some(depender_idx) = pkgid_to_index.get(&node.id).copied() else {
+            let Some(depender) = pkgid_to_owner.get(&node.id) else {
                 continue;
             };
+            if matches!(depender, PackageOwner::Ignored) {
+                continue;
+            }
             let maybe_versions = pkg.metadata.get("internal_dep_versions");
             let manifest_repopath = repo.convert_path(&pkg.manifest_path)?;
 
@@ -276,15 +348,22 @@ impl CargoLoader {
                 .collect();
 
             for dep in &node.deps {
-                let Some(dependee_idx) = pkgid_to_index.get(&dep.pkg).copied() else {
+                let Some(dependee) = pkgid_to_owner.get(&dep.pkg) else {
                     continue;
                 };
-                if dependee_idx == depender_idx {
+                // Same owner — two crates of one service, or a member of a
+                // single-project workspace depending on a sibling. There is no
+                // release ordering between them to express.
+                if dependee == depender {
                     continue;
                 }
 
-                let target_name = units[dependee_idx].qnames[0].clone();
-                if !added_pairs.insert((depender_idx, target_name.clone())) {
+                let target_name = match dependee {
+                    PackageOwner::Discovered(idx) => units[*idx].qnames[0].clone(),
+                    PackageOwner::Claimed(name) => name.clone(),
+                    PackageOwner::Ignored => continue,
+                };
+                if !added_pairs.insert((depender.clone(), target_name.clone())) {
                     continue;
                 }
 
@@ -301,18 +380,71 @@ impl CargoLoader {
                     .map(|cref| repo.resolve_history_ref(&cref, &manifest_repopath))
                     .transpose()?;
 
-                let req = req.unwrap_or(DepRequirement::Unavailable);
-
-                units[depender_idx].internal_deps.push(RawInternalDep {
+                let raw = RawInternalDep {
                     target_package_name: target_name,
                     literal,
-                    requirement: req,
-                });
+                    requirement: req.unwrap_or(DepRequirement::Unavailable),
+                };
+
+                match depender {
+                    PackageOwner::Discovered(idx) => units[*idx].internal_deps.push(raw),
+                    PackageOwner::Claimed(name) => claimed_deps.push(ClaimedDep {
+                        depender_unit: name.clone(),
+                        ecosystem: "cargo",
+                        dep: raw,
+                    }),
+                    PackageOwner::Ignored => unreachable!("filtered above"),
+                }
             }
         }
 
-        Ok(())
+        Ok(claimed_deps)
     }
+}
+
+/// Which release unit a cargo workspace member belongs to.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+enum PackageOwner {
+    /// Index into the `DiscoveredUnit`s this pass emitted.
+    Discovered(usize),
+
+    /// A configured `[release_unit.<name>]` covers this package's directory.
+    /// The payload is that unit's name.
+    Claimed(String),
+
+    /// Inside an `[ignore_paths]` entry — neither a unit nor a dependency
+    /// target.
+    Ignored,
+}
+
+/// Whether a member manifest takes its version from `[workspace.package]`
+/// (`version.workspace = true`) rather than pinning its own.
+///
+/// A manifest that is unreadable, unparseable, or carries no `version` at all
+/// counts as *not* inheriting: Cargo defaults such a package to `0.0.0`
+/// independently of the workspace, so folding it into a shared release unit
+/// would be a guess.
+fn member_inherits_workspace_version(manifest_path: &cargo_metadata::camino::Utf8Path) -> bool {
+    let Ok(content) = read_config_file(manifest_path.as_std_path()) else {
+        return false;
+    };
+    let Ok(doc) = content.parse::<DocumentMut>() else {
+        return false;
+    };
+    let Some(pkg) = doc.get("package").and_then(|v| v.as_table()) else {
+        return false;
+    };
+    let Some(version) = pkg.get("version") else {
+        return false;
+    };
+    // `version.workspace = true` parses as a (possibly inline) table with a
+    // single `workspace` key; `version = "1.2.3"` parses as a plain value.
+    version
+        .as_table_like()
+        .and_then(|t| t.get("workspace"))
+        .and_then(|w| w.as_value())
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
 }
 
 impl FormatHandler for CargoLoader {
@@ -398,7 +530,12 @@ impl WorkspaceDiscoverer for CargoWorkspaceDiscoverer {
         doc.contains_key("workspace")
     }
 
-    fn discover(&self, repo: &Repository, root_path: &RepoPath) -> Result<Vec<DiscoveredUnit>> {
+    fn discover(
+        &self,
+        repo: &Repository,
+        root_path: &RepoPath,
+        ownership: &UnitOwnership,
+    ) -> Result<DiscoveryBatch> {
         let workspace_root = repo.resolve_workdir(root_path);
         let mut cmd = MetadataCommand::new();
         cmd.manifest_path(&workspace_root);
@@ -428,15 +565,18 @@ impl WorkspaceDiscoverer for CargoWorkspaceDiscoverer {
                     "cargo metadata failed for {}: {e}",
                     workspace_root.display()
                 );
-                return Ok(Vec::new());
+                return Ok(DiscoveryBatch::default());
             }
         };
 
         let loader = CargoLoader;
-        let (mut units, pkgid_to_index) =
-            loader.units_from_workspace(repo, &meta, &workspace_root, &[])?;
-        loader.fill_internal_deps(repo, &meta, &mut units, &pkgid_to_index)?;
-        Ok(units)
+        let (mut units, pkgid_to_owner) =
+            loader.units_from_workspace(repo, &meta, &workspace_root, ownership)?;
+        let claimed_deps = loader.fill_internal_deps(repo, &meta, &mut units, &pkgid_to_owner)?;
+        Ok(DiscoveryBatch {
+            units,
+            claimed_deps,
+        })
     }
 }
 
@@ -598,20 +738,6 @@ impl Rewriter for CargoRewriter {
             let mut f = File::create(&toml_path)?;
             write!(f, "{doc}")?;
             changes.add_path(&self.toml_path);
-        }
-
-        // Phase J — refresh Cargo.lock so the bumped version
-        // propagates to the lockfile in the same prepare run. The
-        // `update_for_crate` helper runs `cargo update -p <name>
-        // --workspace`, falls back to `cargo update --workspace` if
-        // the per-crate target is unknown, and is a fast no-op when
-        // the version didn't change. We log + swallow errors here so
-        // a missing `cargo` binary or a Bazel-managed lockfile
-        // doesn't block the rewrite of other ecosystems.
-        let workspace_root = app.repo.resolve_workdir(&RepoPathBuf::new(b""));
-        let crate_name = &unit.qualified_names()[0];
-        if let Err(e) = crate::core::cargo_lock::update_for_crate(crate_name, &workspace_root) {
-            tracing::warn!("Cargo.lock update for `{crate_name}` failed (continuing): {e}",);
         }
 
         Ok(())

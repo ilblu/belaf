@@ -1,68 +1,44 @@
 name: Update Scoop Bucket
 
+# Manual re-run only.
+#
+# This used to listen on `release: published` and never once fired by itself.
+# The GitHub Release is created by `dist host` inside release.yml using that
+# job's `GITHUB_TOKEN`, and GitHub deliberately does not start workflow runs
+# from events raised by a `GITHUB_TOKEN` — that is the recursion guard. The tag
+# push triggers fine because it carries user credentials, which is why
+# release.yml itself runs and this never did.
+#
+# The Scoop update is now a job inside release.yml, hanging off the same tag
+# push as everything else (`publish-scoop-manifest`), exactly like the Homebrew
+# formula. What remains here is the manual path: re-publishing the manifest for
+# an already-released tag without re-running the whole release.
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Release tag (e.g., v0.2.3)'
+        description: 'Release tag (e.g., v3.1.0)'
         required: true
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   update-scoop:
     runs-on: ubuntu-22.04
     steps:
+      - name: Checkout belaf (for the manifest script)
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
       - name: Checkout scoop-bucket
         uses: actions/checkout@v6
         with:
           repository: ilblu/scoop-bucket
           token: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+          path: scoop-bucket
 
       - name: Update Scoop manifest
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag }}
-        run: |
-          git config --global user.name "ilblu-bot"
-          git config --global user.email "bot@ilblu.dev"
-
-          VERSION="${RELEASE_TAG#v}"
-          WINDOWS_ZIP="belaf-x86_64-pc-windows-msvc.zip"
-          URL="https://github.com/ilblu/belaf/releases/download/${RELEASE_TAG}/${WINDOWS_ZIP}"
-
-          CHECKSUM_URL="${URL}.sha256"
-          HASH=$(curl -sL "${CHECKSUM_URL}" | cut -d' ' -f1)
-
-          cat > belaf.json <<EOF
-          {
-            "version": "${VERSION}",
-            "description": "Release management CLI for monorepos",
-            "homepage": "https://github.com/ilblu/belaf",
-            "license": "MIT",
-            "architecture": {
-              "64bit": {
-                "url": "${URL}",
-                "hash": "${HASH}"
-              }
-            },
-            "bin": "belaf.exe",
-            "checkver": {
-              "github": "https://github.com/ilblu/belaf"
-            },
-            "autoupdate": {
-              "architecture": {
-                "64bit": {
-                  "url": "https://github.com/ilblu/belaf/releases/download/v\$version/belaf-x86_64-pc-windows-msvc.zip"
-                }
-              }
-            }
-          }
-          EOF
-
-          git add belaf.json
-          git commit -m "chore: update belaf to v${VERSION}"
-          git push
+        run: .github/scripts/update-scoop.sh "${{ inputs.release_tag }}" scoop-bucket
