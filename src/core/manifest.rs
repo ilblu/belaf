@@ -24,6 +24,8 @@ pub use crate::core::wire::domain::{
 };
 use crate::core::wire::known::{BumpType, Ecosystem};
 
+pub mod cleanup;
+
 pub const MANIFEST_DIR: &str = "belaf/releases";
 
 impl ReleaseManifest {

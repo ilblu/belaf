@@ -6,7 +6,7 @@
 
 use anyhow::{Context, Result};
 use std::collections::HashMap;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::core::{
     bump::BumpConfig,
@@ -67,9 +67,15 @@ impl<'a> ReleasePipeline<'a> {
         let (_manifest, manifest_filename, manifest_repo_path) =
             self.create_manifest(&projects, &changelog_contents, &processed_commits)?;
 
+        let removed_manifests = self.remove_processed_manifests(&manifest_repo_path)?;
+
         info!("creating release commit...");
-        let all_changed_paths =
-            self.collect_all_paths(&changes, &changelog_paths, &manifest_repo_path);
+        let all_changed_paths = self.collect_all_paths(
+            &changes,
+            &changelog_paths,
+            &manifest_repo_path,
+            &removed_manifests,
+        );
         self.create_commit(&projects, &all_changed_paths)?;
 
         info!("pushing release branch to remote...");
@@ -348,12 +354,58 @@ impl<'a> ReleasePipeline<'a> {
         changes: &'b ChangeList,
         changelog_paths: &'b [RepoPathBuf],
         manifest_repo_path: &'b RepoPathBuf,
+        removed_manifests: &'b [RepoPathBuf],
     ) -> Vec<&'b crate::core::git::repository::RepoPath> {
         changes
             .paths()
             .chain(changelog_paths.iter().map(|p| p.as_ref()))
             .chain(std::iter::once(manifest_repo_path.as_ref()))
+            .chain(removed_manifests.iter().map(|p| p.as_ref()))
             .collect()
+    }
+
+    /// Delete the manifests whose releases have already been tagged, so they
+    /// travel out in this release's pull request.
+    ///
+    /// The github-app tries this first with a direct commit and cannot manage
+    /// it on a protected branch — it is not a bypass actor, and making it one
+    /// would defeat the protection to solve housekeeping. Doing it here instead
+    /// goes through the same reviewed pull request as everything else `prepare`
+    /// writes, and restores the directory's meaning: a manifest still present
+    /// is one still waiting to be released.
+    ///
+    /// Best-effort by construction — see `manifest::cleanup` for why the check
+    /// can only err towards leaving files in place.
+    fn remove_processed_manifests(&self, fresh_manifest: &RepoPathBuf) -> Result<Vec<RepoPathBuf>> {
+        let processed = crate::core::manifest::cleanup::find_processed_manifests(
+            &self.sess.repo,
+            Some(fresh_manifest),
+        );
+
+        let mut removed = Vec::new();
+        for entry in processed {
+            let abs = self.sess.repo.resolve_workdir(entry.path.as_ref());
+            match std::fs::remove_file(&abs) {
+                Ok(()) => {
+                    info!(
+                        "removed released manifest {} ({})",
+                        entry.path.escaped(),
+                        entry.tags.join(", ")
+                    );
+                    removed.push(entry.path);
+                }
+                // Already gone — the app managed the cleanup itself. Nothing
+                // to stage, nothing to report.
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => {
+                    warn!(
+                        "could not remove released manifest {}: {e}",
+                        entry.path.escaped()
+                    );
+                }
+            }
+        }
+        Ok(removed)
     }
 
     fn create_commit(

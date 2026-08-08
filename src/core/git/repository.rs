@@ -568,11 +568,21 @@ impl Repository {
             .map_err(|e| e.into())
     }
 
+    /// Commit `files` — each either written or deleted since the last commit.
+    ///
+    /// A path that no longer exists on disk is staged as a removal. `add_path`
+    /// reads the file out of the working tree, so it cannot express a deletion:
+    /// handing it a removed path fails the whole commit.
     pub fn create_commit(&self, message: &str, files: &[&RepoPath]) -> Result<()> {
         let mut index = self.repo.index()?;
 
         for file in files {
-            index.add_path(std::path::Path::new(std::str::from_utf8(&file.0)?))?;
+            let rel = std::path::Path::new(std::str::from_utf8(&file.0)?);
+            if self.resolve_workdir(file).exists() {
+                index.add_path(rel)?;
+            } else {
+                index.remove_path(rel)?;
+            }
         }
 
         index.write()?;

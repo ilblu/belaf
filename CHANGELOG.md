@@ -5,6 +5,46 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 4.1.0 — 2026-08-08
+
+`prepare` clears out the manifests whose releases already happened.
+
+A manifest is a request: tag and release these versions. The github-app removes
+it once it has, with a direct commit to the base branch — which on a protected
+branch it cannot do. The app is not a bypass actor and should not be one; that
+would defeat the protection to solve housekeeping. So on every protected repo
+the files accumulated, and a leftover manifest became indistinguishable from one
+that was never processed. The directory stopped telling you anything.
+
+`prepare` already opens a pull request and already has write access to its own
+branch, so the deletion travels the same reviewed path as everything else it
+writes.
+
+### Added
+
+- **Released manifests are removed in the release PR.** A manifest is done when
+  every tag it names exists — tags are created by the app on success, so an
+  existing tag *is* the evidence. The check is local: no API call, no
+  credentials.
+
+  It fails in the safe direction. If the tag fetch was incomplete (it is
+  deliberately fail-soft), fewer tags are visible, the manifest looks unfinished
+  and stays. The failure mode is always "leaves it lying", never "deletes
+  something unreleased". A manifest that cannot be parsed — a newer schema this
+  build does not understand — is left alone for the same reason, as is one that
+  names no releases at all, which would otherwise satisfy "every tag exists"
+  vacuously.
+
+  This restores the directory's meaning: a manifest still present is one still
+  waiting to be released. The app keeps trying first, so unprotected repos are
+  still cleaned up immediately.
+
+### Fixed
+
+- **The release commit can carry deletions.** It staged every path with
+  `add_path`, which reads the file out of the working tree — handing it a
+  removed path failed the entire commit.
+
 ## 4.0.0 — 2026-08-07
 
 Configured release units were not in the dependency graph.
