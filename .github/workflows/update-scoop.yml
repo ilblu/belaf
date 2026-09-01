@@ -34,7 +34,7 @@ jobs:
           persist-credentials: false
 
       - name: Checkout scoop-bucket
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           repository: ilblu/scoop-bucket
           token: ${{ secrets.SCOOP_BUCKET_TOKEN }}
