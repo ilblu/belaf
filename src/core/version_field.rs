@@ -8,7 +8,7 @@
 //!   the file in place to point at `new_version`, preserving
 //!   formatting (comments, ordering, indentation) wherever feasible
 //!
-//! The top-level [`read`] / [`write`] dispatchers map a
+//! The top-level [`read()`] / [`write()`] dispatchers map a
 //! [`VersionFieldSpec`] to the matching sub-module call.
 //!
 //! Phase D of `BELAF_MASTER_PLAN.md`.

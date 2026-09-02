@@ -396,7 +396,7 @@ impl ReleaseUnitGraphBuilder {
         self.complete_loading_with_groups(&[])
     }
 
-    /// Like [`complete_loading`], but binds `[[group]]` config entries to
+    /// Like [`Self::complete_loading`], but binds `[[group]]` config entries to
     /// the resulting `ReleaseUnitGraph`. Member names are resolved against the
     /// graph's user-facing names; an unknown name is a hard error.
     pub fn complete_loading_with_groups(

@@ -154,7 +154,7 @@ const CASCADE_INPUTS_STUB: &str = "\n# Declared path inputs: files that feed rel
 const ALLOW_UNCOVERED_HEADER: &str = "\n# Mobile apps detected — handed off to Bitrise / fastlane / Codemagic.\n# Belaf doesn't manage mobile app releases; these paths are listed in\n# allow_uncovered so the drift detector doesn't fire on them.\n[allow_uncovered]\n";
 
 /// Whether `config_text` was already populated by an auto-detect pass
-/// (the [`AUTO_DETECT_MARKER`] is present). Callers use this to decide
+/// (the `AUTO_DETECT_MARKER` is present). Callers use this to decide
 /// between the first-run append and the `--force` re-detect path.
 pub fn is_initialized(config_text: &str) -> bool {
     config_text.contains(AUTO_DETECT_MARKER)

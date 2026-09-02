@@ -59,6 +59,15 @@ jobs:
       - name: Run clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
 
+      # Doc links rot silently: a renamed module leaves a link pointing at
+      # nothing, and nothing fails. That is how a snapshot for a deleted
+      # `detector_review` module and links to a step replaced two releases
+      # ago survived. ~4s, and it keeps the count at zero.
+      - name: Check doc links
+        run: cargo doc --no-deps --all-features
+        env:
+          RUSTDOCFLAGS: -D warnings
+
   build:
     name: Build
     runs-on: ubuntu-latest

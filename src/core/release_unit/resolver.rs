@@ -10,10 +10,10 @@
 //! [`crate::core::bump`].
 //!
 //! The stages live in submodules so this file stays the pipeline and
-//! nothing else: [`glob`] expands glob-form blocks and owns the template
-//! engine, [`manifests`] builds [`ManifestFile`]s and validates
-//! `version_field`, [`parse`] holds the leaf-value parsers shared by every
-//! path, and [`checks`] holds the whole-set validations.
+//! nothing else: `glob` expands glob-form blocks and owns the template
+//! engine, `manifests` builds [`ManifestFile`]s and validates
+//! `version_field`, `parse` holds the leaf-value parsers shared by every
+//! path, and `checks` holds the whole-set validations.
 
 use std::collections::HashMap;
 

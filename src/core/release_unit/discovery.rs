@@ -1,10 +1,12 @@
 //! Auto-discovery of release units from the repo working tree.
 //!
 //! Walks the git index, dispatches each path to either a
-//! [`WorkspaceDiscoverer`] (for ecosystems with native workspace
+//! [`WorkspaceDiscoverer`](crate::core::ecosystem::format_handler::WorkspaceDiscoverer)
+//! (for ecosystems with native workspace
 //! protocols — cargo metadata, npm `workspaces`, maven `<modules>`)
-//! or to a [`FormatHandler`]'s single-package
-//! [`FormatHandler::discover_single`].
+//! or to a [`FormatHandler`](crate::core::ecosystem::format_handler::FormatHandler)'s
+//! single-package
+//! [`discover_single`](crate::core::ecosystem::format_handler::FormatHandler::discover_single).
 //!
 //! Two consumers feed [`crate::core::session::AppBuilder`]: this
 //! orchestrator (auto-discovered units) and the explicit

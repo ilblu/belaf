@@ -16,7 +16,8 @@
 //! - [`ExtRow`] — read-only externally-managed (mobile apps); listed
 //!   for context but never togglable.
 //!
-//! Adding a new ReleaseUnit shape = update [`from_detection`] (one
+//! Adding a new ReleaseUnit shape = update
+//! [`ReleaseUnitView::from_detection`] (one
 //! match arm). Adding a new render mode = one [`RenderMode`] variant
 //! plus a branch in `render`. The wizard adapters never touch
 //! classification logic.

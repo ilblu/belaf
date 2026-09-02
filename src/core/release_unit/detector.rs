@@ -5,7 +5,7 @@
 //! Each scanner is a pure filesystem walk; aggregation happens in
 //! [`detect_all`] and drift coverage is computed in
 //! [`detect_drift_from_report`]. Per-detector logic lives in
-//! [`scanners`]; shared filesystem helpers live in [`walk`].
+//! `scanners`; shared filesystem helpers live in `walk`.
 //!
 //! Classification — Bundle vs Hint vs ExternallyManaged — lives in the
 //! [`super::shape`] module. Consumers of [`DetectionReport`] should
@@ -49,7 +49,7 @@ impl DetectionReport {
 
     /// True when every detector hit is an externally-managed mobile
     /// app — used by the wizard to short-circuit into the
-    /// [`super::super::cmd::init::wizard::single_mobile`] flow.
+    /// `cmd::init::wizard::single_mobile` flow (private module).
     pub fn is_single_mobile_repo(&self) -> bool {
         !self.matches.is_empty()
             && self
@@ -412,7 +412,7 @@ pub fn detect_drift(
 
 /// Whether a detector-hit path is covered by a raw config path list
 /// (`[ignore_paths]` / `[allow_uncovered]` entries, trailing-slash
-/// tolerant). Shares [`is_covered`] with the drift check so init-time
+/// tolerant). Shares `is_covered` with the drift check so init-time
 /// auto-detect suppression and prepare-time drift silence agree on
 /// what "covered" means.
 pub fn is_covered_by_config_paths(path: &RepoPathBuf, config_paths: &[String]) -> bool {

@@ -324,7 +324,8 @@ pub mod syntax {
 
         /// Template for the branch `prepare` pushes the release commit to.
         /// `{base}` expands to the branch the run started from. Defaults to
-        /// [`DEFAULT_RELEASE_BRANCH_TEMPLATE`] when unset.
+        /// [`DEFAULT_RELEASE_BRANCH_TEMPLATE`](crate::core::git::refs::DEFAULT_RELEASE_BRANCH_TEMPLATE)
+        /// when unset.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub release_branch: Option<String>,
 

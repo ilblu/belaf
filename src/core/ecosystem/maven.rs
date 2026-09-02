@@ -28,11 +28,11 @@
 //! path is safer.
 //!
 //! Submodule layout:
-//! - [`pom_parser`] — streaming `pom.xml` parser + parent-cycle
+//! - `pom_parser` — streaming `pom.xml` parser + parent-cycle
 //!   detection.
-//! - [`property_resolver`] — `<parent>` chain inheritance + Maven
+//! - `property_resolver` — `<parent>` chain inheritance + Maven
 //!   CI-friendly property substitution.
-//! - [`pom_rewriter`] — [`MavenRewriter`] + the `quick_xml` rewriter
+//! - `pom_rewriter` — [`MavenRewriter`] + the `quick_xml` rewriter
 //!   that preserves comments and whitespace.
 
 use std::collections::HashMap;

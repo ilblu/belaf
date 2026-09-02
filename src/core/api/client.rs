@@ -168,7 +168,7 @@ impl ApiClient {
 
     /// Polls for an access token during the device authorization flow.
     ///
-    /// Should be called repeatedly with the device code from [`request_device_code`]
+    /// Should be called repeatedly with the device code from [`Self::request_device_code`]
     /// until an access token is returned or an error occurs.
     ///
     /// # Returns
