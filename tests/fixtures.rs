@@ -290,6 +290,67 @@ pub fn seed_kotlin_library_only<R: Seedable>(repo: &R) {
     repo.commit("seed kotlin-library-only fixture");
 }
 
+/// The real clikd Kotlin SDK, as it actually sits on `main` — not the
+/// idealised `sdks/kotlin` in [`seed_clikd_shape`].
+///
+/// Two details make it unversionable, and both are ordinary:
+/// `gradle.properties` carries Android knobs but no `version=`, and the
+/// only version in the build script is a literal nested inside
+/// `publishing { publications { register<MavenPublication>(…) } }`,
+/// where the line-anchored rewriter cannot reach it. No versioning
+/// plugin is applied — `maven-publish` publishes, it does not version.
+///
+/// belaf used to read that combination as "plugin-managed", write an
+/// `[allow_uncovered]` line, and thereby drop a published SDK from
+/// every release while silencing the one check that would have
+/// reported it. The fixture exists to keep that from coming back.
+pub fn seed_gradle_unversionable<R: Seedable>(repo: &R) {
+    repo.write_file(
+        "sdks/kotlin/gradle.properties",
+        "android.useAndroidX=true\norg.gradle.jvmargs=-Xmx2048m\n",
+    );
+    repo.write_file(
+        "sdks/kotlin/settings.gradle.kts",
+        "rootProject.name = \"clikd-sdk-kotlin\"\n",
+    );
+    repo.write_file(
+        "sdks/kotlin/build.gradle.kts",
+        r#"plugins {
+    id("com.android.library") version "9.1.0"
+    id("maven-publish")
+}
+
+android {
+    namespace = "com.clikd.sdk"
+}
+
+afterEvaluate {
+    publishing {
+        publications {
+            register<MavenPublication>("release") {
+                groupId = "com.clikd"
+                artifactId = "sdk"
+                version = "0.1.0"
+                from(components["release"])
+            }
+        }
+    }
+}
+"#,
+    );
+    repo.write_file(
+        "sdks/kotlin/src/main/kotlin/com/clikd/sdk/Sdk.kt",
+        "package com.clikd.sdk\nclass Sdk\n",
+    );
+
+    Command::new("git")
+        .args(["add", "-A"])
+        .current_dir(repo.root())
+        .output()
+        .expect("git add");
+    repo.commit("seed gradle-unversionable fixture");
+}
+
 /// L.7 — `ios-only`. A repository containing nothing but an iOS app.
 /// Drives the Phase I.4 single-mobile-repo exit path: the wizard
 /// should suggest Bitrise/fastlane/Codemagic and exit without

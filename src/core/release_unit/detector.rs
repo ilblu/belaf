@@ -17,8 +17,8 @@ use crate::core::config::ConfigurationFile;
 use crate::core::git::repository::{RepoPathBuf, Repository};
 
 pub use super::shape::{
-    BundleKind, DetectedShape, DetectorMatch, ExtKind, HexagonalPrimary, HintKind,
-    JvmVersionSource, SingleProjectEcosystem,
+    BundleKind, DecisionKind, DetectedShape, DetectorMatch, ExtKind, GradleBuildFile,
+    HexagonalPrimary, HintKind, JvmUnwritableReason, JvmVersionSource, SingleProjectEcosystem,
 };
 
 use super::ResolvedReleaseUnit;
@@ -71,6 +71,10 @@ impl DetectionReport {
                     false
                 }
                 DetectedShape::ExternallyManaged(_) => false,
+                // Not a candidate: nothing is emitted for it, so counting
+                // it would promise the user a unit that init will not
+                // write. It surfaces through the drift report instead.
+                DetectedShape::NeedsDecision(_) => false,
             })
             .count()
     }
@@ -83,6 +87,12 @@ impl DetectionReport {
 pub struct UncoveredHit {
     pub path: RepoPathBuf,
     pub shape: DetectedShape,
+    /// The detector's own explanation for this hit, when it had one.
+    /// Carried through so the drift error can print the specific
+    /// remediation instead of the generic menu — for a
+    /// [`DetectedShape::NeedsDecision`] hit the generic menu's "add it
+    /// to `[allow_uncovered]`" is precisely the wrong advice.
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Default)]
@@ -96,22 +106,86 @@ impl DriftReport {
     }
 
     pub fn format_error(&self) -> String {
+        let (needs_decision, mut classifiable): (Vec<&UncoveredHit>, Vec<&UncoveredHit>) = self
+            .uncovered
+            .iter()
+            .partition(|h| h.shape.is_needs_decision());
+
+        // One path, one instruction. A directory can raise several hits
+        // — `sdks/kotlin` is both an SDK-cascade hint and an
+        // unversionable JVM project — and listing it in both sections
+        // would print the generic menu, `[allow_uncovered]` and all,
+        // right above the specific fix that says not to do that. The
+        // decision wins: the other hits describe a unit that does not
+        // exist until it is resolved.
+        classifiable.retain(|h| !needs_decision.iter().any(|d| d.path == h.path));
+
         let mut s = String::new();
         s.push_str(
             "uncovered release artifacts: detector hits that are not part of any ReleaseUnit, ignore_paths, or allow_uncovered.\n\n",
         );
-        s.push_str("The following paths match known detector patterns but are not part of any ReleaseUnit:\n");
-        for h in &self.uncovered {
-            s.push_str(&format!(
-                "  - {:50} ({})\n",
-                h.path.escaped(),
-                drift_shape_label(&h.shape),
-            ));
+
+        if !classifiable.is_empty() {
+            s.push_str("The following paths match known detector patterns but are not part of any ReleaseUnit:\n");
+            for h in &classifiable {
+                s.push_str(&format!(
+                    "  - {:50} ({})\n",
+                    h.path.escaped(),
+                    drift_shape_label(&h.shape),
+                ));
+            }
+            s.push_str(
+                "\nChoose one:\n  → run `belaf init --ci --auto-detect --force` to re-detect bundles and append release_unit blocks to belaf/config.toml (idempotent — paths already covered by the config are never re-emitted)\n  → add explicit [release_unit.<name>] entries\n  → if intentional (mobile app, archive, etc.), add to [ignore_paths] or [allow_uncovered]\n",
+            );
         }
-        s.push_str(
-            "\nChoose one:\n  → run `belaf init --ci --auto-detect --force` to re-detect bundles and append release_unit blocks to belaf/config.toml (idempotent — paths already covered by the config are never re-emitted)\n  → add explicit [release_unit.<name>] entries\n  → if intentional (mobile app, archive, etc.), add to [ignore_paths] or [allow_uncovered]\n\nAborting prepare. No releases will be drafted.",
-        );
+
+        // Reported separately, and never under the menu above: these
+        // are hits the detector recognised but could not classify, so
+        // "run --auto-detect again" would produce the same non-answer,
+        // and "add it to [allow_uncovered]" would bury a real release
+        // artifact. Each carries the specific fix from the detector
+        // that raised it.
+        if !needs_decision.is_empty() {
+            if !classifiable.is_empty() {
+                s.push('\n');
+            }
+            s.push_str(
+                "The following paths are release artifacts belaf recognises but cannot version on its own. Re-running auto-detect will not resolve them — each needs one decision:\n",
+            );
+            for h in &needs_decision {
+                s.push_str(&format!(
+                    "  - {:50} ({})\n",
+                    h.path.escaped(),
+                    drift_shape_label(&h.shape),
+                ));
+                if let Some(note) = &h.note {
+                    s.push_str(&format!("      → {note}\n"));
+                }
+            }
+        }
+
+        s.push_str("\nAborting prepare. No releases will be drafted.");
         s
+    }
+}
+
+impl DriftReport {
+    /// The uncovered paths, each listed once, in first-seen order.
+    ///
+    /// One directory can raise several hits — `sdks/kotlin` is both an
+    /// SDK-cascade hint and an unversionable JVM project — so the raw
+    /// `uncovered` vec can name the same path more than once. This is
+    /// what `belaf prepare` POSTs to the dashboard's Drift tab, where
+    /// one problem shown as two rows reads as two problems.
+    pub fn unique_paths(&self) -> Vec<String> {
+        let mut out: Vec<String> = Vec::with_capacity(self.uncovered.len());
+        for h in &self.uncovered {
+            let p = h.path.escaped().to_string();
+            if !out.contains(&p) {
+                out.push(p);
+            }
+        }
+        out
     }
 }
 
@@ -148,13 +222,23 @@ fn drift_shape_label(s: &DetectedShape) -> String {
                 "JVM (plugin-managed) — release flow owned by Gradle plugin".to_string()
             }
         },
+        DetectedShape::NeedsDecision(d) => match d {
+            DecisionKind::JvmVersionUnwritable { build_file, .. } => {
+                format!("JVM library — no version belaf can write ({build_file})")
+            }
+        },
     }
 }
 
-fn jvm_label(s: &JvmVersionSource) -> &'static str {
+/// Names the file the version is read from. Deliberately not the
+/// wizard's phrasing ("gradle.properties (recommended)"): the drift
+/// report states what was found, and nesting a recommendation inside
+/// the label's own parentheses reads as
+/// `jvm library (gradle.properties (recommended))`.
+fn jvm_label(s: &JvmVersionSource) -> String {
     match s {
-        JvmVersionSource::GradleProperties => "gradle.properties (recommended)",
-        JvmVersionSource::BuildGradleKtsLiteral => "literal version in build.gradle(.kts)",
+        JvmVersionSource::GradleProperties => "gradle.properties".to_string(),
+        JvmVersionSource::BuildScriptLiteral { build_file } => build_file.filename().to_string(),
     }
 }
 
@@ -230,6 +314,7 @@ pub fn detect_drift_from_report(
         .map(|m| UncoveredHit {
             path: m.path.clone(),
             shape: m.shape.clone(),
+            note: m.note.clone(),
         })
         .collect();
 
@@ -412,12 +497,14 @@ mod tests {
                     shape: DetectedShape::Bundle(BundleKind::HexagonalCargo {
                         primary: HexagonalPrimary::Bin,
                     }),
+                    note: None,
                 },
                 UncoveredHit {
                     path: RepoPathBuf::new(b"sdks/python"),
                     shape: DetectedShape::Bundle(BundleKind::JvmLibrary {
                         version_source: JvmVersionSource::GradleProperties,
                     }),
+                    note: None,
                 },
             ],
         };
@@ -429,6 +516,158 @@ mod tests {
         assert!(msg.contains("[ignore_paths]"));
         assert!(msg.contains("[allow_uncovered]"));
         assert!(msg.contains("Aborting prepare"));
+    }
+
+    #[test]
+    fn drift_needs_decision_carries_its_own_remedy_not_the_generic_menu() {
+        let r = DriftReport {
+            uncovered: vec![UncoveredHit {
+                path: RepoPathBuf::new(b"sdks/kotlin"),
+                shape: DetectedShape::NeedsDecision(DecisionKind::JvmVersionUnwritable {
+                    build_file: GradleBuildFile::Kts,
+                    reason: JvmUnwritableReason::NotAtLineStart { line: 142 },
+                }),
+                note: Some("move the version to gradle.properties".to_string()),
+            }],
+        };
+        let msg = r.format_error();
+        assert!(msg.contains("sdks/kotlin"));
+        assert!(msg.contains("move the version to gradle.properties"));
+        assert!(msg.contains("Aborting prepare"));
+        // The generic menu is what tells a user to reach for
+        // [allow_uncovered] — the exact move that drops the artifact.
+        // It must not appear for a hit that has its own remedy.
+        assert!(
+            !msg.contains("[allow_uncovered]"),
+            "needs-decision hits must not be offered the allow_uncovered escape: {msg}"
+        );
+        assert!(
+            !msg.contains("belaf init --ci --auto-detect"),
+            "re-running auto-detect cannot resolve an unclassifiable hit: {msg}"
+        );
+    }
+
+    #[test]
+    fn drift_mixes_both_sections_when_both_kinds_are_present() {
+        let r = DriftReport {
+            uncovered: vec![
+                UncoveredHit {
+                    path: RepoPathBuf::new(b"apps/services/foobar"),
+                    shape: DetectedShape::Bundle(BundleKind::HexagonalCargo {
+                        primary: HexagonalPrimary::Bin,
+                    }),
+                    note: None,
+                },
+                UncoveredHit {
+                    path: RepoPathBuf::new(b"sdks/kotlin"),
+                    shape: DetectedShape::NeedsDecision(DecisionKind::JvmVersionUnwritable {
+                        build_file: GradleBuildFile::Kts,
+                        reason: JvmUnwritableReason::Absent,
+                    }),
+                    note: Some("add version= to gradle.properties".to_string()),
+                },
+            ],
+        };
+        let msg = r.format_error();
+        assert!(msg.contains("apps/services/foobar"));
+        assert!(msg.contains("sdks/kotlin"));
+        assert!(msg.contains("[allow_uncovered]"), "{msg}");
+        assert!(msg.contains("add version= to gradle.properties"), "{msg}");
+        assert!(msg.contains("needs one decision"), "{msg}");
+    }
+
+    #[test]
+    fn a_path_with_both_hit_kinds_is_listed_once_under_the_decision() {
+        // `sdks/kotlin` legitimately raises two hits: an SDK-cascade
+        // hint (it sits under sdks/*) and the unversionable-JVM
+        // decision. Printing both would put the generic menu — which
+        // ends in "add to [allow_uncovered]" — directly above the fix
+        // telling the user not to.
+        let r = DriftReport {
+            uncovered: vec![
+                UncoveredHit {
+                    path: RepoPathBuf::new(b"sdks/kotlin"),
+                    shape: DetectedShape::Hint(HintKind::SdkCascade),
+                    note: None,
+                },
+                UncoveredHit {
+                    path: RepoPathBuf::new(b"sdks/kotlin"),
+                    shape: DetectedShape::NeedsDecision(DecisionKind::JvmVersionUnwritable {
+                        build_file: GradleBuildFile::Kts,
+                        reason: JvmUnwritableReason::NotAtLineStart { line: 16 },
+                    }),
+                    note: Some("move the version to gradle.properties".to_string()),
+                },
+            ],
+        };
+        let msg = r.format_error();
+        assert_eq!(
+            msg.matches("sdks/kotlin").count(),
+            1,
+            "the path must be listed exactly once: {msg}"
+        );
+        assert!(!msg.contains("[allow_uncovered]"), "{msg}");
+        assert!(
+            msg.contains("move the version to gradle.properties"),
+            "{msg}"
+        );
+    }
+
+    #[test]
+    fn unique_paths_lists_a_multi_hit_directory_once() {
+        let r = DriftReport {
+            uncovered: vec![
+                UncoveredHit {
+                    path: RepoPathBuf::new(b"sdks/kotlin"),
+                    shape: DetectedShape::Hint(HintKind::SdkCascade),
+                    note: None,
+                },
+                UncoveredHit {
+                    path: RepoPathBuf::new(b"sdks/kotlin"),
+                    shape: DetectedShape::NeedsDecision(DecisionKind::JvmVersionUnwritable {
+                        build_file: GradleBuildFile::Kts,
+                        reason: JvmUnwritableReason::Absent,
+                    }),
+                    note: None,
+                },
+                UncoveredHit {
+                    path: RepoPathBuf::new(b"apps/services/foo"),
+                    shape: DetectedShape::Bundle(BundleKind::HexagonalCargo {
+                        primary: HexagonalPrimary::Bin,
+                    }),
+                    note: None,
+                },
+            ],
+        };
+        assert_eq!(
+            r.unique_paths(),
+            vec!["sdks/kotlin".to_string(), "apps/services/foo".to_string()],
+            "first-seen order, no repeats"
+        );
+    }
+
+    #[test]
+    fn needs_decision_is_a_drift_signal_and_not_a_unit_candidate() {
+        let shape = DetectedShape::NeedsDecision(DecisionKind::JvmVersionUnwritable {
+            build_file: GradleBuildFile::Groovy,
+            reason: JvmUnwritableReason::Absent,
+        });
+        assert!(
+            is_drift_signal(&shape),
+            "an unclassifiable artifact must keep being reported"
+        );
+        let report = DetectionReport {
+            matches: vec![DetectorMatch {
+                shape,
+                path: RepoPathBuf::new(b"libs/jvm"),
+                note: None,
+            }],
+        };
+        assert_eq!(
+            report.count_release_unit_candidates(),
+            0,
+            "nothing is emitted for it, so it must not be counted as a candidate"
+        );
     }
 
     #[test]

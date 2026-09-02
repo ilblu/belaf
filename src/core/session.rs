@@ -281,11 +281,7 @@ impl AppSession {
             &self.ignore_paths,
             &self.allow_uncovered,
         );
-        drift
-            .uncovered
-            .iter()
-            .map(|h| h.path.escaped().to_string())
-            .collect()
+        drift.unique_paths()
     }
 
     /// Cached [`detect_all`](crate::core::release_unit::detector::detect_all)

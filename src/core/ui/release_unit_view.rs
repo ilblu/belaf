@@ -32,7 +32,7 @@ use ratatui::Frame;
 use super::glyphs;
 use crate::core::git::repository::RepoPathBuf;
 use crate::core::release_unit::detector::{
-    BundleKind, DetectedShape, DetectionReport, ExtKind, HexagonalPrimary, HintKind,
+    BundleKind, DecisionKind, DetectedShape, DetectionReport, ExtKind, HexagonalPrimary, HintKind,
     JvmVersionSource,
 };
 
@@ -122,6 +122,21 @@ pub struct ExtRow {
     pub path: RepoPathBuf,
 }
 
+/// A recognised release artifact the detector could not classify.
+/// Deliberately its own row type rather than an [`ExtRow`] variant:
+/// an Ext row renders locked, which reads as "handled elsewhere,
+/// nothing to do here" — the exact impression that must not be given
+/// for a path init is about to leave out of the config entirely.
+#[derive(Clone, Debug)]
+pub struct DecisionRow {
+    pub label: String,
+    pub kind_label: String,
+    pub ecosystem: String,
+    pub path: RepoPathBuf,
+    /// The detector's remediation sentence, rendered under the row.
+    pub remedy: Option<String>,
+}
+
 /// Hint metadata that decorates a Standalone row. Rendered as
 /// `↳ <label>` after the row's secondary text.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -166,6 +181,7 @@ pub struct ReleaseUnitView {
     pub bundles: Vec<BundleRow>,
     pub units: Vec<UnitRow>,
     pub externally_managed: Vec<ExtRow>,
+    pub needs_decision: Vec<DecisionRow>,
     pub groups: Vec<GroupRowDisplay>,
 }
 
@@ -177,6 +193,7 @@ pub enum RowIdx {
     Unit(usize),
     Group(usize),
     Ext(usize),
+    Decision(usize),
 }
 
 /// Selects which row order the view renders.
@@ -243,6 +260,7 @@ impl ReleaseUnitView {
         let mut hints_by_path: std::collections::HashMap<String, Vec<HintAnnotation>> =
             std::collections::HashMap::new();
         let mut ext_rows: Vec<ExtRow> = Vec::new();
+        let mut decision_rows: Vec<DecisionRow> = Vec::new();
 
         for m in &report.matches {
             match &m.shape {
@@ -282,6 +300,21 @@ impl ReleaseUnitView {
                         kind_label: kind.to_string(),
                         ecosystem: eco.to_string(),
                         path: m.path.clone(),
+                    });
+                }
+                DetectedShape::NeedsDecision(d) => {
+                    let (kind, eco) = match d {
+                        DecisionKind::JvmVersionUnwritable { build_file, .. } => (
+                            format!("JVM library — no version belaf can write ({build_file})"),
+                            "kotlin",
+                        ),
+                    };
+                    decision_rows.push(DecisionRow {
+                        label: m.path.escaped().to_string(),
+                        kind_label: kind,
+                        ecosystem: eco.to_string(),
+                        path: m.path.clone(),
+                        remedy: m.note.clone(),
                     });
                 }
             }
@@ -333,6 +366,7 @@ impl ReleaseUnitView {
             bundles,
             units,
             externally_managed: ext_rows,
+            needs_decision: decision_rows,
             groups: Vec::new(),
         }
     }
@@ -404,6 +438,7 @@ impl ReleaseUnitView {
             bundles: Vec::new(),
             units,
             externally_managed: Vec::new(),
+            needs_decision: Vec::new(),
             groups,
         };
         (view, overlay)
@@ -431,6 +466,7 @@ impl ReleaseUnitView {
             self.bundles.len()
                 + self.units.len()
                 + self.externally_managed.len()
+                + self.needs_decision.len()
                 + self.groups.len(),
         );
         for i in 0..self.bundles.len() {
@@ -464,12 +500,17 @@ impl ReleaseUnitView {
         for i in 0..self.externally_managed.len() {
             out.push(RowIdx::Ext(i));
         }
+        // Last on purpose: these are the rows the user must act on, so
+        // they sit closest to the summary line and the prompt.
+        for i in 0..self.needs_decision.len() {
+            out.push(RowIdx::Decision(i));
+        }
         out
     }
 
     /// Toggle a Bundle or Unit row. Returns `true` if the row was
-    /// togglable and its state changed; `false` for Ext rows or
-    /// out-of-bounds indices. Mode-checked: in [`RenderMode::Dashboard`]
+    /// togglable and its state changed; `false` for Ext / Decision rows
+    /// or out-of-bounds indices. Mode-checked: in [`RenderMode::Dashboard`]
     /// nothing toggles (caller's responsibility to gate).
     pub fn toggle(&mut self, idx: RowIdx) -> bool {
         match idx {
@@ -503,6 +544,12 @@ impl ReleaseUnitView {
                 }
             }
             RowIdx::Ext(_) => {}
+            // Nothing to toggle: a decision row has no config to
+            // include or exclude. Deselecting it would mean writing an
+            // `[ignore_paths]` entry, which is the same silent drop
+            // the class exists to prevent — the user resolves it in the
+            // build files, not here.
+            RowIdx::Decision(_) => {}
         }
         false
     }
@@ -820,6 +867,7 @@ impl ReleaseUnitView {
                     .iter()
                     .map(|e| e.label.chars().count()),
             )
+            .chain(self.needs_decision.iter().map(|d| d.label.chars().count()))
             .max()
             .unwrap_or(0)
     }
@@ -839,6 +887,7 @@ impl ReleaseUnitView {
                 RowIdx::Bundle(_) => "Bundles",
                 RowIdx::Unit(_) => "Standalone",
                 RowIdx::Ext(_) => "Externally-managed",
+                RowIdx::Decision(_) => "Needs a decision",
                 RowIdx::Group(_) => "Groups",
             };
             if last_section != Some(section) {
@@ -970,6 +1019,44 @@ impl ReleaseUnitView {
                 ]))
                 .style(bg)
             }
+            RowIdx::Decision(i) => {
+                let d = &self.needs_decision[i];
+                let pad = label_width.saturating_sub(d.label.chars().count());
+                let padded = format!("{}{}", d.label, " ".repeat(pad));
+                let mut lines = vec![Line::from(vec![
+                    Span::styled("    ", Style::default()),
+                    Span::styled(
+                        format!("{} ", glyphs::attention()),
+                        Style::default().fg(Color::Yellow),
+                    ),
+                    Span::styled(
+                        glyphs::ecosystem(&d.ecosystem),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(
+                        padded,
+                        if is_current {
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD)
+                        } else {
+                            Style::default().fg(Color::Yellow)
+                        },
+                    ),
+                    Span::styled("  ", Style::default()),
+                    Span::styled(d.kind_label.clone(), Style::default().fg(Color::Gray)),
+                ])];
+                // The remedy is the whole value of the row — without it
+                // the user is told something is wrong and not what to
+                // do, which is how the path ends up in allow_uncovered.
+                if let Some(remedy) = &d.remedy {
+                    lines.push(Line::from(vec![
+                        Span::styled("        \u{21B3} ", Style::default().fg(Color::DarkGray)),
+                        Span::styled(remedy.clone(), Style::default().fg(Color::DarkGray)),
+                    ]));
+                }
+                ListItem::new(lines).style(bg)
+            }
         }
     }
 }
@@ -1035,7 +1122,7 @@ pub fn bundle_kind_label(b: &BundleKind) -> String {
         BundleKind::JvmLibrary { version_source } => {
             let v = match version_source {
                 JvmVersionSource::GradleProperties => "gradle.properties",
-                JvmVersionSource::BuildGradleKtsLiteral => "build.gradle.kts",
+                JvmVersionSource::BuildScriptLiteral { build_file } => build_file.filename(),
             };
             format!("jvm-library/{v}")
         }
@@ -1052,6 +1139,7 @@ pub fn render_summary(view: &ReleaseUnitView) -> String {
     let bundles = view.bundles.len();
     let units = view.units.len();
     let ext = view.externally_managed.len();
+    let decisions = view.needs_decision.len();
     let hints: usize = view.units.iter().map(|u| u.annotations.len()).sum();
     let togglable = bundles + units;
     let mut out = format!("{togglable} togglable");
@@ -1060,6 +1148,9 @@ pub fn render_summary(view: &ReleaseUnitView) -> String {
     }
     if ext > 0 {
         out.push_str(&format!(" · {ext} externally-managed"));
+    }
+    if decisions > 0 {
+        out.push_str(&format!(" · {decisions} needing a decision"));
     }
     out
 }
@@ -1071,7 +1162,9 @@ pub fn render_summary(view: &ReleaseUnitView) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::release_unit::detector::{DetectionReport, DetectorMatch};
+    use crate::core::release_unit::detector::{
+        DetectionReport, DetectorMatch, GradleBuildFile, JvmUnwritableReason,
+    };
 
     fn standalone(name: &str, prefix: &str, eco: &str, selected: bool) -> StandaloneEntry {
         StandaloneEntry {
@@ -1081,6 +1174,48 @@ mod tests {
             selected,
             ecosystem: Some(eco.into()),
         }
+    }
+
+    #[test]
+    fn needs_decision_gets_its_own_row_not_a_locked_ext_row() {
+        // A locked Ext row reads "handled elsewhere". For a path init
+        // is about to leave out of the config entirely, that is the one
+        // impression the wizard must not give.
+        let mut r = DetectionReport::default();
+        r.matches.push(DetectorMatch {
+            shape: DetectedShape::NeedsDecision(DecisionKind::JvmVersionUnwritable {
+                build_file: GradleBuildFile::Kts,
+                reason: JvmUnwritableReason::NotAtLineStart { line: 9 },
+            }),
+            path: RepoPathBuf::new(b"sdks/kotlin"),
+            note: Some("move the version to gradle.properties".to_string()),
+        });
+        let view = ReleaseUnitView::from_detection(&r, &[], &std::collections::HashSet::new());
+
+        assert_eq!(view.needs_decision.len(), 1);
+        assert!(
+            view.externally_managed.is_empty(),
+            "must not be filed as externally-managed"
+        );
+        let row = &view.needs_decision[0];
+        assert_eq!(row.label, "sdks/kotlin");
+        assert_eq!(
+            row.remedy.as_deref(),
+            Some("move the version to gradle.properties")
+        );
+
+        // Present as a cursor stop, but never togglable: there is no
+        // config to include or exclude.
+        let flat = view.flat_indices();
+        assert!(flat.contains(&RowIdx::Decision(0)), "{flat:?}");
+        let mut view = view;
+        assert!(!view.toggle(RowIdx::Decision(0)));
+
+        assert!(
+            render_summary(&view).contains("1 needing a decision"),
+            "{}",
+            render_summary(&view)
+        );
     }
 
     #[test]

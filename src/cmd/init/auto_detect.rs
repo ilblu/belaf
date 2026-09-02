@@ -2,7 +2,7 @@
 //! release_unit / allow_uncovered TOML blocks ready to be appended
 //! to `belaf/config.toml`.
 //!
-//! Three classes of dispatch correspond directly to the
+//! Four classes of dispatch correspond directly to the
 //! [`DetectedShape`] taxonomy in [`crate::core::release_unit::shape`]:
 //!
 //! - `Bundle(_)`  → `bundle::emit_all`: writes a `[release_unit.<name>]`
@@ -14,6 +14,13 @@
 //! - `ExternallyManaged(_)` → [`register_externally_managed`]: collects
 //!   the path for the trailing `[allow_uncovered]` block so the drift
 //!   detector stays silent on it.
+//! - `NeedsDecision(_)` → [`register_needs_decision`]: writes **no**
+//!   config at all and raises advice instead. Auto-detect exists to
+//!   turn what it understood into config; a hit it did not understand
+//!   has no correct block to write, and the one block that would make
+//!   the message go away — an `[allow_uncovered]` line — is the one
+//!   that loses the artifact. So the path stays uncovered on purpose
+//!   and the drift check keeps naming it until a human answers.
 //!
 //! That structural separation eliminates the 3.0.x bug class where
 //! `SdkCascadeMember` (a hint) was accidentally reachable from a
@@ -24,7 +31,9 @@ use std::collections::{HashMap, HashSet};
 use super::toml_util::toml_quote;
 use crate::core::git::repository::{RepoPathBuf, Repository};
 use crate::core::release_unit::bundle;
-use crate::core::release_unit::detector::{self, DetectedShape, DetectorMatch, ExtKind, HintKind};
+use crate::core::release_unit::detector::{
+    self, DecisionKind, DetectedShape, DetectorMatch, ExtKind, HintKind,
+};
 use crate::core::release_unit::resolver::{
     default_manifest_filename_for_ecosystem, default_version_field_for_ecosystem,
 };
@@ -87,6 +96,10 @@ pub struct DetectionCounters {
     pub mobile_ios: usize,
     pub mobile_android: usize,
     pub jvm_plugin_managed: usize,
+    /// Hits that emitted nothing because belaf could not classify them.
+    /// Counted so the wizard summary and the `--ci` log line can say
+    /// how many decisions are outstanding.
+    pub needs_decision: usize,
     pub nested_npm_workspace: usize,
     pub sdk_cascade_member: usize,
     pub single_project: usize,
@@ -259,6 +272,9 @@ pub fn run_with_cascade(
             DetectedShape::ExternallyManaged(e) => {
                 register_externally_managed(&mut allow_uncovered, &mut counters, m, *e);
             }
+            DetectedShape::NeedsDecision(d) => {
+                register_needs_decision(&mut advice, &mut counters, m, d);
+            }
         }
     }
 
@@ -427,6 +443,30 @@ fn register_externally_managed(
     allow_uncovered.push(format!("{}/", m.path.escaped()));
 }
 
+/// Unclassifiable hit: advice only, no config. Note the missing
+/// `allow_uncovered.push` — that is the entire point of the class, not
+/// an omission.
+fn register_needs_decision(
+    advice: &mut Vec<String>,
+    counters: &mut DetectionCounters,
+    m: &DetectorMatch,
+    decision: &DecisionKind,
+) {
+    counters.needs_decision += 1;
+    let path = m.path.escaped();
+    let detail = match m.note.as_deref() {
+        Some(n) => n.to_string(),
+        None => match decision {
+            DecisionKind::JvmVersionUnwritable { build_file, .. } => {
+                format!("JVM project with no version belaf can write ({build_file})")
+            }
+        },
+    };
+    advice.push(format!(
+        "{path} needs a decision — {detail}.\nLeft out of config deliberately: `prepare` will keep reporting it until it is resolved.",
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,6 +486,79 @@ mod tests {
             r.toml_snippet
         );
         assert_eq!(r.counters.total_release_unit_candidates(), 0);
+    }
+
+    /// A Gradle project belaf cannot version must leave the config
+    /// untouched — in particular it must not gain an `[allow_uncovered]`
+    /// line. That line is what made the clikd Kotlin SDK vanish: it
+    /// removed the path from the drift report while leaving it out of
+    /// every release, so the gap had no way of surfacing.
+    #[test]
+    fn unclassifiable_jvm_project_writes_no_config() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output();
+        let sdk = dir.path().join("sdks/kotlin");
+        std::fs::create_dir_all(&sdk).unwrap();
+        std::fs::write(
+            sdk.join("gradle.properties"),
+            "android.useAndroidX=true\norg.gradle.jvmargs=-Xmx2048m\n",
+        )
+        .unwrap();
+        std::fs::write(
+            sdk.join("build.gradle.kts"),
+            "plugins {\n    id(\"maven-publish\")\n}\n\npublishing {\n    publications {\n        register<MavenPublication>(\"release\") {\n            version = \"0.1.0\"\n        }\n    }\n}\n",
+        )
+        .unwrap();
+
+        let repo = Repository::open(dir.path()).expect("open");
+        let r = run(&repo);
+
+        assert!(
+            r.allow_uncovered_paths.is_empty(),
+            "must not silence the drift detector for it: {:?}",
+            r.allow_uncovered_paths
+        );
+        assert!(
+            !r.body_snippet.contains("[release_unit."),
+            "must not invent a release_unit block: {}",
+            r.body_snippet
+        );
+        assert_eq!(r.counters.needs_decision, 1);
+        assert_eq!(r.counters.jvm_library, 0);
+        assert_eq!(r.counters.jvm_plugin_managed, 0);
+        assert!(
+            r.advice.iter().any(|a| a.contains("sdks/kotlin")),
+            "the user has to be told: {:?}",
+            r.advice
+        );
+    }
+
+    /// The counterpart: a real versioning plugin still gets the
+    /// hand-off it always had.
+    #[test]
+    fn plugin_managed_jvm_project_still_lands_in_allow_uncovered() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let _ = std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output();
+        let sdk = dir.path().join("sdks/kotlin");
+        std::fs::create_dir_all(&sdk).unwrap();
+        std::fs::write(
+            sdk.join("build.gradle.kts"),
+            "plugins { id(\"pl.allegro.tech.build.axion-release\") version \"1.18.1\" }\n",
+        )
+        .unwrap();
+
+        let repo = Repository::open(dir.path()).expect("open");
+        let r = run(&repo);
+
+        assert_eq!(r.allow_uncovered_paths, vec!["sdks/kotlin/".to_string()]);
+        assert_eq!(r.counters.jvm_plugin_managed, 1);
+        assert_eq!(r.counters.needs_decision, 0);
     }
 
     #[test]

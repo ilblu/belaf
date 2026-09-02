@@ -29,5 +29,6 @@ ReleaseUnitView {
     ],
     units: [],
     externally_managed: [],
+    needs_decision: [],
     groups: [],
 }

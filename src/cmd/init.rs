@@ -97,6 +97,11 @@ struct InitSummary {
     /// Detector hits suppressed because the existing config already
     /// covers them (`[allow_uncovered]` or a `[release_unit]` block).
     already_covered: usize,
+    /// Detector hits init deliberately wrote no config for because it
+    /// could not classify them. Reported so a scripted caller learns
+    /// about the gap here rather than at the next `prepare`: init
+    /// succeeding is not the same as init having covered everything.
+    needs_decision: usize,
     /// Config-free detector advice (hint-shape output); part of the
     /// `--ci` JSON so scripted consumers see it even on re-runs, where
     /// it is no longer appended to config.toml.
@@ -113,6 +118,7 @@ struct InitCiStatus<'a> {
     release_units_detected: usize,
     ecosystems: &'a [String],
     already_covered: usize,
+    needs_decision: usize,
     advice: &'a [String],
 }
 
@@ -123,6 +129,7 @@ fn emit_init_ci_status(summary: &InitSummary) {
         release_units_detected: summary.release_units_detected,
         ecosystems: &summary.ecosystems,
         already_covered: summary.already_covered,
+        needs_decision: summary.needs_decision,
         advice: &summary.advice,
     };
     match serde_json::to_string_pretty(&payload) {
@@ -166,7 +173,7 @@ fn run_auto_detect(force: bool) -> Result<InitSummary> {
     }
 
     info!(
-        "auto-detect: {} ReleaseUnit candidates ({} hexagonal cargo, {} tauri, {} jvm-library, {} sdk-cascade), {} mobile-app warnings → [allow_uncovered], {} already covered by existing config",
+        "auto-detect: {} ReleaseUnit candidates ({} hexagonal cargo, {} tauri, {} jvm-library, {} sdk-cascade), {} mobile-app warnings → [allow_uncovered], {} already covered by existing config, {} needing a decision (no config written)",
         result.counters.total_release_unit_candidates(),
         result.counters.hexagonal_cargo,
         result.counters.tauri_single_source + result.counters.tauri_legacy,
@@ -174,6 +181,7 @@ fn run_auto_detect(force: bool) -> Result<InitSummary> {
         result.counters.sdk_cascade_member,
         result.counters.total_mobile_warnings(),
         result.counters.already_covered,
+        result.counters.needs_decision,
     );
     for a in &result.advice {
         info!("auto-detect hint: {}", a.replace('\n', " "));
@@ -205,6 +213,7 @@ fn run_auto_detect(force: bool) -> Result<InitSummary> {
         release_units_detected: units.len(),
         ecosystems,
         already_covered: result.counters.already_covered,
+        needs_decision: result.counters.needs_decision,
         advice: result.advice,
     })
 }

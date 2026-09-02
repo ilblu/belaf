@@ -1,0 +1,7 @@
+---
+source: tests/test_repo_variants.rs
+expression: "& rendered"
+---
+ ▲  Needs a decision
+    ! sdks/kotlin  JVM library — no version belaf can write (build.gradle.kts)
+        ↳ JVM project with no version belaf can write: build.gradle.kts:16 assigns `version = "…"` i

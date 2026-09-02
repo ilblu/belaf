@@ -46,6 +46,7 @@ pub fn category_glyph(name: &str) -> &'static str {
         (IconMode::Unicode, "Standalone") => "\u{25C6}", // ◆ Black Diamond
         (IconMode::Unicode, "Externally-managed") => "\u{25C7}", // ◇ White Diamond
         (IconMode::Unicode, "Drift") => "\u{25B2}",   // ▲ Up Triangle
+        (IconMode::Unicode, "Needs a decision") => "\u{25B2}", // ▲ Up Triangle
         (IconMode::Unicode, _) => "\u{25CF}",         // ● Black Circle
 
         // Nerd Font (Material Design Icons)
@@ -53,6 +54,7 @@ pub fn category_glyph(name: &str) -> &'static str {
         (IconMode::Nerd, "Standalone") => "\u{f01a3}", // md-cube_outline
         (IconMode::Nerd, "Externally-managed") => "\u{f19a8}", // md-cellphone_link
         (IconMode::Nerd, "Drift") => "\u{f0026}",   // md-alert
+        (IconMode::Nerd, "Needs a decision") => "\u{f0026}", // md-alert
         (IconMode::Nerd, _) => "\u{f02fd}",         // md-help_circle_outline
 
         // ASCII
@@ -60,6 +62,7 @@ pub fn category_glyph(name: &str) -> &'static str {
         (IconMode::Ascii, "Standalone") => "[#]",
         (IconMode::Ascii, "Externally-managed") => "[~]",
         (IconMode::Ascii, "Drift") => "[!]",
+        (IconMode::Ascii, "Needs a decision") => "[!]",
         (IconMode::Ascii, _) => "[?]",
     }
 }
@@ -82,6 +85,17 @@ pub fn locked() -> &'static str {
         IconMode::Unicode => "\u{2014}", // — em dash
         IconMode::Nerd => "\u{f0341}",   // md-lock_outline
         IconMode::Ascii => "[-]",
+    }
+}
+
+/// Indicator for rows that are waiting on the user. Deliberately not
+/// [`locked`]: a lock says "someone else owns this", which is the one
+/// thing a `NeedsDecision` row must not say.
+pub fn attention() -> &'static str {
+    match mode() {
+        IconMode::Unicode => "\u{0021}", // !
+        IconMode::Nerd => "\u{f0026}",   // md-alert
+        IconMode::Ascii => "[!]",
     }
 }
 

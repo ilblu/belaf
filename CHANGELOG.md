@@ -5,6 +5,88 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 5.0.0 — 2026-09-02
+
+A guess that switched off its own alarm.
+
+The JVM detector's last branch was a bare `else`: a Gradle build script with no
+version belaf could write was called plugin-managed, and the path was written
+into `[allow_uncovered]`. Nothing ever checked that a versioning plugin was
+applied. A project that simply keeps a plain literal version somewhere the
+line-anchored rewriter cannot reach — inside `publishing { publications { … } }`,
+say — was therefore dropped from every release, and the drift detector that
+would have reported the gap was silenced by the very line that caused it. The
+one mechanism built to catch this was disabled as a side effect of the mistake.
+
+Found in a real repo: a published Android SDK that had never been versioned or
+tagged once, while its four sibling SDKs released normally. The fix commit sat on
+`main` and reached nothing.
+
+### Changed
+
+- **Plugin-managed is now a positive finding, not a fallthrough.** A JVM project
+  is handed off to `[allow_uncovered]` only when a known versioning plugin id
+  actually appears in its build script — axion-release, nebula-release,
+  app-versioning, palantir/git-version, reckon, researchgate, git-versioning,
+  semver-git, shipkit. All three spellings count (`id("…")`, `id '…'`,
+  `apply plugin: '…'`). For a subproject without its own
+  `settings.gradle{.kts}` the enclosing root script counts too, since
+  `allprojects { version = scmVersion.version }` is where that decision usually
+  lives; a directory that declares its own build inherits nothing.
+
+  An unknown-but-real versioning plugin is the expected miss, and it now fails
+  in the safe direction: the project is reported rather than silently dropped.
+  Adding an id is a one-line change.
+
+- **A fourth detector class: `NeedsDecision`.** The three existing classes had
+  no room for "I do not know", and the nearest fit — externally-managed —
+  carries the `[allow_uncovered]` line that loses the artifact. A recognised
+  release artifact belaf cannot classify now writes **no config at all**,
+  neither a `[release_unit]` block nor an `[allow_uncovered]` entry, and stays a
+  drift signal until a human resolves it. Auto-detect exists to turn what it
+  understood into config; for what it did not understand there is no correct
+  block to write.
+
+- **The drift report answers per hit.** Unclassifiable hits are listed
+  separately, each with the fix that applies to it — the offending file and line
+  number, and where to move the version. They no longer get the generic menu,
+  whose closing suggestion is to add the path to `[allow_uncovered]`.
+
+- **One path, one entry.** A directory can raise several detector hits at once —
+  an SDK under `sdks/*` with an unwritable version raises two — and it was
+  listed once per hit, in both the error message and the drift telemetry the
+  dashboard's Drift tab renders. One problem shown as two rows reads as two
+  problems.
+
+### Fixed
+
+- **A Groovy project no longer gets a Kotlin DSL manifest path.** A version
+  found in `build.gradle` was emitted as a `build.gradle.kts` manifest, pointing
+  the rewriter at a file that does not exist. The detected version source now
+  carries which script it came from.
+
+- **`belaf init --ci` reports what it left out.** The JSON status gained
+  `needs_decision`, and the summary log line names the count. Init succeeding is
+  not the same as init having covered everything, and a scripted caller had no
+  way to tell the difference.
+
+### Migration
+
+`prepare` on an **uncovered** Gradle project already failed before this release;
+only its message changes. The break is narrower and worth stating exactly:
+
+- If your config already lists the path under `[allow_uncovered]`, **nothing
+  changes**. An explicit config entry stays authoritative — belaf cannot tell
+  whether you wrote that line or a previous `init` did.
+- If you run `belaf init --auto-detect` and then `prepare`, that sequence used
+  to pass for this project shape and now reports. It passed by silently dropping
+  a package, so check the reported path before silencing it: **the fix is
+  usually one line.** Move the version into `gradle.properties` as
+  `version=<current>`, read it back in the build script
+  (`version = project.property("version") as String`), and re-run
+  `belaf init --auto-detect` — the directory becomes an ordinary release unit.
+- Keep `[allow_uncovered]` for what it means: this is genuinely never released.
+
 ## 4.1.0 — 2026-08-08
 
 `prepare` clears out the manifests whose releases already happened.

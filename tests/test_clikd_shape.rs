@@ -13,7 +13,9 @@ mod fixtures;
 use std::path::Path;
 
 use belaf::core::git::repository::Repository;
-use belaf::core::release_unit::detector::{self, BundleKind, DetectedShape, HintKind};
+use belaf::core::release_unit::detector::{
+    self, BundleKind, DecisionKind, DetectedShape, GradleBuildFile, HintKind, JvmUnwritableReason,
+};
 
 use common::TestRepo;
 use fixtures::Seedable;
@@ -58,6 +60,7 @@ fn detector_finds_expected_bundle_kinds() {
             DetectedShape::Hint(HintKind::SdkCascade) => "sdk_cascade_member",
             DetectedShape::Hint(HintKind::SingleProject { .. }) => "single_project",
             DetectedShape::Hint(HintKind::NestedMonorepo) => "nested_monorepo",
+            DetectedShape::NeedsDecision(_) => "needs_decision",
         })
         .collect();
 
@@ -365,5 +368,76 @@ fn force_rerun_merges_new_mobile_app_into_existing_allow_uncovered() {
             "apps/android-legacy/".to_string(),
             "apps/mobile-ios/".to_string()
         ]
+    );
+}
+
+/// The Kotlin SDK as it really sits in clikd: a published Android
+/// library whose only version is nested inside its `publishing` block.
+/// belaf cannot write that version — but "cannot write" must surface as
+/// a report, never as an `[allow_uncovered]` line, because that line
+/// drops the artifact from every release *and* takes down the check
+/// that would have said so.
+#[test]
+fn unversionable_gradle_sdk_is_reported_not_silenced() {
+    let repo = TestRepo::new();
+    fixtures::seed_gradle_unversionable(&repo);
+    let r = open_repo(&repo);
+
+    let report = detector::detect_all(&r);
+    let hit = report
+        .matches
+        .iter()
+        .find(|m| m.path.escaped() == "sdks/kotlin")
+        .expect("the SDK must still be detected");
+
+    match &hit.shape {
+        DetectedShape::NeedsDecision(DecisionKind::JvmVersionUnwritable { build_file, reason }) => {
+            assert_eq!(*build_file, GradleBuildFile::Kts);
+            assert!(
+                matches!(reason, JvmUnwritableReason::NotAtLineStart { .. }),
+                "the version exists, it is just out of reach: {reason:?}"
+            );
+        }
+        other => panic!("expected NeedsDecision, got {other:?}"),
+    }
+
+    // With no config at all, drift must fire and the message must both
+    // name the path and carry the fix — without offering the
+    // allow_uncovered escape that caused the bug.
+    let drift = detector::detect_drift_paths(&r, &[], &[], &[]);
+    assert!(!drift.is_empty());
+    let msg = drift.format_error();
+    assert!(msg.contains("sdks/kotlin"), "{msg}");
+    assert!(msg.contains("gradle.properties"), "{msg}");
+    assert!(!msg.contains("[allow_uncovered]"), "{msg}");
+}
+
+/// Moving the version to `gradle.properties` — the fix the message
+/// asks for — turns the same directory into a normal release unit.
+/// The advice has to actually work, or it is just a nicer dead end.
+#[test]
+fn the_suggested_fix_turns_it_into_a_release_unit() {
+    let repo = TestRepo::new();
+    fixtures::seed_gradle_unversionable(&repo);
+    repo.write_file(
+        "sdks/kotlin/gradle.properties",
+        "android.useAndroidX=true\norg.gradle.jvmargs=-Xmx2048m\nversion=0.1.0\n",
+    );
+    repo.commit("move the version where belaf can write it");
+
+    let r = open_repo(&repo);
+    let report = detector::detect_all(&r);
+    let hit = report
+        .matches
+        .iter()
+        .find(|m| m.path.escaped() == "sdks/kotlin")
+        .expect("still detected");
+    assert!(
+        matches!(
+            hit.shape,
+            DetectedShape::Bundle(BundleKind::JvmLibrary { .. })
+        ),
+        "expected a JvmLibrary bundle, got {:?}",
+        hit.shape
     );
 }

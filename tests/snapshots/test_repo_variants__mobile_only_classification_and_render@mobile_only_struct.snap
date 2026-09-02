@@ -19,5 +19,6 @@ ReleaseUnitView {
             ),
         },
     ],
+    needs_decision: [],
     groups: [],
 }

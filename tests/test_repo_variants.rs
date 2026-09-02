@@ -165,6 +165,15 @@ fn assert_toggle_round_trip(seed: fn(&TestRepo)) {
                     "Ext rows are read-only — toggle must be a no-op"
                 );
             }
+            belaf::core::ui::release_unit_view::RowIdx::Decision(_) => {
+                let prior = view.selected_togglable_count();
+                view.toggle(idx);
+                assert_eq!(
+                    view.selected_togglable_count(),
+                    prior,
+                    "Decision rows carry no config to select — toggle must be a no-op"
+                );
+            }
             belaf::core::ui::release_unit_view::RowIdx::Group(_) => {
                 unreachable!("from_detection produces no group rows; only from_resolved does")
             }
@@ -232,6 +241,13 @@ variant_test!(
     fixtures::seed_kotlin_library_only
 );
 
+// 7b. JVM SDK whose version belaf cannot write — classifies as a
+// decision row rather than a bundle, and must still render cleanly.
+variant_test!(
+    unversionable_jvm_sdk_classification_and_render,
+    fixtures::seed_gradle_unversionable
+);
+
 // 8. Generated SDK (TS)
 variant_test!(
     generated_ts_sdk_classification_and_render,
@@ -281,6 +297,10 @@ toggle_test!(tauri_app_toggle_round_trip, fixtures::seed_tauri_app_only);
 toggle_test!(
     jvm_sdk_toggle_round_trip,
     fixtures::seed_kotlin_library_only
+);
+toggle_test!(
+    unversionable_jvm_sdk_toggle_round_trip,
+    fixtures::seed_gradle_unversionable
 );
 toggle_test!(
     generated_ts_sdk_toggle_round_trip,
