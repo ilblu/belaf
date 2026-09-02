@@ -84,14 +84,15 @@ pub struct WizardState {
     /// Empty in tests / repos with nothing matching the heuristics.
     pub detection: DetectionReport,
 
-    /// Phase I.1 — set to `true` by [`DetectorReviewStep`](super::detector_review::DetectorReviewStep)
+    /// Phase I.1 — set to `true` by
+    /// [`UnifiedSelectionStep`](super::unified_selection::UnifiedSelectionStep)
     /// when the user accepts the detected bundles. The orchestrator
     /// reads this after a successful bootstrap and appends the
     /// auto_detect snippet to `belaf/config.toml`.
     pub detector_accepted: bool,
 
     /// Per-item exclusions chosen by the user in
-    /// [`DetectorReviewStep`](super::detector_review::DetectorReviewStep).
+    /// [`UnifiedSelectionStep`](super::unified_selection::UnifiedSelectionStep).
     /// Each entry is a detector-match path the user toggled OFF;
     /// the orchestrator passes this to
     /// [`auto_detect::run_filtered`](crate::cmd::init::auto_detect::run_filtered)

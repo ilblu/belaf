@@ -5,6 +5,34 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 5.0.1 — 2026-09-02
+
+Detection order was the filesystem's order.
+
+`read_dir` yields directory entries in whatever order the filesystem
+keeps them, and every filesystem keeps its own: creating `zeta mondo
+aura beta` and reading them back gives `beta zeta mondo aura` on APFS
+and a different permutation again on ext4, because each hashes names
+with its own function. Nothing sorted them afterwards. The same
+repository therefore detected in a different order depending on which
+machine ran belaf — `init --auto-detect` emitted the same blocks in a
+different sequence, and the drift report listed the same paths in a
+different order. It surfaced as a 5.0.0 snapshot test that passed on
+macOS and failed on Linux.
+
+### Fixed
+
+- **Sibling directories are visited in lexicographic order.** Applied at
+  all three enumeration sites: the capped tree walk, the `sdks/*`
+  cascade scan, and the JVM candidate collection. A config diff and a
+  drift report are now the same on every machine.
+
+### Internal
+
+- Removed an orphaned wizard snapshot and repaired two doc links that
+  still pointed at `DetectorReviewStep`, a module replaced by
+  `UnifiedSelectionStep`.
+
 ## 5.0.0 — 2026-09-02
 
 A guess that switched off its own alarm.

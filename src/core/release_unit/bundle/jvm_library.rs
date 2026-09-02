@@ -8,7 +8,7 @@
 //! 1. `gradle.properties` (recommended) — a literal `version=…` line.
 //! 2. `build.gradle(.kts)` literal — a line-anchored `version = "…"`.
 //! 3. plugin-managed — a **known versioning plugin** is applied
-//!    ([`VERSIONING_PLUGIN_IDS`]). The plugin owns the version, so
+//!    (`VERSIONING_PLUGIN_IDS`). The plugin owns the version, so
 //!    belaf stays out and the path goes to `[allow_uncovered]`, same
 //!    mental model as Mobile (Fastlane/Bitrise).
 //! 4. everything else — [`DecisionKind::JvmVersionUnwritable`]: a JVM
@@ -280,19 +280,20 @@ fn jvm_label(s: &JvmVersionSource) -> String {
 
 fn collect_candidates(workdir: &Path) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(workdir.join("sdks")) {
-        for e in entries.flatten() {
-            if e.path().is_dir() {
-                dirs.push(e.path());
+    for parent in ["sdks", "libs"] {
+        let mut group = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(workdir.join(parent)) {
+            for e in entries.flatten() {
+                if e.path().is_dir() {
+                    group.push(e.path());
+                }
             }
         }
-    }
-    if let Ok(entries) = std::fs::read_dir(workdir.join("libs")) {
-        for e in entries.flatten() {
-            if e.path().is_dir() {
-                dirs.push(e.path());
-            }
-        }
+        // `read_dir` yields filesystem order, which differs between
+        // ext4 and APFS for the same tree. Sorting keeps the emitted
+        // blocks and the reported paths in the same sequence everywhere.
+        group.sort();
+        dirs.extend(group);
     }
     if workdir.join("gradle.properties").exists() || workdir.join("build.gradle.kts").exists() {
         dirs.push(workdir.to_path_buf());

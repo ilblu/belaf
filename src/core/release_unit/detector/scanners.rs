@@ -107,8 +107,10 @@ pub(super) fn sdk_cascade_members(workdir: &Path) -> Vec<DetectorMatch> {
         return out;
     }
     if let Ok(entries) = std::fs::read_dir(&sdks) {
-        for e in entries.flatten() {
-            let p = e.path();
+        // Sorted: `read_dir` order is the filesystem's, not an order.
+        let mut sdk_dirs: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+        sdk_dirs.sort();
+        for p in sdk_dirs {
             if !p.is_dir() {
                 continue;
             }

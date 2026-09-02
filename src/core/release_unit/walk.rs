@@ -61,16 +61,26 @@ pub(in crate::core::release_unit) fn walk_capped<F: FnMut(&Path)>(
             Ok(e) => e,
             Err(_) => return,
         };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if skip_dir(name) {
-                        continue;
-                    }
-                }
-                rec(&path, depth_left - 1, f);
-            }
+        // Sorted, because `read_dir` yields entries in filesystem order:
+        // hash order on ext4, something else again on APFS. Detection
+        // order therefore differed between a developer's machine and CI
+        // for the same tree, which made `init --auto-detect` emit the
+        // same blocks in a different sequence and the drift report list
+        // the same paths in a different order. Cheap to make stable, and
+        // stable is what a diffable config and a snapshot test both need.
+        let mut dirs: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|path| path.is_dir())
+            .filter(|path| {
+                path.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_none_or(|name| !skip_dir(name))
+            })
+            .collect();
+        dirs.sort();
+        for path in dirs {
+            rec(&path, depth_left - 1, f);
         }
     }
 
@@ -117,6 +127,8 @@ pub(in crate::core::release_unit) fn list_subdirs_with_file(
             }
         }
     }
+    // Same reason as `walk_capped`: filesystem order is not an order.
+    out.sort();
     out
 }
 

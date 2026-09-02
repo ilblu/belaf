@@ -186,6 +186,58 @@ fn assert_toggle_round_trip(seed: fn(&TestRepo)) {
     );
 }
 
+/// Detection order must be lexicographic, not the filesystem's.
+///
+/// `read_dir` yields entries in filesystem order, and every filesystem
+/// has its own: creating `zeta mondo aura beta` and reading them back
+/// gives `beta zeta mondo aura` on APFS and a different permutation
+/// again on ext4, because each hashes names with its own function. The
+/// same tree therefore detected in a different order on a developer's
+/// machine than on CI — `init --auto-detect` emitted the same blocks in
+/// a different sequence, the drift report listed the same paths in a
+/// different order, and a snapshot that passed locally failed on Linux.
+///
+/// The invariant is sortedness, so that is what this asserts. An
+/// earlier version of this test compared two trees built in opposite
+/// creation order and passed even with the sort removed — both
+/// filesystems hash by *name*, so creation order never leaked in the
+/// first place and the test was pinning nothing.
+#[test]
+fn detection_visits_sibling_directories_in_lexicographic_order() {
+    let repo = TestRepo::new();
+    // Deliberately not created in alphabetical order.
+    for n in ["zeta", "mondo", "aura", "beta"] {
+        repo.write_file(
+            &format!("apps/services/{n}/crates/bin/Cargo.toml"),
+            &format!("[package]\nname = \"{n}\"\nversion = \"0.1.0\"\n"),
+        );
+        repo.write_file(
+            &format!("apps/services/{n}/crates/core/Cargo.toml"),
+            &format!("[package]\nname = \"{n}-core\"\nversion = \"0.1.0\"\n"),
+        );
+    }
+    repo.commit("seed");
+
+    let r = belaf::core::git::repository::Repository::open(&repo.path).expect("open");
+    let paths: Vec<String> = belaf::core::release_unit::detector::detect_all(&r)
+        .matches
+        .iter()
+        .map(|m| m.path.escaped().to_string())
+        .filter(|p| p.starts_with("apps/services/"))
+        .collect();
+
+    assert_eq!(
+        paths,
+        vec![
+            "apps/services/aura".to_string(),
+            "apps/services/beta".to_string(),
+            "apps/services/mondo".to_string(),
+            "apps/services/zeta".to_string(),
+        ],
+        "sibling directories must be detected in lexicographic order"
+    );
+}
+
 macro_rules! toggle_test {
     ($name:ident, $seed:path) => {
         #[test]

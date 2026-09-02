@@ -8,13 +8,13 @@
 //! - `Bundle(_)`  → `bundle::emit_all`: writes a `[release_unit.<name>]`
 //!   block (or, for hexagonal-cargo siblings sharing a parent, one
 //!   block with a `glob` field).
-//! - `Hint(_)`    → [`emit_hint_comment`]: drops a comment-only hint
+//! - `Hint(_)`    → `collect_hint_advice`: drops a comment-only hint
 //!   into the snippet (no toggleable config — hints decorate
 //!   Standalone rows in the wizard).
-//! - `ExternallyManaged(_)` → [`register_externally_managed`]: collects
+//! - `ExternallyManaged(_)` → `register_externally_managed`: collects
 //!   the path for the trailing `[allow_uncovered]` block so the drift
 //!   detector stays silent on it.
-//! - `NeedsDecision(_)` → [`register_needs_decision`]: writes **no**
+//! - `NeedsDecision(_)` → `register_needs_decision`: writes **no**
 //!   config at all and raises advice instead. Auto-detect exists to
 //!   turn what it understood into config; a hit it did not understand
 //!   has no correct block to write, and the one block that would make
@@ -67,7 +67,7 @@ pub struct CascadeOverrideEmit {
 #[derive(Debug, Default)]
 pub struct AutoDetectResult {
     /// Marker-wrapped snippet (body + `[allow_uncovered]` table) for
-    /// the single-shot append path ([`append_to_config`]).
+    /// the single-shot append path ([`apply::append_validated`]).
     pub toml_snippet: String,
     /// Body only — `[release_unit.<name>]` blocks, hint comments, and
     /// the `[ignore_paths]` table, WITHOUT the wrapper and WITHOUT the
