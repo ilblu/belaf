@@ -5,6 +5,21 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 5.1.1 — 2026-09-20
+
+`belaf schema config` arrived in 5.1.0 and only helped people who
+already knew to ask for it. Twice in one afternoon a developer working
+in another repository stopped and asked a human for the spelling of
+`[ignore_paths]` rather than guess — which was the right call, and also
+a sign that the answer was not where the question gets asked.
+
+### Fixed
+
+- **The generated `belaf/config.toml` points at its own schema.** Four
+  lines of comment at the top of the file someone is already looking at,
+  naming `belaf schema config` and what it is good for. Existing configs
+  keep their old header; this only affects files written from now on.
+
 ## 5.1.0 — 2026-09-20
 
 The tool could not describe its own config file, and it damaged the
