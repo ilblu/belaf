@@ -143,6 +143,11 @@ fn print_update_message(latest: &str, current: &str) {
     let install_method = InstallMethod::detect();
     let upgrade = install_method.upgrade_command();
 
+    // `current` comes from CARGO_PKG_VERSION ("5.0.1"), `latest` from the git
+    // tag ("v5.0.1"). Printing them raw gives "4.0.0 → v5.0.1".
+    let latest = latest.trim_start_matches('v');
+    let current = current.trim_start_matches('v');
+
     eprintln!();
     eprintln!(
         "{}",

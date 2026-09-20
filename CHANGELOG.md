@@ -5,6 +5,20 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 5.0.2 — 2026-09-20
+
+The update banner pointed at the wrong version string.
+
+`current` comes from `CARGO_PKG_VERSION` and carries no prefix;
+`latest` is the release's git tag and carries a `v`. `is_newer_version`
+strips both before comparing, so the check was right — only the line
+printed underneath it was not, rendering as `4.0.0 → v5.0.1`.
+
+### Fixed
+
+- **The update banner prints both versions in the same form.** The `v`
+  prefix is stripped for display as well as for comparison.
+
 ## 5.0.1 — 2026-09-02
 
 Detection order was the filesystem's order.
