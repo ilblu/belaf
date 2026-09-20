@@ -5,6 +5,78 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 5.1.0 — 2026-09-20
+
+The tool could not describe its own config file, and it damaged the
+JavaScript manifests it touched.
+
+Both came out of running belaf against a Tauri + bun monorepo. Asked for
+the spelling of `[ignore_paths]`, the binary had no answer: `belaf schema`
+shipped the release manifest — the format belaf *writes* — and nothing
+about `belaf/config.toml`, the format its users write. And every
+`package.json` it rewrote came back alphabetised, with `workspace:*`
+replaced by a pinned version that no registry can resolve.
+
+### Added
+
+- **`belaf schema config`.** A JSON Schema for `belaf/config.toml`,
+  generated from the serde types that parse it, so it cannot drift from
+  what belaf accepts; `deny_unknown_fields` carries through as
+  `additionalProperties: false` and every doc comment lands as a
+  `description`. This is for the reader who has the installed binary and
+  not the repository — an agent in someone else's project can ask the tool
+  instead of guessing.
+- **pnpm workspaces are discovered.** pnpm is the one manager in this
+  family that declares members in `pnpm-workspace.yaml` rather than in
+  `package.json`, and a pnpm root often has no `workspaces` key at all.
+  belaf read only `package.json`, so in a pnpm monorepo it found no
+  members — a quieter failure than finding the wrong ones. Both sources
+  are now read and merged.
+- **`!`-prefixed workspace patterns exclude.** Read as positive globs,
+  `!packages/fixtures/**` became the literal prefix `!packages/fixtures`
+  and matched nothing, so the pattern was inert. An excluded directory is
+  no longer a workspace member. It is still discovered as a package in its
+  own right — being outside the workspace does not stop it being one.
+
+### Fixed
+
+- **`package.json` keeps its key order.** The rewriters round-trip every
+  manifest through `serde_json::Map`, which is a `BTreeMap` unless the
+  `preserve_order` feature is on. Without it belaf alphabetised every file
+  it touched — `name`, `version` and `scripts` landing below
+  `dependencies` — turning a version bump into a whole-file diff, on
+  manifests that were not even release units, because the loader reads
+  every `package.json` it finds.
+- **`workspace:` and `catalog:` dependencies survive a release.** These
+  are not version ranges; they name where the dependency resolves from.
+  belaf overwrote them with the resolved number, which points a
+  `"private": true` dependency at a public registry that has nothing to
+  give it. `workspace:`, `catalog:`, `link:`, `file:` and `portal:` are
+  now left exactly as found; ordinary ranges are still belaf's to manage.
+- **A Tauri app in a shared-version cargo workspace is one unit, not
+  two.** When `<app>/src-tauri` is a member of a workspace where every
+  crate inherits `[workspace.package].version`, the workspace and the app
+  release together — the crate reads its version from that one key. The
+  detector did not look, so `init` emitted a block claiming only the app's
+  `package.json`, the cargo loader discovered the same version again, and
+  the repo ended up with `cargo:<name>` beside `tauri:<name>`. The emitted
+  block now claims the workspace manifest as well.
+
+### Internal
+
+- `UnitOwnership` gained exact-match manifest claims. Directory claims are
+  prefix-matched, which is why a manifest at the repo root contributed
+  none — claiming its parent would hand the whole tree to one unit. A unit
+  that names the root manifest really does own that file, and the loaders
+  need to know; keeping the two kinds of claim apart lets the root
+  manifest be owned without the root directory being owned.
+- `cargo.rs` was over 800 lines and both the cargo loader and the Tauri
+  detector needed the same judgement about workspace shape, so the
+  manifest-reading half moved to `core::ecosystem::cargo::workspace`. The
+  detector runs during `init` with no resolved metadata and must not shell
+  out to cargo per candidate, so everything there is `toml_edit` over a
+  path: no subprocess, no lockfile.
+
 ## 5.0.2 — 2026-09-20
 
 The update banner pointed at the wrong version string.

@@ -1113,11 +1113,18 @@ pub fn bundle_kind_label(b: &BundleKind) -> String {
             };
             format!("hexagonal-cargo/{p}")
         }
-        BundleKind::Tauri { single_source } => {
-            if *single_source {
-                "tauri (single-source)".to_string()
+        BundleKind::Tauri {
+            single_source,
+            shared_workspace,
+        } => {
+            let base = if *single_source {
+                "tauri (single-source)"
             } else {
-                "tauri (legacy multi-file)".to_string()
+                "tauri (legacy multi-file)"
+            };
+            match shared_workspace {
+                Some(_) => format!("{base} + cargo workspace"),
+                None => base.to_string(),
             }
         }
         BundleKind::JvmLibrary { version_source } => {
@@ -1225,6 +1232,7 @@ mod tests {
         r.matches.push(DetectorMatch {
             shape: DetectedShape::Bundle(BundleKind::Tauri {
                 single_source: true,
+                shared_workspace: None,
             }),
             path: RepoPathBuf::new(b"apps/desktop"),
             note: None,
@@ -1265,6 +1273,7 @@ mod tests {
         r.matches.push(DetectorMatch {
             shape: DetectedShape::Bundle(BundleKind::Tauri {
                 single_source: true,
+                shared_workspace: None,
             }),
             path: RepoPathBuf::new(b"apps/desktop"),
             note: None,
@@ -1290,6 +1299,7 @@ mod tests {
         r.matches.push(DetectorMatch {
             shape: DetectedShape::Bundle(BundleKind::Tauri {
                 single_source: true,
+                shared_workspace: None,
             }),
             path: RepoPathBuf::new(b"apps/desktop"),
             note: None,
@@ -1307,6 +1317,7 @@ mod tests {
         r.matches.push(DetectorMatch {
             shape: DetectedShape::Bundle(BundleKind::Tauri {
                 single_source: true,
+                shared_workspace: None,
             }),
             path: RepoPathBuf::new(b"apps/desktop"),
             note: None,
@@ -1392,6 +1403,7 @@ mod tests {
         r.matches.push(DetectorMatch {
             shape: DetectedShape::Bundle(BundleKind::Tauri {
                 single_source: true,
+                shared_workspace: None,
             }),
             path: RepoPathBuf::new(b"apps/desktop"),
             note: None,

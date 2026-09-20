@@ -159,6 +159,18 @@ pub struct UnitOwnership {
     /// specific claim: a satellite nested inside another unit's tree belongs
     /// to the satellite's owner, not the outer one.
     claims: Vec<(RepoPathBuf, Option<String>)>,
+    /// Manifest files a unit names outright, matched by *exact* path and
+    /// nothing else.
+    ///
+    /// [`Self::claims`] is prefix-matched, which is why a manifest at the
+    /// repo root contributes nothing to it: its parent directory is the whole
+    /// tree, and claiming that would hand every other unit's files to
+    /// whoever listed it. But a unit that says
+    /// `manifests = [{ path = "Cargo.toml", ... }]` really does own that one
+    /// file, and a loader that rediscovers it needs to know. Keeping the two
+    /// apart lets the root manifest be owned without the root directory being
+    /// owned.
+    manifest_claims: Vec<(RepoPathBuf, String)>,
 }
 
 impl UnitOwnership {
@@ -169,7 +181,38 @@ impl UnitOwnership {
             let (a_bytes, b_bytes): (&[u8], &[u8]) = (a.0.as_ref(), b.0.as_ref());
             b_bytes.len().cmp(&a_bytes.len()).then(a_bytes.cmp(b_bytes))
         });
-        Self { claims }
+        Self {
+            claims,
+            manifest_claims: Vec::new(),
+        }
+    }
+
+    /// Attach the exact-match manifest claims: the files a unit names in
+    /// its `manifests` list, matched by exact path rather than by prefix,
+    /// so a manifest at the repo root can be owned without the root
+    /// directory being owned. Read back with [`Self::manifest_owner`].
+    #[must_use]
+    pub fn with_manifest_claims(
+        mut self,
+        manifest_claims: impl IntoIterator<Item = (RepoPathBuf, String)>,
+    ) -> Self {
+        self.manifest_claims = manifest_claims.into_iter().collect();
+        self
+    }
+
+    /// The unit that names `path` in its `manifests` list, matched exactly.
+    ///
+    /// Unlike [`Self::owner_of`] this never walks ancestors, so asking about
+    /// the repo-root `Cargo.toml` answers about that file alone.
+    pub fn manifest_owner(&self, path: &RepoPath) -> Option<&str> {
+        self.manifest_claims
+            .iter()
+            .find(|(claim, _)| {
+                let claim_bytes: &[u8] = claim.as_ref();
+                let path_bytes: &[u8] = path.as_ref();
+                claim_bytes == path_bytes
+            })
+            .map(|(_, name)| name.as_str())
     }
 
     /// The owner of `path`, where "owner" means a claim that is `path` itself

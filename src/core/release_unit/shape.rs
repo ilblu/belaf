@@ -67,9 +67,27 @@ pub enum DetectedShape {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BundleKind {
-    Tauri { single_source: bool },
-    HexagonalCargo { primary: HexagonalPrimary },
-    JvmLibrary { version_source: JvmVersionSource },
+    Tauri {
+        single_source: bool,
+        /// Repo-relative directory of the cargo workspace that owns the
+        /// app's `src-tauri` crate, when that workspace versions every
+        /// member together (`[workspace.package].version` + every member
+        /// inheriting it). Empty string for a workspace at the repo root.
+        ///
+        /// When set, the workspace and the app are one release, not two:
+        /// the crate reads its version from the root key, so bumping the
+        /// app *is* bumping the workspace. The emitted block has to claim
+        /// the root manifest, or the cargo loader discovers the same
+        /// version a second time and the repo ends up with `cargo:<name>`
+        /// beside `tauri:<name>`.
+        shared_workspace: Option<String>,
+    },
+    HexagonalCargo {
+        primary: HexagonalPrimary,
+    },
+    JvmLibrary {
+        version_source: JvmVersionSource,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

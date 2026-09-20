@@ -195,12 +195,20 @@ fn drift_shape_label(s: &DetectedShape) -> String {
             BundleKind::HexagonalCargo { primary } => {
                 format!("hexagonal cargo: crates/{primary}/Cargo.toml present")
             }
-            BundleKind::Tauri { single_source } => format!(
-                "tauri triplet ({})",
+            BundleKind::Tauri {
+                single_source,
+                shared_workspace,
+            } => format!(
+                "tauri triplet ({}{})",
                 if *single_source {
                     "single-source"
                 } else {
                     "legacy multi-file"
+                },
+                match shared_workspace {
+                    Some(ws) if ws.is_empty() => ", shared workspace at repo root",
+                    Some(_) => ", shared cargo workspace",
+                    None => "",
                 }
             ),
             BundleKind::JvmLibrary { version_source } => {

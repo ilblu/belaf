@@ -39,6 +39,32 @@ use crate::{
 
 const DEPENDENCY_KEYS: &[&str] = &["dependencies", "devDependencies", "optionalDependencies"];
 
+/// Dependency specs that already resolve inside the repo, and that belaf must
+/// therefore leave exactly as it found them.
+///
+/// These are not version ranges; they are instructions to the package manager
+/// about *where* the dependency comes from, and the version is derived from
+/// that place:
+///
+/// - `workspace:` (bun, pnpm, yarn) — take the sibling in this monorepo. The
+///   package manager substitutes a real version at publish time. Writing a
+///   number over it points the dependency at the registry instead, which for
+///   a `"private": true` package means an install that cannot resolve at all.
+/// - `catalog:` / `catalog:<name>` (bun, pnpm) — the version lives once in the
+///   root catalog. Inlining a number here silently opts this package out of
+///   the catalog, which is the entire thing the catalog exists to prevent.
+/// - `link:`, `file:`, `portal:` — a path on disk. Never a version.
+///
+/// npm itself has no `workspace:` protocol in `package.json` (it resolves
+/// workspace siblings by name), so an npm-only monorepo is unaffected by this
+/// rule and keeps getting its ranges rewritten as before.
+fn spec_resolves_internally(spec: &str) -> bool {
+    const INTERNAL_PROTOCOLS: &[&str] = &["workspace:", "catalog:", "link:", "file:", "portal:"];
+    let spec = spec.trim();
+    // Bare `catalog` with no colon is not a thing; `catalog:` always has one.
+    INTERNAL_PROTOCOLS.iter().any(|p| spec.starts_with(p))
+}
+
 /// Stateless npm `FormatHandler`. The struct is only a trait-object
 /// handle; per-scan state lives in local variables in `discover_units`.
 #[derive(Debug, Default)]
@@ -181,6 +207,45 @@ impl FormatHandler for NpmLoader {
     }
 }
 
+/// The globs a `pnpm-workspace.yaml` beside `package.json` declares.
+///
+/// pnpm is the one manager in this family that does **not** put its workspace
+/// list in `package.json` — it uses a sibling YAML file, and a root
+/// `package.json` in a pnpm repo commonly has no `workspaces` key at all.
+/// Reading only `package.json` therefore finds nothing in a pnpm monorepo:
+/// not "the wrong members", but no members.
+///
+/// Only `packages:` is read. `catalog:` / `catalogs:` live in the same file
+/// and are deliberately ignored here — a catalog pins dependency versions,
+/// it does not say which directories are workspace members, and belaf must
+/// not rewrite catalog entries anyway (see `spec_resolves_internally`).
+fn pnpm_workspace_globs(package_json_abs: &std::path::Path) -> Vec<String> {
+    let Some(dir) = package_json_abs.parent() else {
+        return Vec::new();
+    };
+    let yaml = dir.join("pnpm-workspace.yaml");
+    let yaml = if yaml.is_file() {
+        yaml
+    } else {
+        let alt = dir.join("pnpm-workspace.yml");
+        if alt.is_file() {
+            alt
+        } else {
+            return Vec::new();
+        }
+    };
+
+    // The `config` crate is already a dependency and brings a YAML parser
+    // with it, so this costs no new crate.
+    let Ok(parsed) = ::config::Config::builder()
+        .add_source(::config::File::from(yaml).format(::config::FileFormat::Yaml))
+        .build()
+    else {
+        return Vec::new();
+    };
+    parsed.get::<Vec<String>>("packages").unwrap_or_default()
+}
+
 /// Workspace walker for npm: claims any `package.json` carrying a
 /// `workspaces` field; enumerates members per the glob array.
 #[derive(Debug, Default)]
@@ -203,7 +268,7 @@ impl WorkspaceDiscoverer for NpmWorkspaceDiscoverer {
         let Ok(pkg) = serde_json::from_str::<serde_json::Value>(&content) else {
             return false;
         };
-        pkg.get("workspaces").is_some()
+        pkg.get("workspaces").is_some() || !pnpm_workspace_globs(&abs).is_empty()
     }
 
     fn discover(
@@ -245,6 +310,34 @@ impl WorkspaceDiscoverer for NpmWorkspaceDiscoverer {
             _ => Vec::new(),
         };
 
+        // A pnpm repo declares its members in a sibling YAML file instead.
+        // Both are read and merged, because a repo migrating between managers
+        // legitimately carries both for a while.
+        let mut workspace_globs = workspace_globs;
+        for g in pnpm_workspace_globs(&root_abs) {
+            if !workspace_globs.contains(&g) {
+                workspace_globs.push(g);
+            }
+        }
+
+        // Negative patterns (`!packages/**/test/**`) exclude rather than
+        // enumerate; npm, bun and pnpm all accept them. Split them out before
+        // expansion so a `!` never becomes a literal directory prefix.
+        let (excludes, workspace_globs): (Vec<String>, Vec<String>) = workspace_globs
+            .into_iter()
+            .partition(|g| g.starts_with('!'));
+        let excludes: Vec<String> = excludes
+            .iter()
+            .map(|g| {
+                g.trim_start_matches('!')
+                    .trim_end_matches("/**")
+                    .trim_end_matches("/*")
+                    .trim_end_matches('/')
+                    .to_string()
+            })
+            .filter(|g| !g.is_empty())
+            .collect();
+
         let (root_dir, _) = root_path.split_basename();
         let root_dir_owned = root_dir.to_owned();
         let mut member_paths: Vec<RepoPathBuf> = Vec::new();
@@ -281,6 +374,26 @@ impl WorkspaceDiscoverer for NpmWorkspaceDiscoverer {
                 member_paths.push(p.to_owned());
                 Ok(())
             })?;
+        }
+
+        // Drop anything a negative pattern excluded. Done after expansion
+        // rather than during it because `!packages/**/test/**` can carve a
+        // hole out of a directory a positive glob already swept in.
+        if !excludes.is_empty() {
+            let exclude_paths: Vec<RepoPathBuf> = excludes
+                .iter()
+                .map(|e| {
+                    let mut p = root_dir_owned.clone();
+                    if !e.is_empty() && e != "." {
+                        p.push(e.as_bytes());
+                    }
+                    p
+                })
+                .collect();
+            member_paths.retain(|p| {
+                let (parent, _) = p.split_basename();
+                !crate::core::ecosystem::format_handler::is_path_inside_any(parent, &exclude_paths)
+            });
         }
 
         // Always include root itself in case it's a publishable pkg.
@@ -492,9 +605,15 @@ impl Rewriter for PackageJsonRewriter {
         for dep_key in DEPENDENCY_KEYS {
             if let Some(dep_map) = pkg_data.get_mut(*dep_key).and_then(|v| v.as_object_mut()) {
                 for (dep_name, dep_spec) in dep_map.iter_mut() {
-                    if let Some(text) = internal_reqs.get(dep_name) {
-                        *dep_spec = serde_json::Value::String(text.clone());
+                    let Some(text) = internal_reqs.get(dep_name) else {
+                        continue;
+                    };
+                    // A spec that already resolves inside the repo stays
+                    // untouched — see `spec_resolves_internally`.
+                    if dep_spec.as_str().is_some_and(spec_resolves_internally) {
+                        continue;
                     }
+                    *dep_spec = serde_json::Value::String(text.clone());
                 }
             }
         }
@@ -720,6 +839,8 @@ impl LernaWorkaroundCommand {
 
 #[cfg(test)]
 mod tests {
+    use super::spec_resolves_internally;
+
     #[test]
     fn test_parse_package_json_name() {
         let json = r#"{"name": "@scope/package", "version": "1.0.0"}"#;
@@ -772,5 +893,96 @@ mod tests {
 
         let workspaces = parsed.get("workspaces");
         assert!(workspaces.is_some());
+    }
+
+    /// A `package.json` must come back out in the order it went in.
+    ///
+    /// `serde_json::Map` is a `BTreeMap` unless the `preserve_order` feature
+    /// is on, and the rewriters round-trip every manifest through it. Without
+    /// the feature, belaf silently alphabetises every file it touches: `name`,
+    /// `version` and `scripts` land *below* `dependencies`, and the diff of a
+    /// version bump becomes the whole file. It also hit manifests that are not
+    /// release units at all, because the loader reads every `package.json` it
+    /// finds.
+    #[test]
+    fn package_json_round_trip_preserves_key_order() {
+        let json = r#"{
+            "name": "@rakete/app",
+            "private": true,
+            "version": "0.1.0",
+            "type": "module",
+            "scripts": { "build": "tsc && vite build" },
+            "dependencies": { "zod": "^3.0.0" }
+        }"#;
+
+        let parsed: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(json).expect("BUG: test JSON should parse");
+
+        let keys: Vec<&str> = parsed.keys().map(String::as_str).collect();
+        assert_eq!(
+            keys,
+            vec![
+                "name",
+                "private",
+                "version",
+                "type",
+                "scripts",
+                "dependencies"
+            ],
+            "package.json keys must survive a round trip in source order"
+        );
+
+        // And once more through a serialize step, which is what the rewriters
+        // actually do.
+        let written = serde_json::to_string_pretty(&parsed).expect("BUG: should serialize");
+        let reparsed: serde_json::Map<String, serde_json::Value> =
+            serde_json::from_str(&written).expect("BUG: written JSON should parse");
+        let keys_after: Vec<&str> = reparsed.keys().map(String::as_str).collect();
+        assert_eq!(keys, keys_after, "a write must not reorder keys either");
+    }
+    /// `workspace:*` and friends are routing instructions, not version
+    /// ranges. belaf used to overwrite them with the resolved number, which
+    /// on a `"private": true` package points the install at a registry entry
+    /// that does not exist. Seen on rakete: `"@rakete/ui": "workspace:*"`
+    /// came back as `"@rakete/ui": "0.1.0"`.
+    #[test]
+    fn internal_protocols_are_left_alone() {
+        for spec in [
+            "workspace:*",
+            "workspace:^",
+            "workspace:~",
+            "workspace:1.2.3",
+            "catalog:",
+            "catalog:testing",
+            "link:../ui",
+            "file:../ui",
+            "portal:../ui",
+            "  workspace:*  ",
+        ] {
+            assert!(
+                spec_resolves_internally(spec),
+                "`{spec}` resolves inside the repo and must not be rewritten"
+            );
+        }
+    }
+
+    /// Ordinary ranges are still belaf's to manage — that is the whole point
+    /// of the dependency rewriter.
+    #[test]
+    fn ordinary_ranges_are_still_rewritten() {
+        for spec in [
+            "^1.2.3",
+            "~1.2.3",
+            ">=0.1.0",
+            "1.2.3",
+            "*",
+            "latest",
+            "npm:@scope/other@^1.0.0",
+        ] {
+            assert!(
+                !spec_resolves_internally(spec),
+                "`{spec}` is a version range belaf owns"
+            );
+        }
     }
 }

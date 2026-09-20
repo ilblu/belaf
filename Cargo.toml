@@ -1,6 +1,6 @@
 [package]
 name = "belaf"
-version = "5.0.2"
+version = "5.1.0"
 description = "Release management CLI for monorepos"
 authors = ["Dennis Ollhoff <contact@nyxb.email>"]
 edition = "2021"
@@ -66,8 +66,12 @@ pulldown-cmark = "0.13.0"
 
 config = "0.15.19"
 configparser = "3.1.0"
+schemars = "0.8"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.148"
+# `preserve_order` swaps serde_json::Map from BTreeMap to IndexMap. Without
+# it every package.json belaf rewrites comes back alphabetised, so `name`,
+# `version` and `scripts` end up below `dependencies`.
+serde_json = { version = "1.0.148", features = ["preserve_order"] }
 serde_jsonc = "1.0.108"
 toml = "0.9.8"
 dirs = "6.0.0"

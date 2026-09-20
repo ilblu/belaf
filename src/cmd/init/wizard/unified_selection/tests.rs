@@ -29,6 +29,7 @@ fn state_with_mix() -> WizardState {
     report.matches.push(DetectorMatch {
         shape: DetectedShape::Bundle(BundleKind::Tauri {
             single_source: true,
+            shared_workspace: None,
         }),
         path: crate::core::git::repository::RepoPathBuf::new(b"apps/desktop"),
         note: None,
@@ -94,6 +95,7 @@ fn tauri_bundle_hides_inner_and_outer_standalones() {
     report.matches.push(DetectorMatch {
         shape: DetectedShape::Bundle(BundleKind::Tauri {
             single_source: true,
+            shared_workspace: None,
         }),
         path: crate::core::git::repository::RepoPathBuf::new(b"apps/clients/desktop"),
         note: None,

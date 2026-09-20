@@ -4,6 +4,7 @@ use crate::atry;
 use crate::core::errors::{Error, Result};
 
 pub mod syntax {
+    use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
     use std::collections::HashMap;
 
@@ -13,7 +14,7 @@ pub mod syntax {
 
     /// Wire-form for the full `belaf/config.toml`. See the README + docs/configuration.md
     /// for the user-facing documentation; this is the literal serde shape.
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
     pub struct ReleaseConfiguration {
         pub repo: RepoConfiguration,
@@ -97,7 +98,7 @@ pub mod syntax {
     /// affects = "all-deploy-units"   # or ["gate", "rig", "kin"]
     /// bump    = "floor_minor"        # optional
     /// ```
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
     pub struct CascadeInputConfig {
         /// Repo-relative paths this input owns. Entries containing `*`, `?`
@@ -118,7 +119,7 @@ pub mod syntax {
     /// The `affects` field of a `[cascade_inputs.<name>]` block. Untagged so
     /// users write either a shorthand string or a plain list — precedent:
     /// `ManifestList` in `release_unit/syntax.rs`.
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     #[serde(untagged)]
     pub enum CascadeInputAffects {
         /// A shorthand keyword. The only accepted value is
@@ -130,7 +131,7 @@ pub mod syntax {
     }
 
     /// `[group.<id>]` named-entry — the TOML key is the group id.
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     #[serde(deny_unknown_fields)]
     pub struct GroupConfig {
         pub members: Vec<String>,
@@ -158,7 +159,7 @@ pub mod syntax {
     /// diff`). `cmd` is required; `release_unit` / `group` are pure
     /// diagnostic labels (the JSON output's own `release_unit` field is
     /// what wires decisions to ReleaseUnits).
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     pub struct BumpSourceConfig {
         pub cmd: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -169,7 +170,7 @@ pub mod syntax {
         pub timeout_sec: Option<u64>,
     }
 
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     pub struct BumpConfiguration {
         pub features_always_bump_minor: bool,
 
@@ -181,7 +182,7 @@ pub mod syntax {
         pub bump_type: Option<String>,
     }
 
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     pub struct ChangelogConfiguration {
         #[serde(default)]
         pub header: Option<String>,
@@ -241,7 +242,7 @@ pub mod syntax {
         pub group_emojis: std::collections::HashMap<String, String>,
     }
 
-    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
     pub struct CommitParserConfig {
         #[serde(default)]
         pub message: Option<String>,
@@ -265,7 +266,7 @@ pub mod syntax {
         pub skip: Option<bool>,
     }
 
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     pub struct LinkParserConfig {
         pub pattern: String,
 
@@ -275,7 +276,7 @@ pub mod syntax {
         pub text: Option<String>,
     }
 
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     pub struct TextProcessorConfig {
         pub pattern: String,
 
@@ -283,7 +284,7 @@ pub mod syntax {
         pub replace: Option<String>,
     }
 
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     pub struct CommitAttributionConfiguration {
         pub strategy: String,
 
@@ -300,7 +301,7 @@ pub mod syntax {
     /// build artifact. A commit that only touches *non*-binary-affecting files
     /// (tests, docs, …) does not trigger a bump. Defaults live in the embedded
     /// `default.toml`; a user's `belaf/config.toml` overrides each list.
-    #[derive(Clone, Debug, Default, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
     pub struct BinaryAffectingConfiguration {
         /// Full path segments that are NOT binary-affecting (matched as whole
         /// `/segment/` components, never substrings) — e.g. `tests`, `benches`.
@@ -317,7 +318,7 @@ pub mod syntax {
         pub exclude_names: Vec<String>,
     }
 
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     pub struct RepoConfiguration {
         #[serde(default)]
         pub upstream_urls: Vec<String>,
@@ -332,7 +333,7 @@ pub mod syntax {
         pub analysis: AnalysisConfig,
     }
 
-    #[derive(Clone, Debug, Deserialize, Serialize)]
+    #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
     pub struct AnalysisConfig {
         pub commit_cache_size: usize,
 

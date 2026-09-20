@@ -37,6 +37,7 @@
 //! baseline = "first-release"
 //! ```
 
+use schemars::JsonSchema;
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
@@ -47,7 +48,7 @@ use serde::{Deserialize, Serialize};
 
 /// `[ignore_paths]` — paths belaf does not scan inside at all (no
 /// detector, no commit attribution).
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct IgnorePathsConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
@@ -61,7 +62,7 @@ impl IgnorePathsConfig {
 
 /// `[allow_uncovered]` — paths belaf scans but explicitly accepts as
 /// not mapping to any ReleaseUnit. Mobile apps go here on init.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct AllowUncoveredConfig {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<String>,
@@ -78,7 +79,7 @@ impl AllowUncoveredConfig {
 // ---------------------------------------------------------------------------
 
 /// `[ecosystems.cargo]` — Cargo-specific knobs.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct EcosystemCargoConfig {
     /// `auto` (default) | `always` | `never`. When `auto`, the
     /// hexagonal cargo detector flags `D/crates/{bin,lib,workers}`
@@ -94,7 +95,7 @@ pub struct EcosystemCargoConfig {
 }
 
 /// `[ecosystems.npm]` — npm-specific knobs.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct EcosystemNpmConfig {
     /// `auto` (default) detects a top-level `workspaces` field and
     /// suggests a `[group.<id>]` over its members.
@@ -103,7 +104,7 @@ pub struct EcosystemNpmConfig {
 }
 
 /// `[ecosystems.tauri]` — Tauri detector knobs.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct EcosystemTauriConfig {
     /// Detect `package.json + src-tauri/Cargo.toml +
     /// src-tauri/tauri.conf.json` triplets. Default true.
@@ -124,7 +125,7 @@ fn is_true(b: &bool) -> bool {
 }
 
 /// `[ecosystems.jvm_library]` — JVM library detector knobs.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct EcosystemJvmLibraryConfig {
     /// Default location relative to the bundle root. Defaults to
     /// `gradle.properties`.
@@ -134,7 +135,7 @@ pub struct EcosystemJvmLibraryConfig {
 
 /// Aggregate `[ecosystems]` table — one optional sub-table per
 /// known ecosystem with knobs.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 pub struct EcosystemsConfig {
     #[serde(default, skip_serializing_if = "is_default_cargo")]
     pub cargo: EcosystemCargoConfig,
@@ -191,7 +192,7 @@ impl EcosystemsConfig {
 /// `deny_unknown_fields` so that a typo like `versoin_field` or
 /// `tag_formet` surfaces as a config error instead of being silently
 /// dropped at deserialise time.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReleaseUnitConfig {
     /// `cargo` | `npm` | `pypa` | `tauri` | `external` | … . Optional —
@@ -299,7 +300,7 @@ pub struct ReleaseUnitConfig {
 
 /// Per-unit bump-policy override (F11a). All fields optional — an unset field
 /// inherits the global `[bump]` value.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct BumpOverrideConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -338,7 +339,7 @@ impl ReleaseUnitConfig {
 /// form uses inline-tables, glob form uses bare strings. Untagged
 /// enum so users don't need to write `manifests = { explicit = [...] }`
 /// or similar.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(untagged)]
 pub enum ManifestList {
     /// Non-glob form: per-manifest config.
@@ -351,7 +352,7 @@ pub enum ManifestList {
 /// One entry under non-glob `manifests = [...]`. `deny_unknown_fields`
 /// so a typo'd `path_pattern` or `regex_replece` fails at config-load
 /// time instead of being silently ignored.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ManifestFileConfig {
     pub path: String,
@@ -379,7 +380,7 @@ pub struct ManifestFileConfig {
 
 /// External versioner — `external = { tool = "...", ... }` inline or
 /// `[release_unit.<name>.external]` table form.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ExternalConfig {
     pub tool: String,
@@ -401,7 +402,7 @@ fn is_60(n: &u64) -> bool {
 }
 
 /// `cascade_from = { source = "...", bump = "..." }` inline form.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CascadeRuleConfig {
     pub source: String,

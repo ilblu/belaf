@@ -28,6 +28,10 @@ use crate::core::{
 use crate::utils::file_io::read_config_file;
 use crate::utils::theme::PhaseSpinner;
 
+pub mod workspace;
+
+use workspace::{declares_inheritable_version, member_inherits_workspace_version};
+
 /// Stateless cargo `FormatHandler`. The struct exists only as a
 /// trait-object handle for the registry; all per-scan state lives in
 /// local variables inside `discover_units`.
@@ -114,14 +118,7 @@ impl CargoLoader {
         root_doc: &DocumentMut,
         cargo_meta: &cargo_metadata::Metadata,
     ) -> bool {
-        let has_inheritable_version = root_doc
-            .get("workspace")
-            .and_then(|ws| ws.as_table())
-            .and_then(|ws_table| ws_table.get("package"))
-            .and_then(|pkg| pkg.as_table())
-            .and_then(|pkg_table| pkg_table.get("version"))
-            .is_some();
-        if !has_inheritable_version {
+        if !declares_inheritable_version(root_doc) {
             return false;
         }
 
@@ -140,7 +137,7 @@ impl CargoLoader {
 
         members
             .iter()
-            .all(|pkg| member_inherits_workspace_version(&pkg.manifest_path))
+            .all(|pkg| member_inherits_workspace_version(pkg.manifest_path.as_std_path()))
     }
 
     /// Build `DiscoveredUnit`s for one cargo workspace.
@@ -180,10 +177,21 @@ impl CargoLoader {
 
             // Every member shares the root's version, so the root manifest's
             // ownership decides for all of them.
-            let root_owner = match ownership.owner_of(&manifest_repopath) {
-                Some(PathOwner::Ignored) => Some(PackageOwner::Ignored),
-                Some(PathOwner::Unit(name)) => Some(PackageOwner::Claimed(name.to_owned())),
-                None => None,
+            //
+            // The exact-match lookup comes first and is the one that matters
+            // for a workspace at the repo root. Directory claims are
+            // prefix-matched, so a root manifest contributes none — see
+            // `UnitOwnership::manifest_claims`. Without asking here, a
+            // `[release_unit]` that lists the root `Cargo.toml` (a Tauri app
+            // whose `src-tauri` crate is a workspace member, say) would still
+            // see the loader mint a second unit for the same version.
+            let root_owner = match ownership.manifest_owner(&manifest_repopath) {
+                Some(name) => Some(PackageOwner::Claimed(name.to_owned())),
+                None => match ownership.owner_of(&manifest_repopath) {
+                    Some(PathOwner::Ignored) => Some(PackageOwner::Ignored),
+                    Some(PathOwner::Unit(name)) => Some(PackageOwner::Claimed(name.to_owned())),
+                    None => None,
+                },
             };
 
             // `name` is not an inheritable field, so it can never come from
@@ -415,36 +423,6 @@ enum PackageOwner {
     /// Inside an `[ignore_paths]` entry — neither a unit nor a dependency
     /// target.
     Ignored,
-}
-
-/// Whether a member manifest takes its version from `[workspace.package]`
-/// (`version.workspace = true`) rather than pinning its own.
-///
-/// A manifest that is unreadable, unparseable, or carries no `version` at all
-/// counts as *not* inheriting: Cargo defaults such a package to `0.0.0`
-/// independently of the workspace, so folding it into a shared release unit
-/// would be a guess.
-fn member_inherits_workspace_version(manifest_path: &cargo_metadata::camino::Utf8Path) -> bool {
-    let Ok(content) = read_config_file(manifest_path.as_std_path()) else {
-        return false;
-    };
-    let Ok(doc) = content.parse::<DocumentMut>() else {
-        return false;
-    };
-    let Some(pkg) = doc.get("package").and_then(|v| v.as_table()) else {
-        return false;
-    };
-    let Some(version) = pkg.get("version") else {
-        return false;
-    };
-    // `version.workspace = true` parses as a (possibly inline) table with a
-    // single `workspace` key; `version = "1.2.3"` parses as a plain value.
-    version
-        .as_table_like()
-        .and_then(|t| t.get("workspace"))
-        .and_then(|w| w.as_value())
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false)
 }
 
 impl FormatHandler for CargoLoader {

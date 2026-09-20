@@ -41,6 +41,7 @@ fn is_glob(s: &str) -> bool {
 /// either.
 pub fn ownership_for(resolved: &[ResolvedReleaseUnit], ignore_paths: &[String]) -> UnitOwnership {
     let mut claims: Vec<(RepoPathBuf, Option<String>)> = Vec::new();
+    let mut manifest_claims: Vec<(RepoPathBuf, String)> = Vec::new();
 
     for r in resolved {
         let name = &r.unit.name;
@@ -48,6 +49,12 @@ pub fn ownership_for(resolved: &[ResolvedReleaseUnit], ignore_paths: &[String]) 
         match &r.unit.source {
             VersionSource::Manifests(manifests) => {
                 for m in manifests {
+                    // The file itself is owned outright, wherever it sits.
+                    // This is the only claim a repo-root manifest gets to
+                    // make, and it is what stops an ecosystem loader from
+                    // rediscovering it as a unit of its own.
+                    manifest_claims.push((m.path.clone(), name.clone()));
+
                     let escaped = m.path.escaped().to_string();
                     let Some(parent) = std::path::Path::new(&escaped).parent() else {
                         continue;
@@ -82,7 +89,7 @@ pub fn ownership_for(resolved: &[ResolvedReleaseUnit], ignore_paths: &[String]) 
         claims.push((RepoPathBuf::new(p.trim_end_matches('/').as_bytes()), None));
     }
 
-    UnitOwnership::new(claims)
+    UnitOwnership::new(claims).with_manifest_claims(manifest_claims)
 }
 
 #[cfg(test)]

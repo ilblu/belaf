@@ -387,6 +387,37 @@ disable = ["go"]  # opt out of the Go loader entirely
 
 Rarely needed — the loaders are cheap and idempotent.
 
+### JavaScript workspaces: what the npm loader reads
+
+Nothing here needs configuring; this is what the loader does on its own, and
+it is worth knowing because the four package managers disagree.
+
+| Manager | Members declared in | Notes |
+|---|---|---|
+| npm, yarn, bun | `workspaces` in the root `package.json` | Array, or the `{ "packages": [...] }` form. |
+| pnpm | `pnpm-workspace.yaml` (`packages:`) | The root `package.json` usually has **no** `workspaces` key at all. |
+
+Both are read and merged, so a repo mid-migration that carries both is fine.
+`!`-prefixed patterns (`"!packages/fixtures/**"`) exclude a directory from the
+workspace; a `package.json` there is still discovered as a package in its own
+right, it just is not a member and gets no internal dependency edges.
+
+Two dependency specs are **never** rewritten, whatever the release does to the
+version:
+
+- `workspace:*`, `workspace:^`, `workspace:~`, `workspace:1.2.3` — bun, pnpm
+  and yarn. These say *resolve from this monorepo*; the manager substitutes a
+  real version at publish time. Writing a number over one sends the install to
+  the public registry, which for a `"private": true` package has nothing to
+  give it.
+- `catalog:` and `catalog:<name>` — bun and pnpm. The version lives once in
+  the root catalog. Inlining it here opts the package out of the catalog,
+  which is the one thing a catalog exists to prevent.
+
+`link:`, `file:` and `portal:` are left alone for the same reason: they are
+paths, not versions. Ordinary ranges (`^1.2.3`, `>=0.1.0`) stay belaf's to
+manage.
+
 ## `[[bump_source]]`
 
 Inject bump decisions from an external tool (e.g. release-please for a
@@ -420,6 +451,23 @@ ecosystem default that applied.
 # stop the next `belaf prepare`. Exits 4 while any are unanswered.
 belaf baseline
 ```
+
+### The schema of this file, from the binary
+
+```bash
+belaf schema config
+```
+
+Prints a JSON Schema for `belaf/config.toml`, generated from the same serde
+types that parse it — so it cannot drift from what belaf actually accepts, and
+`deny_unknown_fields` carries through as `additionalProperties: false`. Every
+doc comment in this document's source lands there as a `description`.
+
+This exists for the reader who has the installed binary and not this
+repository: an agent working inside someone else's project can ask the tool
+for the exact spelling of `[ignore_paths]` instead of guessing.
+`belaf schema manifest` prints the other direction — the release manifest
+belaf writes for the GitHub App to consume.
 
 ## Reference
 
