@@ -1,5 +1,14 @@
 # belaf ~ configuration file
 # https://github.com/ilblu/belaf
+#
+# The full shape of this file, generated from the types that parse it:
+#
+#   belaf schema config
+#
+# That is the authoritative answer to "what is the exact spelling of
+# `[ignore_paths]`" — it needs no network, no docs checkout, and it cannot
+# drift from what belaf accepts. `belaf describe --json` lists it alongside
+# the release-manifest schema.
 
 [repo]
 # Git upstream URLs for the repository
