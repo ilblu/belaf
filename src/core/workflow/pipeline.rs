@@ -58,7 +58,7 @@ impl<'a> ReleasePipeline<'a> {
             .context("failed to update project files")?;
 
         info!("generating changelogs...");
-        let (changelog_paths, changelog_contents, processed_commits) =
+        let (changelog_paths, changelog_contents, changelog_files, processed_commits) =
             self.generate_changelogs(&projects)?;
 
         self.print_modified_files(&changes, &changelog_paths);
@@ -82,8 +82,20 @@ impl<'a> ReleasePipeline<'a> {
         self.push_branch()?;
 
         info!("opening or updating pull request...");
-        let (pr_url, pr_action) =
-            self.create_pull_request(&projects, &manifest_filename, &changelog_contents)?;
+        let (pr_url, pr_action) = self
+            .create_pull_request(
+                &projects,
+                &manifest_filename,
+                &changelog_contents,
+                &changelog_files,
+            )
+            .with_context(|| {
+                format!(
+                    "release branch `{}` is pushed with the release commit; only the pull request \
+                     step failed, so fixing the cause and re-running `belaf prepare` finishes it",
+                    self.release_branch
+                )
+            })?;
 
         self.print_summary(&projects, &pr_url, pr_action);
 
@@ -96,6 +108,7 @@ impl<'a> ReleasePipeline<'a> {
     ) -> Result<ChangelogGenerationResult> {
         let mut changelog_paths: Vec<RepoPathBuf> = Vec::new();
         let mut changelog_contents: HashMap<String, String> = HashMap::new();
+        let mut changelog_files: HashMap<String, String> = HashMap::new();
         let mut processed_commits_map: HashMap<String, Vec<Commit>> = HashMap::new();
 
         let git_config = GitConfig::from_user_config(&self.sess.changelog_config);
@@ -131,6 +144,7 @@ impl<'a> ReleasePipeline<'a> {
             processed_commits_map.insert(project.name.clone(), result.processed_commits);
 
             if let Some(path) = result.path {
+                changelog_files.insert(project.name.clone(), path.escaped());
                 changelog_paths.push(path);
             } else if !result.has_user_changes {
                 info!(
@@ -140,7 +154,12 @@ impl<'a> ReleasePipeline<'a> {
             }
         }
 
-        Ok((changelog_paths, changelog_contents, processed_commits_map))
+        Ok((
+            changelog_paths,
+            changelog_contents,
+            changelog_files,
+            processed_commits_map,
+        ))
     }
 
     fn print_modified_files(&self, changes: &ChangeList, changelog_paths: &[RepoPathBuf]) {
@@ -450,12 +469,18 @@ impl<'a> ReleasePipeline<'a> {
         projects: &[SelectedReleaseUnit],
         manifest_filename: &str,
         changelog_contents: &HashMap<String, String>,
+        changelog_files: &HashMap<String, String>,
     ) -> Result<(String, PrAction)> {
         let github =
             GitHubInformation::new(self.sess).context("failed to initialize GitHub client")?;
 
         let pr_title = pr::generate_pr_title(projects);
-        let pr_body = pr::generate_pr_body(projects, manifest_filename, changelog_contents);
+        let pr_body = pr::generate_pr_body(
+            projects,
+            manifest_filename,
+            changelog_contents,
+            changelog_files,
+        );
 
         github
             .create_or_update_pull_request(

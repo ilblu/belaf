@@ -95,6 +95,7 @@ pub struct ReleaseUnitSelection {
 type ChangelogGenerationResult = (
     Vec<RepoPathBuf>,
     HashMap<String, String>,
+    HashMap<String, String>,
     HashMap<String, Vec<Commit>>,
 );
 

@@ -5,6 +5,7 @@ use crate::core::api::{ApiClient, ApiPullRequest, CreatePullRequestParams, Store
 use crate::core::auth::token::load_or_exchange_token;
 use crate::core::errors::Result;
 use crate::core::git::repository::Repository;
+use crate::core::github::pr::GITHUB_PR_BODY_LIMIT;
 use crate::core::session::AppSession;
 
 /// What `create_or_update_pull_request` did with the release PR.
@@ -108,6 +109,15 @@ impl GitHubInformation {
         let body = body.to_string();
         let api_client = self.api_client.clone();
 
+        if body.len() > GITHUB_PR_BODY_LIMIT {
+            return Err(anyhow!(
+                "the pull request description is {} bytes and GitHub accepts at most {}; \
+                 nothing was sent",
+                body.len(),
+                GITHUB_PR_BODY_LIMIT
+            ));
+        }
+
         block_on(async move {
             if let Some(existing) = api_client
                 .find_open_pull_request(&token, &owner, &repo, &head)
@@ -141,19 +151,29 @@ impl GitHubInformation {
                     Ok((pr.html_url, PrAction::Created))
                 }
 
-                // 422 means GitHub already has an open PR for this head. We
-                // looked and found none, so another run opened one in the
-                // meantime — take the same update path rather than failing a
-                // run that has already pushed its commit.
+                // 422 is either an open PR for this head, opened by a run
+                // that raced this one, or GitHub rejecting the request
+                // itself. Only the first is recoverable, and whether there is
+                // an open PR now is what tells them apart.
                 Err(crate::core::api::ApiError::ApiResponse {
                     status: 422,
                     message,
                 }) => {
-                    let existing = api_client
+                    let Some(existing) = api_client
                         .find_open_pull_request(&token, &owner, &repo, &head)
                         .await
                         .map_err(map_api_error)?
-                        .ok_or_else(|| anyhow!("pull request creation failed: {}", message))?;
+                    else {
+                        return Err(anyhow!(
+                            "GitHub refused to open the pull request from `{}` into `{}`: {} \
+                             (description: {} bytes, title: {} characters)",
+                            head,
+                            base,
+                            api_error_reason(&message),
+                            body.len(),
+                            title.chars().count()
+                        ));
+                    };
 
                     let updated = api_client
                         .update_pull_request(&token, &owner, &repo, existing.number, &title, &body)
@@ -214,10 +234,26 @@ pub fn fetch_git_credentials(repo: &Repository) -> Result<String> {
     Ok(credentials.token)
 }
 
+/// The sentence inside the belaf API's `{"error": "..."}` envelope, or the
+/// raw text when the body is something else.
+fn api_error_reason(message: &str) -> String {
+    #[derive(serde::Deserialize)]
+    struct Envelope {
+        error: String,
+    }
+    serde_json::from_str::<Envelope>(message)
+        .map(|e| e.error)
+        .unwrap_or_else(|_| message.to_string())
+}
+
 fn map_api_error(e: crate::core::api::ApiError) -> anyhow::Error {
     match &e {
         crate::core::api::ApiError::ApiResponse { status, message } => {
-            anyhow!("GitHub API error ({}): {}", status, message)
+            anyhow!(
+                "GitHub API error ({}): {}",
+                status,
+                api_error_reason(message)
+            )
         }
         _ => anyhow!("{}", e),
     }
@@ -260,4 +296,23 @@ pub fn parse_github_url(url: &str) -> Result<(String, String)> {
     }
 
     Err(anyhow!("Could not parse GitHub URL: {}", url))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn api_error_reason_reads_the_envelope() {
+        let body = r#"{"error":"Validation Failed: body is too long (maximum is 65536 characters)","code":"validation_failed"}"#;
+        assert_eq!(
+            api_error_reason(body),
+            "Validation Failed: body is too long (maximum is 65536 characters)"
+        );
+    }
+
+    #[test]
+    fn api_error_reason_keeps_text_that_is_not_the_envelope() {
+        assert_eq!(api_error_reason("bad gateway"), "bad gateway");
+    }
 }
