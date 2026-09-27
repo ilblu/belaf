@@ -79,6 +79,13 @@ pub(super) fn parse_version_field(
     cfg: &ManifestFileConfig,
     ecosystem: &Ecosystem,
 ) -> Result<VersionFieldSpec, ResolverError> {
+    if cfg.regex_replace_all && cfg.version_field != "generic_regex" {
+        return Err(ResolverError::RegexReplaceAllWithoutGenericRegex {
+            unit: unit_name.to_string(),
+            path: cfg.path.clone(),
+        });
+    }
+
     let spec = match cfg.version_field.as_str() {
         "cargo_toml" => VersionFieldSpec::CargoToml,
         "npm_package_json" => VersionFieldSpec::NpmPackageJson,
@@ -110,7 +117,11 @@ pub(super) fn parse_version_field(
                     found: captures,
                 });
             }
-            VersionFieldSpec::GenericRegex { pattern, replace }
+            VersionFieldSpec::GenericRegex {
+                pattern,
+                replace,
+                replace_all: cfg.regex_replace_all,
+            }
         }
         other => {
             return Err(ResolverError::UnknownEnumValue {

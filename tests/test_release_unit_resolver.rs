@@ -52,6 +52,7 @@ impl ExplicitBuilder {
             version_field: version_field.to_string(),
             regex_pattern: None,
             regex_replace: None,
+            regex_replace_all: false,
         });
         self
     }

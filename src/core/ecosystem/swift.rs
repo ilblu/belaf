@@ -62,6 +62,7 @@ impl FormatHandler for SwiftLoader {
         VersionFieldSpec::GenericRegex {
             pattern: r"//\s*belaf-version\s*=\s*(.+)".to_string(),
             replace: "// belaf-version = {version}".to_string(),
+            replace_all: false,
         }
     }
 

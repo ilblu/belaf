@@ -97,6 +97,7 @@ impl FormatHandler for MavenLoader {
         VersionFieldSpec::GenericRegex {
             pattern: r"<version>([^<]+)</version>".to_string(),
             replace: "<version>{version}</version>".to_string(),
+            replace_all: false,
         }
     }
 

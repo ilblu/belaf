@@ -55,6 +55,9 @@ pub enum VersionFieldError {
         reason: String,
     },
 
+    #[error("`{path}` states more than one version ({values}); they must all match")]
+    InconsistentVersions { path: String, values: String },
+
     #[error("regex compile error for `{pattern}`: {source}")]
     RegexCompile {
         pattern: String,
@@ -76,7 +79,8 @@ pub fn read(spec: &VersionFieldSpec, path: &Path) -> Result<String> {
         VersionFieldSpec::GenericRegex {
             pattern,
             replace: _,
-        } => generic_regex::read(path, pattern),
+            replace_all,
+        } => generic_regex::read(path, pattern, *replace_all),
     }
 }
 
@@ -90,8 +94,10 @@ pub fn write(spec: &VersionFieldSpec, path: &Path, new_version: &str) -> Result<
         VersionFieldSpec::TauriConfJson => tauri_conf::write(path, new_version),
         VersionFieldSpec::GradleProperties => gradle_properties::write(path, new_version),
         VersionFieldSpec::Pep621 => pyproject::write(path, new_version),
-        VersionFieldSpec::GenericRegex { pattern, replace } => {
-            generic_regex::write(path, pattern, replace, new_version)
-        }
+        VersionFieldSpec::GenericRegex {
+            pattern,
+            replace,
+            replace_all,
+        } => generic_regex::write(path, pattern, replace, *replace_all, new_version),
     }
 }

@@ -339,6 +339,7 @@ pub fn resolve_partial_against_discovered(
             _ => VersionFieldSpec::GenericRegex {
                 pattern: "(.+)".to_string(),
                 replace: "{version}".to_string(),
+                replace_all: false,
             },
         };
         let manifest = ManifestFile {

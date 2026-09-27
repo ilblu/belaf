@@ -221,6 +221,10 @@ pub enum VersionFieldSpec {
         pattern: String,
         /// `{version}` is substituted at write time.
         replace: String,
+        /// Rewrite every match rather than the first. For a file that
+        /// states one version several times, like an Xcode project's
+        /// `MARKETING_VERSION` per build configuration.
+        replace_all: bool,
     },
 }
 
@@ -471,6 +475,7 @@ mod tests {
             VersionFieldSpec::GenericRegex {
                 pattern: String::new(),
                 replace: String::new(),
+                replace_all: false,
             }
             .wire_key(),
         ]

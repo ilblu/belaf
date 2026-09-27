@@ -467,6 +467,7 @@ impl FormatHandler for PypaLoader {
         VersionFieldSpec::GenericRegex {
             pattern: r#"version\s*=\s*"([^"]+)""#.to_string(),
             replace: r#"version = "{version}""#.to_string(),
+            replace_all: false,
         }
     }
 

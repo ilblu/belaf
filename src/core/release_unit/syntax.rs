@@ -376,6 +376,13 @@ pub struct ManifestFileConfig {
     /// is substituted at write time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regex_replace: Option<String>,
+
+    /// Only with `version_field = "generic_regex"`. Rewrite every match
+    /// instead of the first, for a file that states one version several
+    /// times (an Xcode project writes `MARKETING_VERSION` once per build
+    /// configuration). Every match must then agree when read.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub regex_replace_all: bool,
 }
 
 /// External versioner — `external = { tool = "...", ... }` inline or

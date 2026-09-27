@@ -190,6 +190,7 @@ fn generic_regex_with_template_substitution() {
         VersionFieldSpec::GenericRegex {
             pattern: r"(?m)^VERSION=(\d+\.\d+\.\d+)$".to_string(),
             replace: "VERSION={version}".to_string(),
+            replace_all: false,
         },
     )];
 
@@ -198,4 +199,62 @@ fn generic_regex_with_template_substitution() {
 
     let after = repo.read_file("config/version.txt");
     assert_eq!(after, "VERSION=2.0.0\n");
+}
+
+#[test]
+fn mobile_app_version_copies_move_with_the_manifest() {
+    let repo = TestRepo::new();
+    repo.write_file(
+        "apps/ios/package.json",
+        "{\n  \"name\": \"ios\",\n  \"private\": true,\n  \"version\": \"0.3.1\"\n}\n",
+    );
+    repo.write_file(
+        "apps/ios/app.xcodeproj/project.pbxproj",
+        "\t\t\t\tMARKETING_VERSION = 0.3.1;\n\t\t\t\tPRODUCT_NAME = app;\n\t\t\t\tMARKETING_VERSION = 0.3.1;\n\t\t\t\tMARKETING_VERSION = 0.3.0;\n",
+    );
+    repo.write_file(
+        "apps/android/app/build.gradle.kts",
+        "        versionName = providers.gradleProperty(\"appVersionName\").orNull ?: \"0.3.1\"\n",
+    );
+    repo.commit("seed mobile version sites");
+
+    let r = open_repo(&repo);
+    let manifests = vec![
+        manifest(
+            "apps/ios/package.json",
+            "npm",
+            VersionFieldSpec::NpmPackageJson,
+        ),
+        manifest(
+            "apps/ios/app.xcodeproj/project.pbxproj",
+            "npm",
+            VersionFieldSpec::GenericRegex {
+                pattern: r"MARKETING_VERSION = ([0-9][^;]*);".to_string(),
+                replace: "MARKETING_VERSION = {version};".to_string(),
+                replace_all: true,
+            },
+        ),
+        manifest(
+            "apps/android/app/build.gradle.kts",
+            "npm",
+            VersionFieldSpec::GenericRegex {
+                pattern: r#"\.orNull \?: "([^"]+)""#.to_string(),
+                replace: r#".orNull ?: "{version}""#.to_string(),
+                replace_all: false,
+            },
+        ),
+    ];
+
+    let report = multi_manifest::write_all(&manifests, "0.4.0", &r).unwrap();
+    assert_eq!(report.wrote.len(), 3);
+
+    let pbxproj = repo.read_file("apps/ios/app.xcodeproj/project.pbxproj");
+    assert_eq!(pbxproj.matches("MARKETING_VERSION = 0.4.0;").count(), 3);
+    assert!(pbxproj.contains("PRODUCT_NAME = app;"));
+    assert!(repo
+        .read_file("apps/android/app/build.gradle.kts")
+        .contains(r#".orNull ?: "0.4.0""#));
+
+    let again = multi_manifest::write_all(&manifests, "0.4.0", &r).unwrap();
+    assert!(again.wrote.is_empty(), "a second run changes nothing");
 }

@@ -136,6 +136,40 @@ ecosystem = "external"
 external = { tool = "gradle", read_command = "./gradlew -q :sdk:printVersion", write_command = "./gradlew :sdk:setVersion -PnewVersion={version}", cwd = "sdks/kotlin", timeout_sec = 60 }
 ```
 
+### Copies of the version in other files
+
+A version often lives in more than one place: a phone app's `package.json`
+carries it for belaf, while Xcode and Gradle keep their own copy. List every
+copy as another manifest with `version_field = "generic_regex"`, and the
+release pull request writes all of them, so it is correct before it merges.
+
+```toml
+[release_unit.ios]
+ecosystem = "npm"
+manifests = [
+  { path = "apps/ios/package.json", version_field = "npm_package_json" },
+  # One MARKETING_VERSION per build configuration: rewrite every match.
+  { path = "apps/ios/App.xcodeproj/project.pbxproj", version_field = "generic_regex", regex_pattern = 'MARKETING_VERSION = ([0-9][^;]*);', regex_replace = "MARKETING_VERSION = {version};", regex_replace_all = true },
+]
+
+[release_unit.android]
+ecosystem = "npm"
+manifests = [
+  { path = "apps/android/package.json", version_field = "npm_package_json" },
+  { path = "apps/android/app/build.gradle.kts", version_field = "generic_regex", regex_pattern = 'gradleProperty\("appVersionName"\)\.orNull \?: "([^"]+)"', regex_replace = 'gradleProperty("appVersionName").orNull ?: "{version}"' },
+]
+```
+
+`regex_pattern` has exactly one capture group, the version. `regex_replace`
+replaces the whole match, with `{version}` substituted. Without
+`regex_replace_all` only the first match is rewritten, which is right for a
+pattern such as `<version>…</version>` that would also match a dependency.
+Make the pattern specific enough to hit only the version: a bare
+`\.orNull \?: "(…)"` would match `versionCode` first. With
+`regex_replace_all = true` every match is rewritten, and every match must
+state the same version when read. A file where they disagree is reported and
+healed on the next write rather than half updated.
+
 ### Optional fields
 
 | Key | Notes |

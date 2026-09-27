@@ -75,6 +75,7 @@ timeout_sec = 90
 ecosystem = "external"
 manifests = [
   { path = "config/version.txt", version_field = "generic_regex", regex_pattern = '^VERSION=(\d+\.\d+\.\d+)$', regex_replace = "VERSION={version}" },
+  { path = "config/app.pbxproj", version_field = "generic_regex", regex_pattern = 'MARKETING_VERSION = ([0-9][^;]*);', regex_replace = "MARKETING_VERSION = {version};", regex_replace_all = true },
 ]
 
 # ---------------------------------------------------------------------------
@@ -313,6 +314,8 @@ fn generic_regex_with_pattern_and_replace() {
         Some(r"^VERSION=(\d+\.\d+\.\d+)$")
     );
     assert_eq!(mf.regex_replace.as_deref(), Some("VERSION={version}"));
+    assert!(!mf.regex_replace_all);
+    assert!(manifests[1].regex_replace_all);
 }
 
 #[test]

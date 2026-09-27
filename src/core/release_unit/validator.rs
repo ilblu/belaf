@@ -115,6 +115,10 @@ pub enum ResolverError {
     #[error("release_unit `{unit}`: `version_field = \"generic_regex\"` requires both `regex_pattern` and `regex_replace`")]
     GenericRegexMissingPatternOrReplace { unit: String },
 
+    /// `regex_replace_all` on a manifest that is not `generic_regex`.
+    #[error("release_unit `{unit}`: `{path}` sets `regex_replace_all`, which only applies to `version_field = \"generic_regex\"`")]
+    RegexReplaceAllWithoutGenericRegex { unit: String, path: String },
+
     /// `generic_regex` pattern doesn't have exactly one capture group.
     #[error("release_unit `{unit}`: regex pattern `{pattern}` must contain exactly one capture group, found {found}")]
     GenericRegexCaptureCount {
@@ -262,6 +266,9 @@ impl ResolverError {
                 "generic_regex_missing_pattern_or_replace"
             }
             Self::GenericRegexCaptureCount { .. } => "generic_regex_capture_count",
+            Self::RegexReplaceAllWithoutGenericRegex { .. } => {
+                "regex_replace_all_without_generic_regex"
+            }
             Self::UnknownTemplateVar { .. } => "unknown_template_var",
             Self::TemplateNotFullySubstituted { .. } => "template_not_fully_substituted",
             Self::CascadeSourceUnknown { .. } => "cascade_source_unknown",
@@ -344,6 +351,10 @@ mod tests {
                 unit: "x".into(),
                 pattern: ".*".into(),
                 found: 0,
+            },
+            ResolverError::RegexReplaceAllWithoutGenericRegex {
+                unit: "x".into(),
+                path: "y".into(),
             },
             ResolverError::UnknownTemplateVar {
                 glob_index: 0,

@@ -181,6 +181,7 @@ pub(super) fn expand_glob(
                 version_field: version_field_key,
                 regex_pattern: None,
                 regex_replace: None,
+                regex_replace_all: false,
             }],
             repo,
             /* require_existence: */ false, // pick_first_existing already checked

@@ -55,6 +55,7 @@ impl FormatHandler for GoLoader {
         VersionFieldSpec::GenericRegex {
             pattern: r"^module\s+(.+?)\s*$".to_string(),
             replace: "module {version}".to_string(),
+            replace_all: false,
         }
     }
 

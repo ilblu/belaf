@@ -434,6 +434,7 @@ fn release_unit_tag_format_lookup_by_name() {
                 version_field: "cargo_toml".into(),
                 regex_pattern: None,
                 regex_replace: None,
+                regex_replace_all: false,
             }])),
             external: None,
             fallback_manifests: vec![],

@@ -441,6 +441,7 @@ impl FormatHandler for CsProjLoader {
         VersionFieldSpec::GenericRegex {
             pattern: r#"\[assembly:\s*AssemblyVersion\("([^"]+)"\)\]"#.to_string(),
             replace: r#"[assembly: AssemblyVersion("{version}")]"#.to_string(),
+            replace_all: false,
         }
     }
 

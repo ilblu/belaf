@@ -94,6 +94,12 @@ fn read_or_warn(m: &ManifestFile, abs: &Path) -> Result<Option<String>, MultiMan
     match version_field::read(&m.version_field, abs) {
         Ok(v) => Ok(Some(v)),
         Err(VersionFieldError::VersionFieldMissing { .. }) => Ok(None),
+        // Heal forward: the write below moves every statement to the new
+        // version, which is exactly what repairs the disagreement.
+        Err(e @ VersionFieldError::InconsistentVersions { .. }) => {
+            warn!("{e}; rewriting all of them");
+            Ok(None)
+        }
         Err(e) => Err(MultiManifestError::Single {
             path: abs.display().to_string(),
             source: e,

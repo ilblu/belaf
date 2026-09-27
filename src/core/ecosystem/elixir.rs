@@ -80,6 +80,7 @@ impl FormatHandler for ElixirLoader {
         VersionFieldSpec::GenericRegex {
             pattern: r#"version:\s*"([^"]+)""#.to_string(),
             replace: r#"version: "{version}""#.to_string(),
+            replace_all: false,
         }
     }
 
