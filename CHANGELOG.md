@@ -5,6 +5,51 @@ All notable changes to belaf are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## 5.2.0 · 2026-09-27
+
+A monorepo with 29 units had a normal week, and `belaf prepare --ci`
+failed after pushing the release branch with "Pull request already
+exists or invalid branch". There was no pull request. The description
+belaf wrote held every changelog in full, 146 244 characters of them,
+and GitHub refuses a body over 65 536. Three things lined up to make
+that hard to see, and all three are fixed here, together with the
+release pull request that was red for the phones on every release.
+
+### Fixed
+
+- **The release pull request fits GitHub's limit.** Its description
+  stays under 60 000 bytes. The package table and the manifest path are
+  always in it; changelogs are added in package order while they fit,
+  and every package that no longer fits is listed with the `CHANGELOG.md`
+  its entry was written to. That file is in the pull request's diff and
+  the GitHub App still puts the full text into each tag's release, so
+  nothing is lost. The same body goes through the update path, which ran
+  into the same wall once an open release pull request grew over a week.
+  A body over the limit is refused before it is sent.
+- **A rejected pull request says why.** After a 422 with no open pull
+  request for the branch, belaf now prints GitHub's own reason, the
+  description's size and the title's length, instead of guessing that a
+  concurrent run got there first. Needs the GitHub App at `api@1.5.0`,
+  which passes the reason through; against an older app the message is
+  the old one.
+- **A failed pull request step says what already happened.** The release
+  branch is pushed before the pull request is opened, so the error now
+  says so, and that re-running `belaf prepare` finishes the job.
+
+### Added
+
+- **`regex_replace_all` on a `generic_regex` manifest.** A version often
+  has copies: an Xcode project writes `MARKETING_VERSION` once per build
+  configuration, and a Gradle file keeps a `versionName` fallback. List
+  them as extra manifests and the release pull request moves them with
+  the version, so a guard comparing them is green before the merge
+  rather than red until somebody follows up by hand. Without the flag
+  only the first match is rewritten, as before, because patterns such as
+  `<version>…</version>` would otherwise also rewrite a dependency. With
+  it every match is rewritten, a read requires them all to agree, and a
+  file where they disagree is healed on the next write. See
+  "Copies of the version in other files" in `docs/configuration.md`.
+
 ## 5.1.1 — 2026-09-20
 
 `belaf schema config` arrived in 5.1.0 and only helped people who
