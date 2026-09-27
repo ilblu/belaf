@@ -77,7 +77,7 @@ pub fn find_processed_manifests(
     }
 
     // Stable order so the release commit is reproducible.
-    processed.sort_by(|a, b| a.path.escaped().cmp(&b.path.escaped()));
+    processed.sort_by_key(|p| p.path.escaped());
     processed
 }
 

@@ -36,7 +36,7 @@ impl RebootBranchCommand {
             .signature()
             .or_else(|_| git2::Signature::now("belaf", "belaf@devnull"))?;
 
-        let ref_name = format!("refs/heads/{}", &self.branch);
+        let ref_name = format!("refs/heads/{}", self.branch);
 
         repo.set_workdir(&self.root, false)
             .context("couldn't reset repo working directory")?;

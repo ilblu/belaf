@@ -155,10 +155,8 @@ impl TuiState {
                     }
                 }
             }
-            (KeyCode::PageUp, _) => {
-                if self.selected_panel == SelectablePanel::Commits {
-                    self.commit_scroll_offset = self.commit_scroll_offset.saturating_sub(10);
-                }
+            (KeyCode::PageUp, _) if self.selected_panel == SelectablePanel::Commits => {
+                self.commit_scroll_offset = self.commit_scroll_offset.saturating_sub(10);
             }
             _ => {}
         }

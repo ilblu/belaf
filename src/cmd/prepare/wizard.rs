@@ -870,10 +870,8 @@ fn run_app(
                 column,
                 row,
                 ..
-            }) => {
-                if state.show_changelog && state.handle_mouse_click(column, row) {
-                    continue;
-                }
+            }) if state.show_changelog && state.handle_mouse_click(column, row) => {
+                continue;
             }
             _ => {}
         }

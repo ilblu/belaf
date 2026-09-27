@@ -11,7 +11,7 @@ pub use builder::AppBuilder;
 use anyhow::{anyhow, Context};
 use std::collections::HashMap;
 use thiserror::Error as ThisError;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 use crate::{
     atry,

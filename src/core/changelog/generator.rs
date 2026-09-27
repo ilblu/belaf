@@ -216,18 +216,18 @@ impl Changelog {
             match git_config.sort_commits.to_lowercase().as_str() {
                 "oldest" => {
                     log::trace!("Sorting the commits from oldest to newest");
-                    commits.sort_by(|a, b| a.committer.timestamp.cmp(&b.committer.timestamp));
+                    commits.sort_by_key(|c| c.committer.timestamp);
                 }
                 "newest" => {
                     log::trace!("Sorting the commits from newest to oldest");
-                    commits.sort_by(|a, b| b.committer.timestamp.cmp(&a.committer.timestamp));
+                    commits.sort_by_key(|c| std::cmp::Reverse(c.committer.timestamp));
                 }
                 _ => {
                     log::warn!(
                         "Unknown sort_commits value: '{}', using default 'oldest'",
                         git_config.sort_commits
                     );
-                    commits.sort_by(|a, b| a.committer.timestamp.cmp(&b.committer.timestamp));
+                    commits.sort_by_key(|c| c.committer.timestamp);
                 }
             }
         }
@@ -383,7 +383,7 @@ impl Changelog {
     }
 
     pub fn bump_version(&mut self) -> Result<Option<String>> {
-        if let Some(ref mut last_release) = self.releases.iter_mut().next() {
+        if let Some(ref mut last_release) = self.releases.first_mut() {
             if last_release.version.is_none() {
                 let next_version =
                     last_release.calculate_next_version_with_config(&self.bump_config)?;

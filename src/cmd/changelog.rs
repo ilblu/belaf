@@ -191,11 +191,11 @@ pub fn run(
 
     if !ci {
         if processed_count == 0 {
-            if project_filter.is_some() {
+            if let Some(filter) = &project_filter {
                 println!(
                     "{} ReleaseUnit '{}' not found or has no changes.",
                     "ℹ".cyan().bold(),
-                    project_filter.unwrap()
+                    filter
                 );
             } else {
                 println!(
